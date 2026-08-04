@@ -1,0 +1,79 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1300;
+}
+
+.modal {
+  width: min(520px, 95%);
+  background: white;
+  border-radius: 28px;
+  padding: 2rem;
+  box-shadow: 0 24px 70px rgba(15, 23, 42, 0.16);
+}
+
+.header {
+  text-align: center;
+  margin-bottom: 1.5rem;
+}
+
+.icon {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: #0f4db7;
+  color: white;
+  display: grid;
+  place-items: center;
+  font-size: 2rem;
+  margin: 0 auto 1rem;
+}
+
+.title {
+  margin: 0;
+  font-size: 1.8rem;
+  color: #111827;
+}
+
+.subtitle {
+  margin: 0.45rem auto 0;
+  color: #475569;
+  max-width: 85%;
+}
+
+.summaryCard {
+  background: #f8fafc;
+  border-radius: 24px;
+  padding: 1.5rem;
+  margin-bottom: 1.5rem;
+}
+
+.summaryRow {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.9rem 0;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.summaryRow:last-child {
+  border-bottom: none;
+}
+
+.footer {
+  text-align: center;
+}
+
+.primaryButton {
+  padding: 1rem 1.75rem;
+  border: none;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #0f4db7, #f43f5e);
+  color: white;
+  font-weight: 700;
+  cursor: pointer;
+}

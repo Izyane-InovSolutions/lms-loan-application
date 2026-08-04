@@ -1,0 +1,79 @@
+.topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.25rem 2rem;
+  background: rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 10px 40px rgba(15, 23, 42, 0.08);
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+
+.brandRow {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.brandMark {
+  width: 56px;
+  height: 56px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #4f46e5, #22d3ee);
+  color: white;
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  font-size: 1.05rem;
+}
+
+.brandText {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.brandTitle {
+  font-weight: 800;
+  color: #111827;
+  letter-spacing: -0.02em;
+  font-size: 1.05rem;
+}
+
+.brandSubtitle {
+  color: #475569;
+  font-size: 0.92rem;
+}
+
+.menuButton {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  border: none;
+  background: #eef2ff;
+  display: inline-flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  padding: 0.7rem;
+  cursor: pointer;
+}
+
+.menuButton span {
+  width: 100%;
+  height: 3px;
+  background: #0f172a;
+  border-radius: 999px;
+}
+
+@media (max-width: 640px) {
+  .topbar {
+    padding: 1rem;
+  }
+
+  .brandTitle {
+    font-size: 1rem;
+  }
+}
