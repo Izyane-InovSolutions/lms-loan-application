@@ -40,6 +40,7 @@ const personalInitial = {
     occupation: '',
     employerName: '',
     nationality: '',
+    principalObjectiveOfLoan: '',
     nextOfKinName: '',
     nextOfKinPhone: '',
     nextOfKinEmail: '',
@@ -62,17 +63,13 @@ const businessInitial = {
     natureOfBusiness: '',
     registeredOffice: '',
     collateralPledged: '',
+    purposeOfLoan: '',
   },
   directorInfo: {
-    director1Name: '',
-    director1Phone: '',
-    director1Email: '',
-    director1Nrc: '',
-    director2Name: '',
-    director2Phone: '',
-    director2Email: '',
-    director2Nrc: '',
-    applicantName: '',
+    directors: [{ name: '', phone: '', email: '', nrc: '' }],
+    applicantFirstName: '',
+    applicantMiddleName: '',
+    applicantLastName: '',
     applicantPhone: '',
     applicantEmail: '',
     applicantNrc: '',
@@ -231,6 +228,42 @@ function DashboardPage() {
     }))
   }
 
+  const updateDirectorField = (index, field, value, fieldType = 'default') => {
+    setBusinessData((prev) => ({
+      ...prev,
+      directorInfo: {
+        ...prev.directorInfo,
+        directors: prev.directorInfo.directors.map((director, directorIndex) =>
+          directorIndex === index
+            ? { ...director, [field]: normalizeValue(value, fieldType) }
+            : director
+        ),
+      },
+    }))
+  }
+
+  const addDirector = () => {
+    setBusinessData((prev) => ({
+      ...prev,
+      directorInfo: {
+        ...prev.directorInfo,
+        directors: prev.directorInfo.directors.length < 3
+          ? [...prev.directorInfo.directors, { name: '', phone: '', email: '', nrc: '' }]
+          : prev.directorInfo.directors,
+      },
+    }))
+  }
+
+  const removeDirector = (index) => {
+    setBusinessData((prev) => ({
+      ...prev,
+      directorInfo: {
+        ...prev.directorInfo,
+        directors: prev.directorInfo.directors.filter((_, directorIndex) => directorIndex !== index),
+      },
+    }))
+  }
+
   const resetForm = () => {
     setCurrentStep(0)
     setLoanData(initialLoanState)
@@ -282,6 +315,7 @@ function DashboardPage() {
         requiredField(personalData.employmentInfo.occupation, 'employmentInfo.occupation', 'Occupation is required.')
         requiredField(personalData.employmentInfo.employerName, 'employmentInfo.employerName', 'Employer name is required.')
         requiredField(personalData.employmentInfo.nationality, 'employmentInfo.nationality', 'Nationality is required.')
+        requiredField(personalData.employmentInfo.principalObjectiveOfLoan, 'employmentInfo.principalObjectiveOfLoan', 'Principal objective of loan is required.')
         requiredField(personalData.employmentInfo.nextOfKinName, 'employmentInfo.nextOfKinName', 'Next of kin name is required.')
         requiredField(personalData.employmentInfo.nextOfKinPhone, 'employmentInfo.nextOfKinPhone', 'Next of kin phone is required.')
         requiredField(personalData.employmentInfo.nextOfKinEmail, 'employmentInfo.nextOfKinEmail', 'Next of kin email is required.')
@@ -293,6 +327,14 @@ function DashboardPage() {
           recordError('employmentInfo.nextOfKinEmail', 'Email must end with a .com domain.')
         }
       }
+
+      if (currentStep === 2) {
+        requiredField(personalData.documents.payslips, 'documents.payslips', 'Latest three payslips are required.')
+        requiredField(personalData.documents.bankStatements, 'documents.bankStatements', 'Bank statements are required.')
+        requiredField(personalData.documents.nrcCopy, 'documents.nrcCopy', 'NRC copy is required.')
+        requiredField(personalData.documents.passportPhoto, 'documents.passportPhoto', 'Passport photo is required.')
+        requiredField(personalData.documents.tpin, 'documents.tpin', 'TPIN certificate is required.')
+      }
     }
 
     if (selectedLoanType === 'business') {
@@ -303,14 +345,28 @@ function DashboardPage() {
         requiredField(businessData.businessInfo.natureOfBusiness, 'businessInfo.natureOfBusiness', 'Nature of business is required.')
         requiredField(businessData.businessInfo.registeredOffice, 'businessInfo.registeredOffice', 'Registered office is required.')
         requiredField(businessData.businessInfo.collateralPledged, 'businessInfo.collateralPledged', 'Collateral pledged is required.')
+        requiredField(businessData.businessInfo.purposeOfLoan, 'businessInfo.purposeOfLoan', 'Purpose of loan is required.')
       }
 
       if (currentStep === 1) {
-        requiredField(businessData.directorInfo.director1Name, 'directorInfo.director1Name', 'Director name is required.')
-        requiredField(businessData.directorInfo.director1Phone, 'directorInfo.director1Phone', 'Director phone is required.')
-        requiredField(businessData.directorInfo.director1Email, 'directorInfo.director1Email', 'Director email is required.')
-        requiredField(businessData.directorInfo.director1Nrc, 'directorInfo.director1Nrc', 'Director NRC is required.')
-        requiredField(businessData.directorInfo.applicantName, 'directorInfo.applicantName', 'Applicant name is required.')
+        const directors = businessData.directorInfo.directors || []
+        directors.forEach((director, index) => {
+          requiredField(director.name, `directorInfo.directors[${index}].name`, `Director ${index + 1} name is required.`)
+          requiredField(director.phone, `directorInfo.directors[${index}].phone`, `Director ${index + 1} phone is required.`)
+          requiredField(director.email, `directorInfo.directors[${index}].email`, `Director ${index + 1} email is required.`)
+          requiredField(director.nrc, `directorInfo.directors[${index}].nrc`, `Director ${index + 1} NRC is required.`)
+          if (director.phone && !isValidPhone(director.phone)) {
+            recordError(`directorInfo.directors[${index}].phone`, 'Phone must be 10 digits and start with 0.')
+          }
+          if (director.email && !isValidEmail(director.email)) {
+            recordError(`directorInfo.directors[${index}].email`, 'Email must end with a .com domain.')
+          }
+          if (director.nrc && !isValidNRC(director.nrc)) {
+            recordError(`directorInfo.directors[${index}].nrc`, 'NRC must be 6 digits, slash, 2 digits, slash, then 1–2 digits.')
+          }
+        })
+        requiredField(businessData.directorInfo.applicantFirstName, 'directorInfo.applicantFirstName', 'Applicant first name is required.')
+        requiredField(businessData.directorInfo.applicantLastName, 'directorInfo.applicantLastName', 'Applicant last name is required.')
         requiredField(businessData.directorInfo.applicantPhone, 'directorInfo.applicantPhone', 'Applicant phone is required.')
         requiredField(businessData.directorInfo.applicantEmail, 'directorInfo.applicantEmail', 'Applicant email is required.')
         requiredField(businessData.directorInfo.applicantNrc, 'directorInfo.applicantNrc', 'Applicant NRC is required.')
@@ -323,15 +379,6 @@ function DashboardPage() {
         requiredField(businessData.directorInfo.applicantAddress, 'directorInfo.applicantAddress', 'Applicant address is required.')
         requiredField(businessData.directorInfo.applicantPosition, 'directorInfo.applicantPosition', 'Applicant position is required.')
         requiredField(businessData.directorInfo.applicantNationality, 'directorInfo.applicantNationality', 'Applicant nationality is required.')
-        if (businessData.directorInfo.director1Phone && !isValidPhone(businessData.directorInfo.director1Phone)) {
-          recordError('directorInfo.director1Phone', 'Phone must be 10 digits and start with 0.')
-        }
-        if (businessData.directorInfo.director1Email && !isValidEmail(businessData.directorInfo.director1Email)) {
-          recordError('directorInfo.director1Email', 'Email must end with a .com domain.')
-        }
-        if (businessData.directorInfo.director1Nrc && !isValidNRC(businessData.directorInfo.director1Nrc)) {
-          recordError('directorInfo.director1Nrc', 'NRC must be 6 digits, slash, 2 digits, slash, then 1–2 digits.')
-        }
         if (businessData.directorInfo.applicantPhone && !isValidPhone(businessData.directorInfo.applicantPhone)) {
           recordError('directorInfo.applicantPhone', 'Phone must be 10 digits and start with 0.')
         }
@@ -341,6 +388,14 @@ function DashboardPage() {
         if (businessData.directorInfo.applicantNrc && !isValidNRC(businessData.directorInfo.applicantNrc)) {
           recordError('directorInfo.applicantNrc', 'NRC must be 6 digits, slash, 2 digits, slash, then 1–2 digits.')
         }
+      }
+
+      if (currentStep === 2) {
+        requiredField(businessData.documents.pacraCertificate, 'documents.pacraCertificate', 'PACRA certificate is required.')
+        requiredField(businessData.documents.taxClearance, 'documents.taxClearance', 'Tax clearance certificate is required.')
+        requiredField(businessData.documents.bankStatements, 'documents.bankStatements', 'Bank statements are required.')
+        requiredField(businessData.documents.passportPhoto, 'documents.passportPhoto', 'Passport photo is required.')
+        requiredField(businessData.documents.boardResolution, 'documents.boardResolution', 'Board resolution is required.')
       }
     }
 
@@ -407,7 +462,7 @@ function DashboardPage() {
     </label>
   )
 
-  const renderDateField = (label, value, onChange, required = false) => (
+  const renderDateField = (label, value, onChange, required = false, errorKey = '') => (
     <label className="grid gap-2">
       <span className="text-sm font-semibold text-slate-700">
         {label}
@@ -433,10 +488,13 @@ function DashboardPage() {
           }}
         />
       </LocalizationProvider>
+      {errorKey && validationErrors[errorKey] ? (
+        <span className="text-sm text-red-600">{validationErrors[errorKey]}</span>
+      ) : null}
     </label>
   )
 
-  const renderBirthDateField = (label, value, onChange, required = false) => (
+  const renderBirthDateField = (label, value, onChange, required = false, errorKey = '') => (
     <label className="grid gap-2">
       <span className="text-sm font-semibold text-slate-700">
         {label}
@@ -464,6 +522,9 @@ function DashboardPage() {
           }}
         />
       </LocalizationProvider>
+      {errorKey && validationErrors[errorKey] ? (
+        <span className="text-sm text-red-600">{validationErrors[errorKey]}</span>
+      ) : null}
     </label>
   )
 
@@ -491,9 +552,9 @@ function DashboardPage() {
         case 0:
           return (
             <div className="grid gap-6 xl:grid-cols-2">
-              {renderField('First name', personalData.personalInfo.firstName, (value) => updateSectionField('personalInfo', 'firstName', value, 'alpha'), 'text', '', {}, true)}
+              {renderField('First name', personalData.personalInfo.firstName, (value) => updateSectionField('personalInfo', 'firstName', value, 'alpha'), 'text', '', {}, true, 'personalInfo.firstName')}
               {renderField('Middle name (Optional)', personalData.personalInfo.middleName, (value) => updateSectionField('personalInfo', 'middleName', value, 'alpha'), 'text', '', {}, false)}
-              {renderField('Surname', personalData.personalInfo.surname, (value) => updateSectionField('personalInfo', 'surname', value, 'alpha'), 'text', '', {}, true)}
+              {renderField('Surname', personalData.personalInfo.surname, (value) => updateSectionField('personalInfo', 'surname', value, 'alpha'), 'text', '', {}, true, 'personalInfo.surname')}
               {renderField('Phone', personalData.personalInfo.phone, (value) => updateSectionField('personalInfo', 'phone', value, 'phone'), 'tel', '', { maxLength: 10 }, true, 'personalInfo.phone')}
               {renderField('Email', personalData.personalInfo.email, (value) => updateSectionField('personalInfo', 'email', value, 'email'), 'email', '', {}, true, 'personalInfo.email')}
               {renderField('NRC', personalData.personalInfo.nrc, (value) => updateSectionField('personalInfo', 'nrc', value, 'nrc'), 'text', '', { maxLength: 12 }, true, 'personalInfo.nrc')}
@@ -536,20 +597,42 @@ function DashboardPage() {
                   <span className="text-sm text-red-600">{validationErrors['personalInfo.maritalStatus']}</span>
                 ) : null}
               </label>
-              {renderBirthDateField('Birth date', personalData.personalInfo.birthDate, (value) => updateSectionField('personalInfo', 'birthDate', value), true)}
+              {renderBirthDateField('Birth date', personalData.personalInfo.birthDate, (value) => updateSectionField('personalInfo', 'birthDate', value), true, 'personalInfo.birthDate')}
             </div>
           )
         case 1:
           return (
             <div className="grid gap-6 xl:grid-cols-2">
-              {renderField('Residential address', personalData.employmentInfo.residentialAddress, (value) => updateSectionField('employmentInfo', 'residentialAddress', value), 'text', '', {}, true)}
-              {renderField('Occupation', personalData.employmentInfo.occupation, (value) => updateSectionField('employmentInfo', 'occupation', value), 'text', '', {}, true)}
-              {renderField('Employer name', personalData.employmentInfo.employerName, (value) => updateSectionField('employmentInfo', 'employerName', value), 'text', '', {}, true)}
-              {renderField('Nationality', personalData.employmentInfo.nationality, (value) => updateSectionField('employmentInfo', 'nationality', value), 'text', '', {}, true)}
-              {renderField('Next of kin name', personalData.employmentInfo.nextOfKinName, (value) => updateSectionField('employmentInfo', 'nextOfKinName', value, 'alpha'), 'text', '', {}, true)}
-              {renderField('Next of kin phone', personalData.employmentInfo.nextOfKinPhone, (value) => updateSectionField('employmentInfo', 'nextOfKinPhone', value, 'phone'), 'tel', '', { maxLength: 10 }, true)}
-              {renderField('Next of kin email', personalData.employmentInfo.nextOfKinEmail, (value) => updateSectionField('employmentInfo', 'nextOfKinEmail', value, 'email'), 'email', '', {}, true)}
-              {renderField('Relationship', personalData.employmentInfo.nextOfKinRelationship, (value) => updateSectionField('employmentInfo', 'nextOfKinRelationship', value, 'alpha'), 'text', '', {}, true)}
+              {renderField('Residential address', personalData.employmentInfo.residentialAddress, (value) => updateSectionField('employmentInfo', 'residentialAddress', value), 'text', '', {}, true, 'employmentInfo.residentialAddress')}
+              {renderField('Occupation', personalData.employmentInfo.occupation, (value) => updateSectionField('employmentInfo', 'occupation', value), 'text', '', {}, true, 'employmentInfo.occupation')}
+              {renderField('Employer name', personalData.employmentInfo.employerName, (value) => updateSectionField('employmentInfo', 'employerName', value), 'text', '', {}, true, 'employmentInfo.employerName')}
+              <label className="grid gap-2">
+                <span className="text-sm font-semibold text-slate-700">
+                  Nationality
+                  <span className="text-red-500"> *</span>
+                </span>
+                <select
+                  value={personalData.employmentInfo.nationality}
+                  onChange={(event) => updateSectionField('employmentInfo', 'nationality', event.target.value)}
+                  className="w-full min-w-0 rounded-2xl border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                >
+                  <option value="">Select nationality</option>
+                  <option value="Kenya">Kenya</option>
+                  <option value="Malawi">Malawi</option>
+                  <option value="Rwanda">Rwanda</option>
+                  <option value="Uganda">Uganda</option>
+                  <option value="Zambia">Zambia</option>
+                  <option value="Zimbabwe">Zimbabwe</option>
+                </select>
+                {validationErrors['employmentInfo.nationality'] ? (
+                  <span className="text-sm text-red-600">{validationErrors['employmentInfo.nationality']}</span>
+                ) : null}
+              </label>
+              {renderField('Principal objective of loan', personalData.employmentInfo.principalObjectiveOfLoan, (value) => updateSectionField('employmentInfo', 'principalObjectiveOfLoan', value), 'text', '', {}, true, 'employmentInfo.principalObjectiveOfLoan')}
+              {renderField('Next of kin name', personalData.employmentInfo.nextOfKinName, (value) => updateSectionField('employmentInfo', 'nextOfKinName', value, 'alpha'), 'text', '', {}, true, 'employmentInfo.nextOfKinName')}
+              {renderField('Next of kin phone', personalData.employmentInfo.nextOfKinPhone, (value) => updateSectionField('employmentInfo', 'nextOfKinPhone', value, 'phone'), 'tel', '', { maxLength: 10 }, true, 'employmentInfo.nextOfKinPhone')}
+              {renderField('Next of kin email', personalData.employmentInfo.nextOfKinEmail, (value) => updateSectionField('employmentInfo', 'nextOfKinEmail', value, 'email'), 'email', '', {}, true, 'employmentInfo.nextOfKinEmail')}
+              {renderField('Relationship', personalData.employmentInfo.nextOfKinRelationship, (value) => updateSectionField('employmentInfo', 'nextOfKinRelationship', value, 'alpha'), 'text', '', {}, true, 'employmentInfo.nextOfKinRelationship')}
             </div>
           )
         case 2:
@@ -632,26 +715,81 @@ function DashboardPage() {
       case 0:
         return (
           <div className="grid gap-6 xl:grid-cols-2">
-            {renderField('Company name', businessData.businessInfo.companyName, (value) => updateSectionField('businessInfo', 'companyName', value), 'text', '', {}, true)}
-            {renderField('Type of business', businessData.businessInfo.businessType, (value) => updateSectionField('businessInfo', 'businessType', value), 'text', '', {}, true)}
-            {renderDateField('Established date', businessData.businessInfo.establishedDate, (value) => updateSectionField('businessInfo', 'establishedDate', value), true)}
-            {renderField('Nature of business', businessData.businessInfo.natureOfBusiness, (value) => updateSectionField('businessInfo', 'natureOfBusiness', value), 'text', '', {}, true)}
-            {renderField('Registered office', businessData.businessInfo.registeredOffice, (value) => updateSectionField('businessInfo', 'registeredOffice', value), 'text', '', {}, true)}
-            {renderField('Collateral pledged', businessData.businessInfo.collateralPledged, (value) => updateSectionField('businessInfo', 'collateralPledged', value), 'text', '', {}, true)}
+            {renderField('Company name', businessData.businessInfo.companyName, (value) => updateSectionField('businessInfo', 'companyName', value), 'text', '', {}, true, 'businessInfo.companyName')}
+            <label className="grid gap-2">
+              <span className="text-sm font-semibold text-slate-700">
+                Type of business
+                <span className="text-red-500"> *</span>
+              </span>
+              <select
+                value={businessData.businessInfo.businessType}
+                onChange={(event) => updateSectionField('businessInfo', 'businessType', event.target.value)}
+                className="w-full min-w-0 rounded-2xl border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+              >
+                <option value="">Select business type</option>
+                <option value="Sole Proprietorship">Sole Proprietorship</option>
+                <option value="Partnership">Partnership</option>
+                <option value="Limited Liability Company (LLC)">Limited Liability Company (LLC)</option>
+                <option value="Corporation">Corporation</option>
+              </select>
+              {validationErrors['businessInfo.businessType'] ? (
+                <span className="text-sm text-red-600">{validationErrors['businessInfo.businessType']}</span>
+              ) : null}
+            </label>
+            {renderDateField('Established date', businessData.businessInfo.establishedDate, (value) => updateSectionField('businessInfo', 'establishedDate', value), true, 'businessInfo.establishedDate')}
+            {renderField('Nature of business', businessData.businessInfo.natureOfBusiness, (value) => updateSectionField('businessInfo', 'natureOfBusiness', value), 'text', '', {}, true, 'businessInfo.natureOfBusiness')}
+            {renderField('Registered office', businessData.businessInfo.registeredOffice, (value) => updateSectionField('businessInfo', 'registeredOffice', value), 'text', '', {}, true, 'businessInfo.registeredOffice')}
+            {renderField('Collateral pledged', businessData.businessInfo.collateralPledged, (value) => updateSectionField('businessInfo', 'collateralPledged', value), 'text', '', {}, true, 'businessInfo.collateralPledged')}
+            {renderField('Purpose of loan', businessData.businessInfo.purposeOfLoan, (value) => updateSectionField('businessInfo', 'purposeOfLoan', value), 'text', '', {}, true, 'businessInfo.purposeOfLoan')}
           </div>
         )
       case 1:
         return (
           <div className="grid gap-6 xl:grid-cols-2">
-            {renderField('Director 1 name', businessData.directorInfo.director1Name, (value) => updateSectionField('directorInfo', 'director1Name', value, 'alpha'), 'text', '', {}, true)}
-            {renderField('Director 1 phone', businessData.directorInfo.director1Phone, (value) => updateSectionField('directorInfo', 'director1Phone', value, 'phone'), 'tel', '', { maxLength: 10 }, true, 'directorInfo.director1Phone')}
-            {renderField('Director 1 email', businessData.directorInfo.director1Email, (value) => updateSectionField('directorInfo', 'director1Email', value, 'email'), 'email', '', {}, true, 'directorInfo.director1Email')}
-            {renderField('Director 1 NRC', businessData.directorInfo.director1Nrc, (value) => updateSectionField('directorInfo', 'director1Nrc', value, 'nrc'), 'text', '', { maxLength: 12 }, true, 'directorInfo.director1Nrc')}
-            {renderField('Director 2 name', businessData.directorInfo.director2Name, (value) => updateSectionField('directorInfo', 'director2Name', value, 'alpha'), 'text', '', {}, false)}
-            {renderField('Director 2 phone', businessData.directorInfo.director2Phone, (value) => updateSectionField('directorInfo', 'director2Phone', value, 'phone'), 'tel', '', { maxLength: 10 }, false)}
-            {renderField('Director 2 email', businessData.directorInfo.director2Email, (value) => updateSectionField('directorInfo', 'director2Email', value, 'email'), 'email', '', {}, false)}
-            {renderField('Director 2 NRC', businessData.directorInfo.director2Nrc, (value) => updateSectionField('directorInfo', 'director2Nrc', value, 'nrc'), 'text', '', { maxLength: 12 }, false)}
-            {renderField('Applicant name', businessData.directorInfo.applicantName, (value) => updateSectionField('directorInfo', 'applicantName', value, 'alpha'), 'text', '', {}, true)}
+            <div className="xl:col-span-2 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-800">Directors</h3>
+                  <p className="text-sm text-slate-500">Add up to 3 directors. Each director requires a name, phone, email, and NRC.</p>
+                </div>
+                {businessData.directorInfo.directors.length < 3 && (
+                  <button
+                    type="button"
+                    onClick={addDirector}
+                    className="rounded-full border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-700 transition hover:bg-sky-100"
+                  >
+                    Add director
+                  </button>
+                )}
+              </div>
+              <div className="mt-4 space-y-4">
+                {businessData.directorInfo.directors.map((director, index) => (
+                  <div key={index} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="mb-4 flex items-center justify-between gap-3">
+                      <div className="text-sm font-semibold text-slate-700">Director {index + 1}</div>
+                      {index > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => removeDirector(index)}
+                          className="rounded-full border border-red-200 px-3 py-1 text-xs font-semibold text-red-600 transition hover:bg-red-50"
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
+                    <div className="grid gap-6 xl:grid-cols-2">
+                      {renderField(`Director ${index + 1} name`, director.name, (value) => updateDirectorField(index, 'name', value, 'alpha'), 'text', '', {}, true, `directorInfo.directors[${index}].name`)}
+                      {renderField(`Director ${index + 1} phone`, director.phone, (value) => updateDirectorField(index, 'phone', value, 'phone'), 'tel', '', { maxLength: 10 }, true, `directorInfo.directors[${index}].phone`)}
+                      {renderField(`Director ${index + 1} email`, director.email, (value) => updateDirectorField(index, 'email', value, 'email'), 'email', '', {}, true, `directorInfo.directors[${index}].email`)}
+                      {renderField(`Director ${index + 1} NRC`, director.nrc, (value) => updateDirectorField(index, 'nrc', value, 'nrc'), 'text', '', { maxLength: 12 }, true, `directorInfo.directors[${index}].nrc`)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            {renderField('Applicant first name', businessData.directorInfo.applicantFirstName, (value) => updateSectionField('directorInfo', 'applicantFirstName', value, 'alpha'), 'text', '', {}, true, 'directorInfo.applicantFirstName')}
+            {renderField('Applicant middle name (Optional)', businessData.directorInfo.applicantMiddleName, (value) => updateSectionField('directorInfo', 'applicantMiddleName', value, 'alpha'), 'text', '', {}, false)}
+            {renderField('Applicant last name', businessData.directorInfo.applicantLastName, (value) => updateSectionField('directorInfo', 'applicantLastName', value, 'alpha'), 'text', '', {}, true, 'directorInfo.applicantLastName')}
             {renderField('Applicant phone', businessData.directorInfo.applicantPhone, (value) => updateSectionField('directorInfo', 'applicantPhone', value, 'phone'), 'tel', '', { maxLength: 10 }, true, 'directorInfo.applicantPhone')}
             {renderField('Applicant email', businessData.directorInfo.applicantEmail, (value) => updateSectionField('directorInfo', 'applicantEmail', value, 'email'), 'email', '', {}, true, 'directorInfo.applicantEmail')}
             {renderField('Applicant NRC', businessData.directorInfo.applicantNrc, (value) => updateSectionField('directorInfo', 'applicantNrc', value, 'nrc'), 'text', '', { maxLength: 12 }, true, 'directorInfo.applicantNrc')}
@@ -694,10 +832,31 @@ function DashboardPage() {
                 <span className="text-sm text-red-600">{validationErrors['directorInfo.applicantMaritalStatus']}</span>
               ) : null}
             </label>
-            {renderBirthDateField('Birth date', businessData.directorInfo.applicantBirthDate, (value) => updateSectionField('directorInfo', 'applicantBirthDate', value), true)}
-            {renderField('Applicant address', businessData.directorInfo.applicantAddress, (value) => updateSectionField('directorInfo', 'applicantAddress', value), 'text', '', {}, true)}
-            {renderField('Applicant position', businessData.directorInfo.applicantPosition, (value) => updateSectionField('directorInfo', 'applicantPosition', value), 'text', '', {}, true)}
-            {renderField('Applicant nationality', businessData.directorInfo.applicantNationality, (value) => updateSectionField('directorInfo', 'applicantNationality', value), 'text', '', {}, true)}
+            {renderBirthDateField('Birth date', businessData.directorInfo.applicantBirthDate, (value) => updateSectionField('directorInfo', 'applicantBirthDate', value), true, 'directorInfo.applicantBirthDate')}
+            {renderField('Applicant address', businessData.directorInfo.applicantAddress, (value) => updateSectionField('directorInfo', 'applicantAddress', value), 'text', '', {}, true, 'directorInfo.applicantAddress')}
+            {renderField('Applicant position', businessData.directorInfo.applicantPosition, (value) => updateSectionField('directorInfo', 'applicantPosition', value), 'text', '', {}, true, 'directorInfo.applicantPosition')}
+            <label className="grid gap-2">
+              <span className="text-sm font-semibold text-slate-700">
+                Applicant nationality
+                <span className="text-red-500"> *</span>
+              </span>
+              <select
+                value={businessData.directorInfo.applicantNationality}
+                onChange={(event) => updateSectionField('directorInfo', 'applicantNationality', event.target.value)}
+                className="w-full min-w-0 rounded-2xl border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+              >
+                <option value="">Select nationality</option>
+                <option value="Kenya">Kenya</option>
+                <option value="Malawi">Malawi</option>
+                <option value="Rwanda">Rwanda</option>
+                <option value="Uganda">Uganda</option>
+                <option value="Zambia">Zambia</option>
+                <option value="Zimbabwe">Zimbabwe</option>
+              </select>
+              {validationErrors['directorInfo.applicantNationality'] ? (
+                <span className="text-sm text-red-600">{validationErrors['directorInfo.applicantNationality']}</span>
+              ) : null}
+            </label>
           </div>
         )
       case 2:
