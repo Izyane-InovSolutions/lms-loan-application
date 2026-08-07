@@ -145,3 +145,4 @@ npm run preview
 - If styles do not appear correctly, ensure `tailwind.config.js` and `src/index.css` are loaded.
 - If the review or submit step fails, confirm the browser console for errors.
 - If deploy fails on Vercel, verify the build output directory is set to `dist`.
+.
