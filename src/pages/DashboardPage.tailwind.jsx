@@ -84,8 +84,7 @@ const businessInitial = {
     form2: null,
     latestTaxComplianceReturn: null,
     orderOrInvoice: null,
-    nrcForDirectors: null,
-    directorsPassportPhoto: null,
+    directorUploads: [{ nrc: null, passportPhoto: null }],
     pacraCertificate: null,
     taxClearance: null,
     bankStatements: null,
@@ -229,6 +228,40 @@ function DashboardPage() {
       documents: {
         ...prev.documents,
         [field]: file,
+      },
+    }))
+  }
+
+  const updateDirectorDocumentField = (index, field, file) => {
+    setBusinessData((prev) => ({
+      ...prev,
+      documents: {
+        ...prev.documents,
+        directorUploads: (prev.documents.directorUploads || []).map((upload, uploadIndex) =>
+          uploadIndex === index ? { ...upload, [field]: file } : upload
+        ),
+      },
+    }))
+  }
+
+  const addDirectorUpload = () => {
+    setBusinessData((prev) => ({
+      ...prev,
+      documents: {
+        ...prev.documents,
+        directorUploads: (prev.documents.directorUploads || []).length < 3
+          ? [...(prev.documents.directorUploads || []), { nrc: null, passportPhoto: null }]
+          : prev.documents.directorUploads || [{ nrc: null, passportPhoto: null }],
+      },
+    }))
+  }
+
+  const removeDirectorUpload = (index) => {
+    setBusinessData((prev) => ({
+      ...prev,
+      documents: {
+        ...prev.documents,
+        directorUploads: (prev.documents.directorUploads || []).filter((_, uploadIndex) => uploadIndex !== index),
       },
     }))
   }
@@ -399,13 +432,16 @@ function DashboardPage() {
         requiredField(businessData.documents.pacraCertificate, 'documents.pacraCertificate', 'PACRA certificate is required.')
         requiredField(businessData.documents.form2, 'documents.form2', 'Form 2 is required.')
         requiredField(businessData.documents.latestTaxComplianceReturn, 'documents.latestTaxComplianceReturn', 'Latest tax compliance return is required.')
-        requiredField(businessData.documents.orderOrInvoice, 'documents.orderOrInvoice', 'Order or invoice is required if applying for order financing or invoice discounting.')
-        requiredField(businessData.documents.nrcForDirectors, 'documents.nrcForDirectors', 'NRC for directors is required.')
-        requiredField(businessData.documents.directorsPassportPhoto, 'documents.directorsPassportPhoto', 'Directors passport-sized photo is required.')
         requiredField(businessData.documents.taxClearance, 'documents.taxClearance', 'Tax clearance certificate is required.')
         requiredField(businessData.documents.bankStatements, 'documents.bankStatements', 'Bank statements are required.')
         requiredField(businessData.documents.passportPhoto, 'documents.passportPhoto', 'Passport photo is required.')
         requiredField(businessData.documents.boardResolution, 'documents.boardResolution', 'Board resolution is required.')
+
+        const directorUploads = businessData.documents.directorUploads || []
+        directorUploads.forEach((upload, index) => {
+          requiredField(upload.nrc, `documents.directorUploads[${index}].nrc`, `Director ${index + 1} NRC is required.`)
+          requiredField(upload.passportPhoto, `documents.directorUploads[${index}].passportPhoto`, `Director ${index + 1} passport photo is required.`)
+        })
       }
     }
 
@@ -876,12 +912,78 @@ function DashboardPage() {
             {renderUploadField('Form 2', 'form2', businessData.documents.form2, true)}
             {renderUploadField('Tax clearance certificate / TPIN', 'taxClearance', businessData.documents.taxClearance, true)}
             {renderUploadField('Latest tax compliance return', 'latestTaxComplianceReturn', businessData.documents.latestTaxComplianceReturn, true)}
-            {renderUploadField('Order / Invoice (if applying for order financing or invoice discounting)', 'orderOrInvoice', businessData.documents.orderOrInvoice, true)}
+            {renderUploadField('Order / Invoice (if applying for order financing or invoice discounting)', 'orderOrInvoice', businessData.documents.orderOrInvoice, false)}
             {renderUploadField('Bank statements (6 months)', 'bankStatements', businessData.documents.bankStatements, true)}
-            {renderUploadField('NRC for directors', 'nrcForDirectors', businessData.documents.nrcForDirectors, true)}
-            {renderUploadField('Directors passport-sized photo', 'directorsPassportPhoto', businessData.documents.directorsPassportPhoto, true)}
             {renderUploadField('Applicant Passport-sized photo', 'passportPhoto', businessData.documents.passportPhoto, true)}
             {renderUploadField('Board resolution', 'boardResolution', businessData.documents.boardResolution, true)}
+
+            <div className="xl:col-span-2 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="text-lg font-semibold text-slate-800">Director documents</h3>
+                  <p className="text-sm text-slate-500">Add up to 3 director NRC and passport photo uploads.</p>
+                </div>
+                {(businessData.documents.directorUploads || []).length < 3 && (
+                  <button
+                    type="button"
+                    onClick={addDirectorUpload}
+                    className="rounded-full border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-700 transition hover:bg-sky-100"
+                  >
+                    Add director upload
+                  </button>
+                )}
+              </div>
+              <div className="mt-4 space-y-4">
+                {(businessData.documents.directorUploads || []).map((upload, index) => (
+                  <div key={index} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                    <div className="mb-4 flex items-center justify-between gap-3">
+                      <div className="text-sm font-semibold text-slate-700">Director {index + 1}</div>
+                      {index > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => removeDirectorUpload(index)}
+                          className="rounded-full border border-red-200 px-3 py-1 text-xs font-semibold text-red-600 transition hover:bg-red-50"
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
+                    <div className="grid gap-6 xl:grid-cols-2">
+                      <label className="grid gap-2">
+                        <span className="text-sm font-semibold text-slate-700">
+                          Director {index + 1} NRC
+                          <span className="text-red-500"> *</span>
+                        </span>
+                        <input
+                          type="file"
+                          onChange={(event) => updateDirectorDocumentField(index, 'nrc', event.target.files?.[0] ?? null)}
+                          className="w-full min-w-0 rounded-2xl border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                          accept="image/*,.pdf,.doc,.docx"
+                        />
+                        <span className="text-xs text-slate-500">
+                          {upload.nrc ? upload.nrc.name : 'Upload director NRC'}
+                        </span>
+                      </label>
+                      <label className="grid gap-2">
+                        <span className="text-sm font-semibold text-slate-700">
+                          Director {index + 1} passport photo
+                          <span className="text-red-500"> *</span>
+                        </span>
+                        <input
+                          type="file"
+                          onChange={(event) => updateDirectorDocumentField(index, 'passportPhoto', event.target.files?.[0] ?? null)}
+                          className="w-full min-w-0 rounded-2xl border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                          accept="image/*,.pdf,.doc,.docx"
+                        />
+                        <span className="text-xs text-slate-500">
+                          {upload.passportPhoto ? upload.passportPhoto.name : 'Upload director passport photo'}
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
           </div>
         )
       case 3:
