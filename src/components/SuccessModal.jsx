@@ -36,7 +36,7 @@ function SuccessModal({ open, onClose, loanType, amount, tenure, monthlyRepaymen
         </div>
 
         <div className="mt-6 flex justify-center">
-          <button className="rounded-full bg-sky-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-sky-700" type="button" onClick={onClose}>
+          <button className="rounded-lg bg-sky-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-sky-700" type="button" onClick={onClose}>
             Back to home
           </button>
         </div>

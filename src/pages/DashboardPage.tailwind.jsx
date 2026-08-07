@@ -463,7 +463,7 @@ function DashboardPage() {
         value={value}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
-        className="w-full min-w-0 rounded-2xl border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+        className="w-full min-w-0 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
         {...inputProps}
       />
       {errorKey && validationErrors[errorKey] ? (
@@ -486,10 +486,10 @@ function DashboardPage() {
             textField: {
               fullWidth: true,
               size: 'small',
-              className: 'rounded-2xl bg-slate-50',
+              className: 'rounded-lg bg-slate-50',
               sx: {
                 '& .MuiOutlinedInput-root': {
-                  borderRadius: '1rem',
+                  borderRadius: '0.5rem',
                   backgroundColor: '#f8fafc',
                   borderColor: '#cbd5e1',
                 },
@@ -520,10 +520,10 @@ function DashboardPage() {
             textField: {
               fullWidth: true,
               size: 'small',
-              className: 'rounded-2xl bg-slate-50',
+              className: 'rounded-lg bg-slate-50',
               sx: {
                 '& .MuiOutlinedInput-root': {
-                  borderRadius: '1rem',
+                  borderRadius: '0.5rem',
                   backgroundColor: '#f8fafc',
                   borderColor: '#cbd5e1',
                 },
@@ -547,7 +547,7 @@ function DashboardPage() {
       <input
         type="file"
         onChange={(event) => updateDocumentField(field, event.target.files?.[0] ?? null)}
-        className="w-full min-w-0 rounded-2xl border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+        className="w-full min-w-0 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
         accept="image/*,.pdf,.doc,.docx"
       />
       <span className="text-xs text-slate-500">
@@ -561,7 +561,7 @@ function DashboardPage() {
       switch (currentStep) {
         case 0:
           return (
-            <div className="grid gap-6 xl:grid-cols-2">
+            <div className="grid gap-6 xl:grid-cols-3">
               {renderField('First name', personalData.personalInfo.firstName, (value) => updateSectionField('personalInfo', 'firstName', value, 'alpha'), 'text', '', {}, true, 'personalInfo.firstName')}
               {renderField('Middle name (Optional)', personalData.personalInfo.middleName, (value) => updateSectionField('personalInfo', 'middleName', value, 'alpha'), 'text', '', {}, false)}
               {renderField('Surname', personalData.personalInfo.surname, (value) => updateSectionField('personalInfo', 'surname', value, 'alpha'), 'text', '', {}, true, 'personalInfo.surname')}
@@ -576,7 +576,7 @@ function DashboardPage() {
                 <select
                   value={personalData.personalInfo.gender}
                   onChange={(event) => updateSectionField('personalInfo', 'gender', event.target.value, 'alpha')}
-                  className="w-full min-w-0 rounded-2xl border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                  className="w-full min-w-0 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
                 >
                   <option value="">Select gender</option>
                   <option value="Male">Male</option>
@@ -594,7 +594,7 @@ function DashboardPage() {
                 <select
                   value={personalData.personalInfo.maritalStatus}
                   onChange={(event) => updateSectionField('personalInfo', 'maritalStatus', event.target.value, 'alpha')}
-                  className="w-full min-w-0 rounded-2xl border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                  className="w-full min-w-0 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
                 >
                   <option value="">Select marital status</option>
                   <option value="Single">Single</option>
@@ -612,7 +612,7 @@ function DashboardPage() {
           )
         case 1:
           return (
-            <div className="grid gap-6 xl:grid-cols-2">
+            <div className="grid gap-6 xl:grid-cols-3">
               {renderField('Residential address', personalData.employmentInfo.residentialAddress, (value) => updateSectionField('employmentInfo', 'residentialAddress', value), 'text', '', {}, true, 'employmentInfo.residentialAddress')}
               {renderField('Occupation', personalData.employmentInfo.occupation, (value) => updateSectionField('employmentInfo', 'occupation', value), 'text', '', {}, true, 'employmentInfo.occupation')}
               {renderField('Employer name', personalData.employmentInfo.employerName, (value) => updateSectionField('employmentInfo', 'employerName', value), 'text', '', {}, true, 'employmentInfo.employerName')}
@@ -624,7 +624,7 @@ function DashboardPage() {
                 <select
                   value={personalData.employmentInfo.nationality}
                   onChange={(event) => updateSectionField('employmentInfo', 'nationality', event.target.value)}
-                  className="w-full min-w-0 rounded-2xl border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                  className="w-full min-w-0 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
                 >
                   <option value="">Select nationality</option>
                   <option value="Kenya">Kenya</option>
@@ -647,7 +647,7 @@ function DashboardPage() {
           )
         case 2:
           return (
-            <div className="grid gap-6 xl:grid-cols-2">
+            <div className="grid gap-6 xl:grid-cols-3">
               {renderUploadField('Latest three payslips', 'payslips', personalData.documents.payslips, true)}
               {renderUploadField('Bank statements (3 months)', 'bankStatements', personalData.documents.bankStatements, true)}
               {renderUploadField('NRC copy', 'nrcCopy', personalData.documents.nrcCopy, true)}
@@ -710,7 +710,7 @@ function DashboardPage() {
                   <span>Total repayable</span>
                   <span>K{totalRepayable.toFixed(2)}</span>
                 </div>
-                <button className="mt-6 inline-flex w-full items-center justify-center rounded-2xl bg-sky-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-sky-200/50 transition hover:bg-sky-700" type="button" onClick={handleSubmitApplication}>
+                <button className="mt-6 inline-flex w-full items-center justify-center rounded-lg bg-sky-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-sky-200/50 transition hover:bg-sky-700" type="button" onClick={handleSubmitApplication}>
                   Review terms & submit
                 </button>
               </div>
@@ -724,7 +724,7 @@ function DashboardPage() {
     switch (currentStep) {
       case 0:
         return (
-          <div className="grid gap-6 xl:grid-cols-2">
+          <div className="grid gap-6 xl:grid-cols-3">
             {renderField('Company name', businessData.businessInfo.companyName, (value) => updateSectionField('businessInfo', 'companyName', value), 'text', '', {}, true, 'businessInfo.companyName')}
             <label className="grid gap-2">
               <span className="text-sm font-semibold text-slate-700">
@@ -734,7 +734,7 @@ function DashboardPage() {
               <select
                 value={businessData.businessInfo.businessType}
                 onChange={(event) => updateSectionField('businessInfo', 'businessType', event.target.value)}
-                className="w-full min-w-0 rounded-2xl border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                className="w-full min-w-0 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
               >
                 <option value="">Select business type</option>
                 <option value="Sole Proprietorship">Sole Proprietorship</option>
@@ -755,8 +755,8 @@ function DashboardPage() {
         )
       case 1:
         return (
-          <div className="grid gap-6 xl:grid-cols-2">
-            <div className="xl:col-span-2 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="grid gap-6 xl:grid-cols-3">
+            <div className="xl:col-span-3 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h3 className="text-lg font-semibold text-slate-800">Directors</h3>
@@ -766,7 +766,7 @@ function DashboardPage() {
                   <button
                     type="button"
                     onClick={addDirector}
-                    className="rounded-full border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-700 transition hover:bg-sky-100"
+                    className="rounded-lg border border-sky-200 bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-700 transition hover:bg-sky-100"
                   >
                     Add director
                   </button>
@@ -781,13 +781,13 @@ function DashboardPage() {
                         <button
                           type="button"
                           onClick={() => removeDirector(index)}
-                          className="rounded-full border border-red-200 px-3 py-1 text-xs font-semibold text-red-600 transition hover:bg-red-50"
+                          className="rounded-lg border border-red-200 px-3 py-1 text-xs font-semibold text-red-600 transition hover:bg-red-50"
                         >
                           Remove
                         </button>
                       )}
                     </div>
-                    <div className="grid gap-6 xl:grid-cols-2">
+                    <div className="grid gap-6 xl:grid-cols-4">
                       {renderField(`Director ${index + 1} name`, director.name, (value) => updateDirectorField(index, 'name', value, 'alpha'), 'text', '', {}, true, `directorInfo.directors[${index}].name`)}
                       {renderField(`Director ${index + 1} phone`, director.phone, (value) => updateDirectorField(index, 'phone', value, 'phone'), 'tel', '', { maxLength: 10 }, true, `directorInfo.directors[${index}].phone`)}
                       {renderField(`Director ${index + 1} email`, director.email, (value) => updateDirectorField(index, 'email', value, 'email'), 'email', '', {}, true, `directorInfo.directors[${index}].email`)}
@@ -811,7 +811,7 @@ function DashboardPage() {
               <select
                 value={businessData.directorInfo.applicantGender}
                 onChange={(event) => updateSectionField('directorInfo', 'applicantGender', event.target.value, 'alpha')}
-                className="w-full min-w-0 rounded-2xl border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                className="w-full min-w-0 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
               >
                 <option value="">Select gender</option>
                 <option value="Male">Male</option>
@@ -829,7 +829,7 @@ function DashboardPage() {
               <select
                 value={businessData.directorInfo.applicantMaritalStatus}
                 onChange={(event) => updateSectionField('directorInfo', 'applicantMaritalStatus', event.target.value, 'alpha')}
-                className="w-full min-w-0 rounded-2xl border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                className="w-full min-w-0 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
               >
                 <option value="">Select marital status</option>
                 <option value="Single">Single</option>
@@ -853,7 +853,7 @@ function DashboardPage() {
               <select
                 value={businessData.directorInfo.applicantNationality}
                 onChange={(event) => updateSectionField('directorInfo', 'applicantNationality', event.target.value)}
-                className="w-full min-w-0 rounded-2xl border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                className="w-full min-w-0 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
               >
                 <option value="">Select nationality</option>
                 <option value="Kenya">Kenya</option>
@@ -871,7 +871,7 @@ function DashboardPage() {
         )
       case 2:
         return (
-          <div className="grid gap-6 xl:grid-cols-2">
+          <div className="grid gap-6 xl:grid-cols-3">
             {renderUploadField('PACRA certificate', 'pacraCertificate', businessData.documents.pacraCertificate, true)}
             {renderUploadField('Form 2', 'form2', businessData.documents.form2, true)}
             {renderUploadField('Tax clearance certificate / TPIN', 'taxClearance', businessData.documents.taxClearance, true)}
@@ -939,7 +939,7 @@ function DashboardPage() {
                 <span>Total repayable</span>
                 <span>K{totalRepayable.toFixed(2)}</span>
               </div>
-              <button className="mt-6 inline-flex w-full items-center justify-center rounded-2xl bg-sky-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-sky-200/50 transition hover:bg-sky-700" type="button" onClick={handleSubmitApplication}>
+              <button className="mt-6 inline-flex w-full items-center justify-center rounded-lg bg-sky-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-sky-200/50 transition hover:bg-sky-700" type="button" onClick={handleSubmitApplication}>
                 Review terms & submit
               </button>
             </div>
@@ -953,17 +953,17 @@ function DashboardPage() {
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900">
       <Header />
-      <main className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
-        <section className="overflow-hidden rounded-[2rem] bg-white p-6 shadow-[0_24px_80px_rgba(15,23,42,0.08)] sm:p-8">
-          <div className="mb-8 flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
+      <main className="mx-auto max-w-[1600px] px-4 py-5 sm:px-6 lg:px-8">
+        <section className="overflow-hidden rounded-[2rem] bg-white p-5 shadow-[0_24px_80px_rgba(15,23,42,0.08)] sm:p-6">
+          <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div className="max-w-2xl">
               <div className="inline-flex rounded-full bg-sky-100 px-4 py-2 text-xs font-semibold uppercase tracking-[0.27em] text-sky-700">
                 Loan application
               </div>
-              <h1 className="mt-4 text-3xl font-bold tracking-tight text-slate-950 md:text-4xl">
+              <h1 className="mt-3 text-3xl font-bold tracking-tight text-slate-950 md:text-4xl">
                 Welcome to {selectedLoanType === 'personal' ? 'Personal' : 'Business'} Loan Application
               </h1>
-              <p className="mt-3 text-sm leading-7 text-slate-600 sm:text-base">
+              <p className="mt-2 text-sm leading-6 text-slate-600 sm:text-base">
                 Complete step {currentStep + 1} of {stepTitles.length} to move forward. Required fields are marked with an asterisk.
               </p>
             </div>
@@ -975,7 +975,7 @@ function DashboardPage() {
               return (
                 <div
                   key={title}
-                  className={`flex items-center gap-3 rounded-3xl border px-4 py-3 transition ${
+                  className={`flex items-center gap-3 rounded-lg border px-4 py-3 transition ${
                     active ? 'border-sky-500 bg-sky-100/80 text-slate-950' : 'border-slate-200 bg-slate-100 text-slate-500'
                   }`}
                 >
@@ -990,13 +990,13 @@ function DashboardPage() {
             })}
           </div>
 
-          <div className="mt-8 rounded-[2rem] border border-slate-200 bg-slate-50 p-6 sm:p-8">
+          <div className="mt-6 rounded-[2rem] border border-slate-200 bg-slate-50 p-5 sm:p-6">
             {renderStepContent()}
 
-            <div className="mt-8 flex flex-col gap-3 sm:flex-row sm:justify-between">
+            <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-between">
               <button
                 type="button"
-                className="rounded-full border border-slate-300 bg-white px-6 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-100"
+                className="rounded-lg border border-slate-300 bg-white px-6 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-100"
                 onClick={handleBack}
               >
                 {currentStep === 0 ? 'Back to home' : 'Previous step'}
@@ -1004,7 +1004,7 @@ function DashboardPage() {
               {currentStep < stepTitles.length - 1 && (
                 <button
                   type="button"
-                  className="rounded-full bg-sky-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-sky-200/50 transition hover:bg-sky-700"
+                  className="rounded-lg bg-sky-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-sky-200/50 transition hover:bg-sky-700"
                   onClick={handleNext}
                 >
                   Continue

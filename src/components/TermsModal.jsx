@@ -50,7 +50,7 @@ function TermsModal({ open, onClose, onAccept }) {
         </div>
 
         <button
-          className="mt-6 w-full rounded-full bg-sky-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+          className="mt-6 w-full rounded-lg bg-sky-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-slate-300"
           type="button"
           disabled={!accepted}
           onClick={() => {
