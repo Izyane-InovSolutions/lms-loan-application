@@ -138,29 +138,22 @@ function DashboardPage() {
     }
 
     if (fieldType === 'nrc') {
-      const digits = value.replace(/\D/g, '').slice(0, 10)
+      const digits = value.replace(/\D/g, '').slice(0, 9)
       if (digits.length <= 6) {
         return digits
       }
       if (digits.length <= 8) {
         return `${digits.slice(0, 6)}/${digits.slice(6, 8)}`
       }
-      return `${digits.slice(0, 6)}/${digits.slice(6, 8)}/${digits.slice(8, 10)}`
+      return `${digits.slice(0, 6)}/${digits.slice(6, 8)}/${digits.slice(8, 9)}`
     }
 
     if (fieldType === 'phone') {
-      let raw = value.replace(/[^+0-9]/g, '')
-      if (raw.startsWith('+')) {
-        raw = '+' + raw.slice(1).replace(/\+/g, '')
-        if (raw.startsWith('+260')) {
-          raw = '+260' + raw.slice(4).replace(/\D/g, '').slice(0, 7)
-        }
-      } else if (raw.startsWith('0')) {
-        raw = raw.replace(/\D/g, '').slice(0, 10)
-      } else {
-        raw = raw.replace(/\D/g, '').slice(0, 10)
+      const digits = value.replace(/\D/g, '')
+      if (digits.startsWith('0')) {
+        return digits.slice(0, 10)
       }
-      return raw
+      return digits.length > 0 ? digits.slice(0, 10) : ''
     }
 
     return value
@@ -169,9 +162,16 @@ function DashboardPage() {
   const isValidNRC = (value) => /^[0-9]{6}\/[0-9]{2}\/[0-9]{1,2}$/.test(value)
   const isValidPhone = (value) => {
     const phone = value.replace(/\s+/g, '')
-    return /^\+260(96|97|95|76|57)[0-9]{7}$/.test(phone) || /^(0(96|97|95|76|57)[0-9]{7})$/.test(phone)
+    return /^0\d{9}$/.test(phone)
   }
   const isValidEmail = (value) => /^[^\s@]+@[A-Za-z0-9-]+\.com$/.test(value)
+  const isValidBirthDate = (value) => {
+    if (!value) return false
+    const selectedDate = dayjs(value)
+    if (!selectedDate.isValid()) return false
+    const age = dayjs().diff(selectedDate, 'year')
+    return age >= 18 && age <= 65
+  }
 
   const setValidationError = (key, message) => {
     setValidationErrors((prev) => {
@@ -199,7 +199,7 @@ function DashboardPage() {
     if (fieldType === 'nrc') {
       setValidationError(
         `${section}.${field}`,
-        normalizedValue && !isValidNRC(normalizedValue) ? 'NRC must be 6 digits, slash, 2 digits, slash, then 1–2 digits.' : ''
+        normalizedValue && !isValidNRC(normalizedValue) ? 'NRC must be 9 digits.' : ''
       )
     }
 
@@ -207,7 +207,7 @@ function DashboardPage() {
       setValidationError(
         `${section}.${field}`,
         normalizedValue && !isValidPhone(normalizedValue)
-          ? 'Phone must be +260 followed by 096, 097, 095, 076 or 057 and 7 digits.'
+          ? 'Phone must be 10 digits and start with 0.'
           : ''
       )
     }
@@ -263,8 +263,11 @@ function DashboardPage() {
         requiredField(personalData.personalInfo.gender, 'personalInfo.gender', 'Gender is required.')
         requiredField(personalData.personalInfo.maritalStatus, 'personalInfo.maritalStatus', 'Marital status is required.')
         requiredField(personalData.personalInfo.birthDate, 'personalInfo.birthDate', 'Birth date is required.')
+        if (personalData.personalInfo.birthDate && !isValidBirthDate(personalData.personalInfo.birthDate)) {
+          recordError('personalInfo.birthDate', 'Age must be between 18 and 65.')
+        }
         if (personalData.personalInfo.phone && !isValidPhone(personalData.personalInfo.phone)) {
-          recordError('personalInfo.phone', 'Phone must be +260 followed by 096, 097, 095, 076 or 057 and 7 digits.')
+          recordError('personalInfo.phone', 'Phone must be 10 digits and start with 0.')
         }
         if (personalData.personalInfo.email && !isValidEmail(personalData.personalInfo.email)) {
           recordError('personalInfo.email', 'Email must end with a .com domain.')
@@ -284,7 +287,7 @@ function DashboardPage() {
         requiredField(personalData.employmentInfo.nextOfKinEmail, 'employmentInfo.nextOfKinEmail', 'Next of kin email is required.')
         requiredField(personalData.employmentInfo.nextOfKinRelationship, 'employmentInfo.nextOfKinRelationship', 'Relationship is required.')
         if (personalData.employmentInfo.nextOfKinPhone && !isValidPhone(personalData.employmentInfo.nextOfKinPhone)) {
-          recordError('employmentInfo.nextOfKinPhone', 'Phone must be +260 followed by 096, 097, 095, 076 or 057 and 7 digits.')
+          recordError('employmentInfo.nextOfKinPhone', 'Phone must be 10 digits and start with 0.')
         }
         if (personalData.employmentInfo.nextOfKinEmail && !isValidEmail(personalData.employmentInfo.nextOfKinEmail)) {
           recordError('employmentInfo.nextOfKinEmail', 'Email must end with a .com domain.')
@@ -314,11 +317,14 @@ function DashboardPage() {
         requiredField(businessData.directorInfo.applicantGender, 'directorInfo.applicantGender', 'Applicant gender is required.')
         requiredField(businessData.directorInfo.applicantMaritalStatus, 'directorInfo.applicantMaritalStatus', 'Applicant marital status is required.')
         requiredField(businessData.directorInfo.applicantBirthDate, 'directorInfo.applicantBirthDate', 'Applicant birth date is required.')
+        if (businessData.directorInfo.applicantBirthDate && !isValidBirthDate(businessData.directorInfo.applicantBirthDate)) {
+          recordError('directorInfo.applicantBirthDate', 'Age must be between 18 and 65.')
+        }
         requiredField(businessData.directorInfo.applicantAddress, 'directorInfo.applicantAddress', 'Applicant address is required.')
         requiredField(businessData.directorInfo.applicantPosition, 'directorInfo.applicantPosition', 'Applicant position is required.')
         requiredField(businessData.directorInfo.applicantNationality, 'directorInfo.applicantNationality', 'Applicant nationality is required.')
         if (businessData.directorInfo.director1Phone && !isValidPhone(businessData.directorInfo.director1Phone)) {
-          recordError('directorInfo.director1Phone', 'Phone must be +260 followed by 096, 097, 095, 076 or 057 and 7 digits.')
+          recordError('directorInfo.director1Phone', 'Phone must be 10 digits and start with 0.')
         }
         if (businessData.directorInfo.director1Email && !isValidEmail(businessData.directorInfo.director1Email)) {
           recordError('directorInfo.director1Email', 'Email must end with a .com domain.')
@@ -327,7 +333,7 @@ function DashboardPage() {
           recordError('directorInfo.director1Nrc', 'NRC must be 6 digits, slash, 2 digits, slash, then 1–2 digits.')
         }
         if (businessData.directorInfo.applicantPhone && !isValidPhone(businessData.directorInfo.applicantPhone)) {
-          recordError('directorInfo.applicantPhone', 'Phone must be +260 followed by 096, 097, 095, 076 or 057 and 7 digits.')
+          recordError('directorInfo.applicantPhone', 'Phone must be 10 digits and start with 0.')
         }
         if (businessData.directorInfo.applicantEmail && !isValidEmail(businessData.directorInfo.applicantEmail)) {
           recordError('directorInfo.applicantEmail', 'Email must end with a .com domain.')
@@ -430,6 +436,37 @@ function DashboardPage() {
     </label>
   )
 
+  const renderBirthDateField = (label, value, onChange, required = false) => (
+    <label className="grid gap-2">
+      <span className="text-sm font-semibold text-slate-700">
+        {label}
+        {required && <span className="text-red-500"> *</span>}
+      </span>
+      <LocalizationProvider dateAdapter={AdapterDayjs}>
+        <DatePicker
+          value={value ? dayjs(value) : null}
+          onChange={(selected) => onChange(selected ? selected.format('YYYY-MM-DD') : '')}
+          minDate={dayjs().subtract(65, 'year')}
+          maxDate={dayjs().subtract(18, 'year')}
+          slotProps={{
+            textField: {
+              fullWidth: true,
+              size: 'small',
+              className: 'rounded-2xl bg-slate-50',
+              sx: {
+                '& .MuiOutlinedInput-root': {
+                  borderRadius: '1rem',
+                  backgroundColor: '#f8fafc',
+                  borderColor: '#cbd5e1',
+                },
+              },
+            },
+          }}
+        />
+      </LocalizationProvider>
+    </label>
+  )
+
   const renderUploadField = (label, field, file, required = false) => (
     <label className="grid gap-2">
       <span className="text-sm font-semibold text-slate-700">
@@ -455,14 +492,51 @@ function DashboardPage() {
           return (
             <div className="grid gap-6 xl:grid-cols-2">
               {renderField('First name', personalData.personalInfo.firstName, (value) => updateSectionField('personalInfo', 'firstName', value, 'alpha'), 'text', '', {}, true)}
-              {renderField('Middle name', personalData.personalInfo.middleName, (value) => updateSectionField('personalInfo', 'middleName', value, 'alpha'), 'text', '', {}, false)}
+              {renderField('Middle name (Optional)', personalData.personalInfo.middleName, (value) => updateSectionField('personalInfo', 'middleName', value, 'alpha'), 'text', '', {}, false)}
               {renderField('Surname', personalData.personalInfo.surname, (value) => updateSectionField('personalInfo', 'surname', value, 'alpha'), 'text', '', {}, true)}
-              {renderField('Phone', personalData.personalInfo.phone, (value) => updateSectionField('personalInfo', 'phone', value, 'phone'), 'tel', '', { maxLength: 12 }, true, 'personalInfo.phone')}
+              {renderField('Phone', personalData.personalInfo.phone, (value) => updateSectionField('personalInfo', 'phone', value, 'phone'), 'tel', '', { maxLength: 10 }, true, 'personalInfo.phone')}
               {renderField('Email', personalData.personalInfo.email, (value) => updateSectionField('personalInfo', 'email', value, 'email'), 'email', '', {}, true, 'personalInfo.email')}
               {renderField('NRC', personalData.personalInfo.nrc, (value) => updateSectionField('personalInfo', 'nrc', value, 'nrc'), 'text', '', { maxLength: 12 }, true, 'personalInfo.nrc')}
-              {renderField('Gender', personalData.personalInfo.gender, (value) => updateSectionField('personalInfo', 'gender', value, 'alpha'), 'text', '', {}, true)}
-              {renderField('Marital status', personalData.personalInfo.maritalStatus, (value) => updateSectionField('personalInfo', 'maritalStatus', value, 'alpha'), 'text', '', {}, true)}
-              {renderDateField('Birth date', personalData.personalInfo.birthDate, (value) => updateSectionField('personalInfo', 'birthDate', value), true)}
+              <label className="grid gap-2">
+                <span className="text-sm font-semibold text-slate-700">
+                  Gender
+                  <span className="text-red-500"> *</span>
+                </span>
+                <select
+                  value={personalData.personalInfo.gender}
+                  onChange={(event) => updateSectionField('personalInfo', 'gender', event.target.value, 'alpha')}
+                  className="w-full min-w-0 rounded-2xl border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                >
+                  <option value="">Select gender</option>
+                  <option value="Male">Male</option>
+                  <option value="Female">Female</option>
+                </select>
+                {validationErrors['personalInfo.gender'] ? (
+                  <span className="text-sm text-red-600">{validationErrors['personalInfo.gender']}</span>
+                ) : null}
+              </label>
+              <label className="grid gap-2">
+                <span className="text-sm font-semibold text-slate-700">
+                  Marital status
+                  <span className="text-red-500"> *</span>
+                </span>
+                <select
+                  value={personalData.personalInfo.maritalStatus}
+                  onChange={(event) => updateSectionField('personalInfo', 'maritalStatus', event.target.value, 'alpha')}
+                  className="w-full min-w-0 rounded-2xl border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                >
+                  <option value="">Select marital status</option>
+                  <option value="Single">Single</option>
+                  <option value="Married">Married</option>
+                  <option value="Widowed">Widowed</option>
+                  <option value="Divorced">Divorced</option>
+                  <option value="Separated">Separated</option>
+                </select>
+                {validationErrors['personalInfo.maritalStatus'] ? (
+                  <span className="text-sm text-red-600">{validationErrors['personalInfo.maritalStatus']}</span>
+                ) : null}
+              </label>
+              {renderBirthDateField('Birth date', personalData.personalInfo.birthDate, (value) => updateSectionField('personalInfo', 'birthDate', value), true)}
             </div>
           )
         case 1:
@@ -473,7 +547,7 @@ function DashboardPage() {
               {renderField('Employer name', personalData.employmentInfo.employerName, (value) => updateSectionField('employmentInfo', 'employerName', value), 'text', '', {}, true)}
               {renderField('Nationality', personalData.employmentInfo.nationality, (value) => updateSectionField('employmentInfo', 'nationality', value), 'text', '', {}, true)}
               {renderField('Next of kin name', personalData.employmentInfo.nextOfKinName, (value) => updateSectionField('employmentInfo', 'nextOfKinName', value, 'alpha'), 'text', '', {}, true)}
-              {renderField('Next of kin phone', personalData.employmentInfo.nextOfKinPhone, (value) => updateSectionField('employmentInfo', 'nextOfKinPhone', value, 'phone'), 'tel', '', { maxLength: 12 }, true)}
+              {renderField('Next of kin phone', personalData.employmentInfo.nextOfKinPhone, (value) => updateSectionField('employmentInfo', 'nextOfKinPhone', value, 'phone'), 'tel', '', { maxLength: 10 }, true)}
               {renderField('Next of kin email', personalData.employmentInfo.nextOfKinEmail, (value) => updateSectionField('employmentInfo', 'nextOfKinEmail', value, 'email'), 'email', '', {}, true)}
               {renderField('Relationship', personalData.employmentInfo.nextOfKinRelationship, (value) => updateSectionField('employmentInfo', 'nextOfKinRelationship', value, 'alpha'), 'text', '', {}, true)}
             </div>
@@ -570,20 +644,57 @@ function DashboardPage() {
         return (
           <div className="grid gap-6 xl:grid-cols-2">
             {renderField('Director 1 name', businessData.directorInfo.director1Name, (value) => updateSectionField('directorInfo', 'director1Name', value, 'alpha'), 'text', '', {}, true)}
-            {renderField('Director 1 phone', businessData.directorInfo.director1Phone, (value) => updateSectionField('directorInfo', 'director1Phone', value, 'phone'), 'tel', '', { maxLength: 12 }, true, 'directorInfo.director1Phone')}
+            {renderField('Director 1 phone', businessData.directorInfo.director1Phone, (value) => updateSectionField('directorInfo', 'director1Phone', value, 'phone'), 'tel', '', { maxLength: 10 }, true, 'directorInfo.director1Phone')}
             {renderField('Director 1 email', businessData.directorInfo.director1Email, (value) => updateSectionField('directorInfo', 'director1Email', value, 'email'), 'email', '', {}, true, 'directorInfo.director1Email')}
             {renderField('Director 1 NRC', businessData.directorInfo.director1Nrc, (value) => updateSectionField('directorInfo', 'director1Nrc', value, 'nrc'), 'text', '', { maxLength: 12 }, true, 'directorInfo.director1Nrc')}
             {renderField('Director 2 name', businessData.directorInfo.director2Name, (value) => updateSectionField('directorInfo', 'director2Name', value, 'alpha'), 'text', '', {}, false)}
-            {renderField('Director 2 phone', businessData.directorInfo.director2Phone, (value) => updateSectionField('directorInfo', 'director2Phone', value, 'phone'), 'tel', '', { maxLength: 12 }, false)}
+            {renderField('Director 2 phone', businessData.directorInfo.director2Phone, (value) => updateSectionField('directorInfo', 'director2Phone', value, 'phone'), 'tel', '', { maxLength: 10 }, false)}
             {renderField('Director 2 email', businessData.directorInfo.director2Email, (value) => updateSectionField('directorInfo', 'director2Email', value, 'email'), 'email', '', {}, false)}
             {renderField('Director 2 NRC', businessData.directorInfo.director2Nrc, (value) => updateSectionField('directorInfo', 'director2Nrc', value, 'nrc'), 'text', '', { maxLength: 12 }, false)}
             {renderField('Applicant name', businessData.directorInfo.applicantName, (value) => updateSectionField('directorInfo', 'applicantName', value, 'alpha'), 'text', '', {}, true)}
-            {renderField('Applicant phone', businessData.directorInfo.applicantPhone, (value) => updateSectionField('directorInfo', 'applicantPhone', value, 'phone'), 'tel', '', { maxLength: 12 }, true, 'directorInfo.applicantPhone')}
+            {renderField('Applicant phone', businessData.directorInfo.applicantPhone, (value) => updateSectionField('directorInfo', 'applicantPhone', value, 'phone'), 'tel', '', { maxLength: 10 }, true, 'directorInfo.applicantPhone')}
             {renderField('Applicant email', businessData.directorInfo.applicantEmail, (value) => updateSectionField('directorInfo', 'applicantEmail', value, 'email'), 'email', '', {}, true, 'directorInfo.applicantEmail')}
             {renderField('Applicant NRC', businessData.directorInfo.applicantNrc, (value) => updateSectionField('directorInfo', 'applicantNrc', value, 'nrc'), 'text', '', { maxLength: 12 }, true, 'directorInfo.applicantNrc')}
-            {renderField('Applicant gender', businessData.directorInfo.applicantGender, (value) => updateSectionField('directorInfo', 'applicantGender', value, 'alpha'), 'text', '', {}, true)}
-            {renderField('Marital status', businessData.directorInfo.applicantMaritalStatus, (value) => updateSectionField('directorInfo', 'applicantMaritalStatus', value, 'alpha'), 'text', '', {}, true)}
-            {renderDateField('Birth date', businessData.directorInfo.applicantBirthDate, (value) => updateSectionField('directorInfo', 'applicantBirthDate', value), true)}
+            <label className="grid gap-2">
+              <span className="text-sm font-semibold text-slate-700">
+                Applicant gender
+                <span className="text-red-500"> *</span>
+              </span>
+              <select
+                value={businessData.directorInfo.applicantGender}
+                onChange={(event) => updateSectionField('directorInfo', 'applicantGender', event.target.value, 'alpha')}
+                className="w-full min-w-0 rounded-2xl border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+              >
+                <option value="">Select gender</option>
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+              </select>
+              {validationErrors['directorInfo.applicantGender'] ? (
+                <span className="text-sm text-red-600">{validationErrors['directorInfo.applicantGender']}</span>
+              ) : null}
+            </label>
+            <label className="grid gap-2">
+              <span className="text-sm font-semibold text-slate-700">
+                Marital status
+                <span className="text-red-500"> *</span>
+              </span>
+              <select
+                value={businessData.directorInfo.applicantMaritalStatus}
+                onChange={(event) => updateSectionField('directorInfo', 'applicantMaritalStatus', event.target.value, 'alpha')}
+                className="w-full min-w-0 rounded-2xl border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+              >
+                <option value="">Select marital status</option>
+                <option value="Single">Single</option>
+                <option value="Married">Married</option>
+                <option value="Widowed">Widowed</option>
+                <option value="Divorced">Divorced</option>
+                <option value="Separated">Separated</option>
+              </select>
+              {validationErrors['directorInfo.applicantMaritalStatus'] ? (
+                <span className="text-sm text-red-600">{validationErrors['directorInfo.applicantMaritalStatus']}</span>
+              ) : null}
+            </label>
+            {renderBirthDateField('Birth date', businessData.directorInfo.applicantBirthDate, (value) => updateSectionField('directorInfo', 'applicantBirthDate', value), true)}
             {renderField('Applicant address', businessData.directorInfo.applicantAddress, (value) => updateSectionField('directorInfo', 'applicantAddress', value), 'text', '', {}, true)}
             {renderField('Applicant position', businessData.directorInfo.applicantPosition, (value) => updateSectionField('directorInfo', 'applicantPosition', value), 'text', '', {}, true)}
             {renderField('Applicant nationality', businessData.directorInfo.applicantNationality, (value) => updateSectionField('directorInfo', 'applicantNationality', value), 'text', '', {}, true)}
