@@ -81,6 +81,11 @@ const businessInitial = {
     applicantNationality: '',
   },
   documents: {
+    form2: null,
+    latestTaxComplianceReturn: null,
+    orderOrInvoice: null,
+    nrcForDirectors: null,
+    directorsPassportPhoto: null,
     pacraCertificate: null,
     taxClearance: null,
     bankStatements: null,
@@ -392,6 +397,11 @@ function DashboardPage() {
 
       if (currentStep === 2) {
         requiredField(businessData.documents.pacraCertificate, 'documents.pacraCertificate', 'PACRA certificate is required.')
+        requiredField(businessData.documents.form2, 'documents.form2', 'Form 2 is required.')
+        requiredField(businessData.documents.latestTaxComplianceReturn, 'documents.latestTaxComplianceReturn', 'Latest tax compliance return is required.')
+        requiredField(businessData.documents.orderOrInvoice, 'documents.orderOrInvoice', 'Order or invoice is required if applying for order financing or invoice discounting.')
+        requiredField(businessData.documents.nrcForDirectors, 'documents.nrcForDirectors', 'NRC for directors is required.')
+        requiredField(businessData.documents.directorsPassportPhoto, 'documents.directorsPassportPhoto', 'Directors passport-sized photo is required.')
         requiredField(businessData.documents.taxClearance, 'documents.taxClearance', 'Tax clearance certificate is required.')
         requiredField(businessData.documents.bankStatements, 'documents.bankStatements', 'Bank statements are required.')
         requiredField(businessData.documents.passportPhoto, 'documents.passportPhoto', 'Passport photo is required.')
@@ -863,9 +873,14 @@ function DashboardPage() {
         return (
           <div className="grid gap-6 xl:grid-cols-2">
             {renderUploadField('PACRA certificate', 'pacraCertificate', businessData.documents.pacraCertificate, true)}
+            {renderUploadField('Form 2', 'form2', businessData.documents.form2, true)}
             {renderUploadField('Tax clearance certificate / TPIN', 'taxClearance', businessData.documents.taxClearance, true)}
+            {renderUploadField('Latest tax compliance return', 'latestTaxComplianceReturn', businessData.documents.latestTaxComplianceReturn, true)}
+            {renderUploadField('Order / Invoice (if applying for order financing or invoice discounting)', 'orderOrInvoice', businessData.documents.orderOrInvoice, true)}
             {renderUploadField('Bank statements (6 months)', 'bankStatements', businessData.documents.bankStatements, true)}
-            {renderUploadField('Passport-sized photo', 'passportPhoto', businessData.documents.passportPhoto, true)}
+            {renderUploadField('NRC for directors', 'nrcForDirectors', businessData.documents.nrcForDirectors, true)}
+            {renderUploadField('Directors passport-sized photo', 'directorsPassportPhoto', businessData.documents.directorsPassportPhoto, true)}
+            {renderUploadField('Applicant Passport-sized photo', 'passportPhoto', businessData.documents.passportPhoto, true)}
             {renderUploadField('Board resolution', 'boardResolution', businessData.documents.boardResolution, true)}
           </div>
         )
