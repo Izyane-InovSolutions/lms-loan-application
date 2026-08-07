@@ -1,211 +1,147 @@
-# React Frontend - Salary Advance Engine
+# LMS Loan Application Frontend
 
-A modern React-based customer portal for the Salary Advance Engine with login and dashboard functionality.
+A modern React + Vite frontend for a loan application flow with personal and business loan journeys.
 
-## Project Structure
+## Project Overview
+
+This repository contains the frontend for a loan application experience built with:
+
+- React 18
+- Vite
+- Tailwind CSS
+- Material UI DatePicker
+- React Router v6
+
+The app includes:
+
+- Landing page with loan type selection
+- Multi-step personal loan application flow
+- Multi-step business loan application flow
+- Document upload step
+- Loan amount and tenure review
+- Terms acceptance modal
+- Success confirmation modal
+
+## Folder structure
 
 ```
 frontend/
-├── public/              # Static assets
+├── public/                  # Static assets
 ├── src/
-│   ├── components/      # Reusable React components
-│   │   ├── UserProfile.jsx
-│   │   ├── LoanOverview.jsx
-│   │   └── AccountSettings.jsx
-│   ├── pages/           # Page-level components
-│   │   ├── LoginPage.jsx
-│   │   └── DashboardPage.jsx
-│   ├── styles/          # CSS Modules
-│   ├── utils/           # Utility functions
-│   │   ├── auth.js      # Authentication logic
-│   │   └── api.js       # API client and endpoints
-│   ├── App.jsx          # Main App component with routing
-│   └── main.jsx         # Entry point
-├── index.html           # HTML template
-├── vite.config.js       # Vite configuration
-└── package.json
+│   ├── components/          # Shared UI components and modals
+│   ├── pages/               # Route pages
+│   ├── styles/              # Tailwind-compatible CSS Modules
+│   ├── utils/               # API and auth utilities
+│   ├── App.jsx              # App routes
+│   └── main.jsx             # App entry point
+├── index.html               # Vite HTML template
+├── package.json             # npm scripts and dependencies
+├── tailwind.config.js       # Tailwind configuration
+└── postcss.config.js        # PostCSS configuration
 ```
 
-## Features
+## Core pages
 
-- **Login Screen**: Session-based authentication integrated with Django backend
-- **Dashboard**: Multi-tab interface with:
-  - User Profile Overview
-  - Loan History & Details
-  - Account Settings & Preferences
-- **Responsive Design**: Mobile-friendly CSS Modules styling
-- **API Integration**: Ready to connect with Django backend endpoints
+- `src/pages/LandingPage.jsx` — loan type hero and start flow
+- `src/pages/DashboardPage.tailwind.jsx` — personal/business loan application wizard
+- `src/components/Header.jsx` — top navigation header
+- `src/components/TermsModal.jsx` — terms & conditions modal
+- `src/components/SuccessModal.jsx` — submission confirmation modal
 
-## Setup Instructions
+## Getting started
 
 ### Prerequisites
 
-- Node.js (v16+)
-- npm or yarn
+- Node.js 16+ installed
+- npm available
 
-### Installation
+### Install dependencies
 
-1. Navigate to the frontend directory:
-   ```bash
-   cd frontend
-   ```
+```bash
+npm install
+```
 
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
+### Run development server
 
-3. Create a `.env.local` file (optional for environment variables):
-   ```bash
-   VITE_API_URL=http://localhost:8000
-   ```
-
-### Development
-
-Start the development server:
 ```bash
 npm run dev
 ```
 
-The frontend will be available at `http://localhost:3000`
+Open the app at `http://localhost:5173` or the URL shown in the terminal.
 
-### Build for Production
+### Build for production
 
-Build the project:
 ```bash
 npm run build
 ```
 
-Preview the production build:
+### Preview production build
+
 ```bash
 npm run preview
 ```
 
-## API Endpoints Expected
+## Repository setup
 
-The frontend expects the following Django API endpoints to be available at `/api`:
+If you have not already connected this repo to GitHub:
 
-### Authentication
-- `POST /api/login/` - User login (email, password)
-- `POST /logout/` - User logout
-
-### User Management
-- `GET /api/users/me/` - Get current user profile
-- `PUT /api/users/me/` - Update user profile
-- `POST /api/users/change-password/` - Change password
-
-### Loans
-- `GET /api/loans/` - Get user's loans
-- `GET /api/loans/<id>/` - Get loan details
-- `POST /api/loans/request/` - Request a new loan
-
-## Django Backend Configuration
-
-### CORS Setup
-
-Add the following to your Django settings to enable frontend requests:
-
-```python
-# settings/base.py or development.py
-INSTALLED_APPS = [
-    ...
-    'corsheaders',
-]
-
-MIDDLEWARE = [
-    'corsheaders.middleware.CorsMiddleware',
-    'django.middleware.common.CommonMiddleware',
-    ...
-]
-
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-]
-
-# Session settings for frontend
-SESSION_COOKIE_SECURE = False  # True in production
-SESSION_COOKIE_HTTPONLY = True
-SESSION_COOKIE_SAMESITE = 'Lax'
-```
-
-### Required API Endpoints
-
-Create login endpoint in your Django API (`apps/authentication/views.py` or similar):
-
-```python
-from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import AllowAny
-from rest_framework.response import Response
-from django.contrib.auth import authenticate, login
-
-@api_view(['POST'])
-@permission_classes([AllowAny])
-def login_view(request):
-    email = request.data.get('email')
-    password = request.data.get('password')
-    
-    user = authenticate(request, username=email, password=password)
-    if user is not None:
-        login(request, user)
-        return Response({
-            'id': user.id,
-            'email': user.email,
-            'first_name': user.first_name,
-            'last_name': user.last_name,
-        })
-    return Response({'detail': 'Invalid credentials'}, status=400)
-```
-
-## Running Both Frontend and Backend
-
-### Option 1: Separate Terminals
-
-**Terminal 1 - Django Backend:**
 ```bash
-python manage.py runserver
+git init
+git branch -M main
+git remote add origin https://github.com/Simonsichi/lms-loan-frontend.git
+git add .
+git commit -m "chore: initial loan application frontend"
+git push -u origin main
 ```
 
-**Terminal 2 - React Frontend:**
-```bash
-cd frontend
-npm run dev
-```
+## Deploying to Vercel
 
-### Option 2: Using Docker
+Use these settings when importing the repository into Vercel:
 
-Both services are included in `docker-compose.yml`
+- Framework Preset: `Vite`
+- Root Directory: leave empty or use project root
+- Build Command: `npm run build`
+- Output Directory: `dist`
 
-## Customization
+## Loan application flows
 
-### Styling
+### Personal loan steps
 
-All components use CSS Modules. Modify files in `src/styles/` to customize:
-- Colors: Update gradient colors in module files
-- Spacing: Adjust padding/margin values
-- Fonts: Modify font-family in container classes
+1. Personal information
+2. Residence & employment
+3. Document uploads
+4. Loan terms review
 
-### Adding New Pages
+### Business loan steps
 
-1. Create new component in `src/pages/`
-2. Add route in `src/App.jsx`
-3. Create corresponding CSS Module in `src/styles/`
+1. Business information
+2. Directors & applicant details
+3. Document uploads
+4. Loan terms review
 
-### API Calls
+## Validation rules
 
-Extend `src/utils/api.js` with additional endpoints as needed.
+- NRC: `123456/78/9` or `123456/78/10`
+- Phone: Zambian mobile formats with country code or leading zero
+- Email: must end with `.com`
 
 ## Notes
 
-- The app uses session-based authentication via cookies
-- User data is stored in `sessionStorage` for client-side state
-- All API requests include credentials for session management
-- Remember to configure CORS in Django settings for development
+- The app is currently a frontend-only UI and does not include a backend API.
+- Use the loan type selection on the landing page to open the correct application flow immediately.
+- The application stores form state locally in React component state.
+
+## Useful commands
+
+```bash
+npm install
+npm run dev
+npm run build
+npm run preview
+```
 
 ## Troubleshooting
 
-**CORS Errors**: Ensure Django settings include frontend localhost in `CORS_ALLOWED_ORIGINS`
-
-**Login Not Working**: Check that Django API is running on port 8000 and login endpoint exists
-
-**Styles Not Loading**: Verify CSS Modules configuration in `vite.config.js`
+- If styles do not appear correctly, ensure `tailwind.config.js` and `src/index.css` are loaded.
+- If the review or submit step fails, confirm the browser console for errors.
+- If deploy fails on Vercel, verify the build output directory is set to `dist`.
