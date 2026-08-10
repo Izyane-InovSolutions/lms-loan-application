@@ -1195,25 +1195,49 @@ function DashboardPage() {
             </div>
 </div>
 
-          <div className="grid gap-4 sm:grid-cols-2 md:grid-cols-4">
-            {stepTitles.map((title, index) => {
-              const active = currentStep >= index
-              return (
-                <div
-                  key={title}
-                  className={`flex items-center gap-3 rounded-lg border px-4 py-3 transition ${
-                    active ? 'border-sky-500 bg-sky-100/80 text-slate-950' : 'border-slate-200 bg-slate-100 text-slate-500'
-                  }`}
-                >
-                  <div className={`flex h-10 w-10 items-center justify-center rounded-full border text-sm font-semibold ${active ? 'border-sky-500 bg-sky-500 text-white' : 'border-slate-300 bg-white text-slate-500'}`}>
-                    {index + 1}
+          <div className="relative px-2">
+            <div
+              className="absolute top-4 h-0.5 bg-slate-200"
+              style={{ left: `${50 / stepTitles.length}%`, right: `${50 / stepTitles.length}%` }}
+            />
+            <div
+              className="absolute top-4 h-0.5 bg-sky-600 transition-all duration-300"
+              style={{
+                left: `${50 / stepTitles.length}%`,
+                width: `calc((100% - ${100 / stepTitles.length}%) * ${
+                  stepTitles.length > 1 ? currentStep / (stepTitles.length - 1) : 0
+                })`,
+              }}
+            />
+            <div
+              className="relative grid"
+              style={{ gridTemplateColumns: `repeat(${stepTitles.length}, minmax(0, 1fr))` }}
+            >
+              {stepTitles.map((title, index) => {
+                const isCompleted = currentStep > index
+                const isActive = currentStep === index
+                return (
+                  <div key={title} className="flex flex-col items-center gap-2 text-center">
+                    <div
+                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full border-2 text-sm font-semibold transition ${
+                        isCompleted || isActive
+                          ? 'border-sky-600 bg-sky-600 text-white'
+                          : 'border-slate-300 bg-white text-slate-400'
+                      }`}
+                    >
+                      {index + 1}
+                    </div>
+                    <p
+                      className={`text-xs font-semibold leading-tight ${
+                        isActive ? 'text-sky-700' : isCompleted ? 'text-slate-700' : 'text-slate-400'
+                      }`}
+                    >
+                      {title}
+                    </p>
                   </div>
-                  <div>
-                    <p className="text-sm font-semibold">{title}</p>
-                  </div>
-                </div>
-              )
-            })}
+                )
+              })}
+            </div>
           </div>
 
           <div className="mt-6 rounded-[2rem] border border-slate-200 bg-slate-50 p-5 sm:p-6">
