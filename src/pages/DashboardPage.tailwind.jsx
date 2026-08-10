@@ -6,7 +6,6 @@ import SuccessModal from '../components/SuccessModal'
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider'
 import { DatePicker } from '@mui/x-date-pickers/DatePicker'
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs'
-import TextField from '@mui/material/TextField'
 import dayjs from 'dayjs'
 
 const personalStepTitles = [
@@ -101,7 +100,7 @@ const initialLoanState = {
 function DashboardPage() {
   const location = useLocation()
   const navigate = useNavigate()
-  const [selectedLoanType, setSelectedLoanType] = useState(
+  const [selectedLoanType] = useState(
     location.state?.type === 'business' ? 'business' : 'personal'
   )
   const [currentStep, setCurrentStep] = useState(0)
@@ -174,6 +173,27 @@ function DashboardPage() {
     return age >= 18 && age <= 65
   }
 
+  const PDF_MAX_FILE_SIZE = 5 * 1024 * 1024
+  const PHOTO_MAX_FILE_SIZE = 3 * 1024 * 1024
+  const isPdfFile = (file) => file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
+  const isImageFile = (file) => file.type.startsWith('image/') || /\.(jpe?g|png)$/i.test(file.name)
+
+  const validatePdfFile = (file) => {
+    if (!file) return ''
+    if (!isPdfFile(file)) return 'Not a valid format. PDF only.'
+    if (file.size > PDF_MAX_FILE_SIZE) return 'File must be 5 MB or smaller.'
+    return ''
+  }
+
+  const validatePassportFile = (file) => {
+    if (!file) return ''
+    if (!isPdfFile(file) && !isImageFile(file)) return 'Not a valid format. PDF or image only.'
+    if (file.size > PHOTO_MAX_FILE_SIZE) return 'File must be 3 MB or smaller.'
+    return ''
+  }
+
+  const isPassportPhotoField = (field) => field === 'passportPhoto'
+
   const setValidationError = (key, message) => {
     setValidationErrors((prev) => {
       const next = { ...prev }
@@ -221,27 +241,129 @@ function DashboardPage() {
     }
   }
 
-  const updateDocumentField = (field, file) => {
-    const setter = selectedLoanType === 'personal' ? setPersonalData : setBusinessData
-    setter((prev) => ({
+  const [uploadStatuses, setUploadStatuses] = useState({})
+  const [stepLoading, setStepLoading] = useState(false)
+
+  const setUploadStatus = (field, status) => {
+    setUploadStatuses((prev) => ({
       ...prev,
-      documents: {
-        ...prev.documents,
-        [field]: file,
-      },
+      [field]: status,
     }))
   }
 
-  const updateDirectorDocumentField = (index, field, file) => {
-    setBusinessData((prev) => ({
-      ...prev,
-      documents: {
-        ...prev.documents,
-        directorUploads: (prev.documents.directorUploads || []).map((upload, uploadIndex) =>
-          uploadIndex === index ? { ...upload, [field]: file } : upload
-        ),
-      },
-    }))
+  const getUploadStatus = (field) => uploadStatuses[field] || 'idle'
+
+  const handleDocumentInputChange = (field, event) => {
+    const file = event.target.files?.[0] ?? null
+    if (!file) {
+      setUploadStatus(field, 'idle')
+      updateDocumentField(field, null)
+      return
+    }
+
+    setUploadStatus(field, 'loading')
+    updateDocumentField(field, file, event.target)
+  }
+
+  const handleDirectorDocumentInputChange = (index, field, event) => {
+    const file = event.target.files?.[0] ?? null
+    const fieldKey = `director.${index}.${field}`
+    if (!file) {
+      setUploadStatus(fieldKey, 'idle')
+      updateDirectorDocumentField(index, field, null)
+      return
+    }
+
+    setUploadStatus(fieldKey, 'loading')
+    updateDirectorDocumentField(index, field, file, event.target)
+  }
+
+  const updateDocumentField = (field, file, inputElement = null) => {
+    const setter = selectedLoanType === 'personal' ? setPersonalData : setBusinessData
+    const errorKey = `documents.${field}`
+    let validationMessage = ''
+
+    if (file) {
+      validationMessage = isPassportPhotoField(field)
+        ? validatePassportFile(file)
+        : validatePdfFile(file)
+      if (validationMessage) {
+        setValidationError(errorKey, validationMessage)
+        setUploadStatus(field, 'error')
+        if (inputElement) {
+          inputElement.value = ''
+        }
+        return
+      }
+    }
+
+    setValidationError(errorKey, '')
+    if (file) {
+      setter((prev) => ({
+        ...prev,
+        documents: {
+          ...prev.documents,
+          [field]: file,
+        },
+      }))
+      setTimeout(() => {
+        setUploadStatus(field, 'success')
+      }, 600)
+    } else {
+      setUploadStatus(field, 'idle')
+      setter((prev) => ({
+        ...prev,
+        documents: {
+          ...prev.documents,
+          [field]: file,
+        },
+      }))
+    }
+  }
+
+  const updateDirectorDocumentField = (index, field, file, inputElement = null) => {
+    const fieldKey = `director.${index}.${field}`
+    const errorKey = `documents.directorUploads[${index}].${field}`
+    let validationMessage = ''
+
+    if (file) {
+      validationMessage = field === 'passportPhoto' ? validatePassportFile(file) : validatePdfFile(file)
+      if (validationMessage) {
+        setValidationError(errorKey, validationMessage)
+        setUploadStatus(fieldKey, 'error')
+        if (inputElement) {
+          inputElement.value = ''
+        }
+        return
+      }
+    }
+
+    setValidationError(errorKey, '')
+    if (file) {
+      setBusinessData((prev) => ({
+        ...prev,
+        documents: {
+          ...prev.documents,
+          directorUploads: (prev.documents.directorUploads || []).map((upload, uploadIndex) =>
+            uploadIndex === index ? { ...upload, [field]: file } : upload
+          ),
+        },
+      }))
+      setTimeout(() => {
+        setUploadStatus(fieldKey, 'success')
+      }, 600)
+    } else {
+      setUploadStatus(fieldKey, 'idle')
+      setBusinessData((prev) => ({
+        ...prev,
+        documents: {
+          ...prev.documents,
+          directorUploads: (prev.documents.directorUploads || []).map((upload, uploadIndex) =>
+            uploadIndex === index ? { ...upload, [field]: file } : upload
+          ),
+        },
+      }))
+    }
   }
 
   const addDirectorUpload = () => {
@@ -308,6 +430,7 @@ function DashboardPage() {
     setPersonalData(personalInitial)
     setBusinessData(businessInitial)
     setValidationErrors({})
+    setUploadStatuses({})
   }
 
   const validateCurrentStep = () => {
@@ -372,6 +495,29 @@ function DashboardPage() {
         requiredField(personalData.documents.nrcCopy, 'documents.nrcCopy', 'NRC copy is required.')
         requiredField(personalData.documents.passportPhoto, 'documents.passportPhoto', 'Passport photo is required.')
         requiredField(personalData.documents.tpin, 'documents.tpin', 'TPIN certificate is required.')
+
+        const pdfFields = [
+          { value: personalData.documents.payslips, key: 'documents.payslips' },
+          { value: personalData.documents.bankStatements, key: 'documents.bankStatements' },
+          { value: personalData.documents.nrcCopy, key: 'documents.nrcCopy' },
+          { value: personalData.documents.tpin, key: 'documents.tpin' },
+        ]
+
+        pdfFields.forEach(({ value, key }) => {
+          if (value) {
+            const validationMessage = validatePdfFile(value)
+            if (validationMessage) {
+              recordError(key, validationMessage)
+            }
+          }
+        })
+
+        if (personalData.documents.passportPhoto) {
+          const validationMessage = validatePassportFile(personalData.documents.passportPhoto)
+          if (validationMessage) {
+            recordError('documents.passportPhoto', validationMessage)
+          }
+        }
       }
     }
 
@@ -437,22 +583,54 @@ function DashboardPage() {
         requiredField(businessData.documents.passportPhoto, 'documents.passportPhoto', 'Passport photo is required.')
         requiredField(businessData.documents.boardResolution, 'documents.boardResolution', 'Board resolution is required.')
 
+        const pdfFields = [
+          { value: businessData.documents.pacraCertificate, key: 'documents.pacraCertificate' },
+          { value: businessData.documents.form2, key: 'documents.form2' },
+          { value: businessData.documents.latestTaxComplianceReturn, key: 'documents.latestTaxComplianceReturn' },
+          { value: businessData.documents.taxClearance, key: 'documents.taxClearance' },
+          { value: businessData.documents.bankStatements, key: 'documents.bankStatements' },
+          { value: businessData.documents.boardResolution, key: 'documents.boardResolution' },
+          { value: businessData.documents.orderOrInvoice, key: 'documents.orderOrInvoice' },
+        ]
+
+        pdfFields.forEach(({ value, key }) => {
+          if (value) {
+            const validationMessage = validatePdfFile(value)
+            if (validationMessage) {
+              recordError(key, validationMessage)
+            }
+          }
+        })
+
+        if (businessData.documents.passportPhoto) {
+          const validationMessage = validatePassportFile(businessData.documents.passportPhoto)
+          if (validationMessage) {
+            recordError('documents.passportPhoto', validationMessage)
+          }
+        }
+
         const directorUploads = businessData.documents.directorUploads || []
         directorUploads.forEach((upload, index) => {
           requiredField(upload.nrc, `documents.directorUploads[${index}].nrc`, `Director ${index + 1} NRC is required.`)
           requiredField(upload.passportPhoto, `documents.directorUploads[${index}].passportPhoto`, `Director ${index + 1} passport photo is required.`)
+          if (upload.nrc) {
+            const validationMessage = validatePdfFile(upload.nrc)
+            if (validationMessage) {
+              recordError(`documents.directorUploads[${index}].nrc`, validationMessage)
+            }
+          }
+          if (upload.passportPhoto) {
+            const validationMessage = validatePassportFile(upload.passportPhoto)
+            if (validationMessage) {
+              recordError(`documents.directorUploads[${index}].passportPhoto`, validationMessage)
+            }
+          }
         })
       }
     }
 
-    setValidationErrors((prev) => ({ ...prev, ...errors }))
+    setValidationErrors(errors)
     return Object.keys(errors).length === 0
-  }
-
-  const handleLoanTypeChange = (type) => {
-    setSelectedLoanType(type)
-    setCurrentStep(0)
-    setLoanData(initialLoanState)
   }
 
   const handleNext = () => {
@@ -461,30 +639,42 @@ function DashboardPage() {
     }
 
     if (currentStep < stepTitles.length - 1) {
-      setCurrentStep((prev) => prev + 1)
-      window.scrollTo({ top: 0, behavior: 'smooth' })
+      setStepLoading(true)
+      setTimeout(() => {
+        setCurrentStep((prev) => prev + 1)
+        setStepLoading(false)
+        window.scrollTo({ top: 0, behavior: 'smooth' })
+      }, 300)
     }
   }
 
   const handleBack = () => {
     if (currentStep > 0) {
-      setCurrentStep((prev) => prev - 1)
-      window.scrollTo({ top: 0, behavior: 'smooth' })
+      setStepLoading(true)
+      setTimeout(() => {
+        setCurrentStep((prev) => prev - 1)
+        setStepLoading(false)
+        window.scrollTo({ top: 0, behavior: 'smooth' })
+      }, 300)
     } else {
       navigate('/')
     }
   }
 
   const handleSubmitApplication = () => {
-    setShowTerms(true)
+    setStepLoading(true)
+    setTimeout(() => {
+      setShowTerms(true)
+      setStepLoading(false)
+    }, 300)
   }
 
   const onAcceptTerms = () => {
     setShowTerms(false)
     setSubmitting(true)
     setTimeout(() => {
-      setSubmitting(false)
       setShowSuccess(true)
+      setSubmitting(false)
     }, 900)
   }
 
@@ -574,23 +764,39 @@ function DashboardPage() {
     </label>
   )
 
-  const renderUploadField = (label, field, file, required = false) => (
-    <label className="grid gap-2">
-      <span className="text-sm font-semibold text-slate-700">
-        {label}
-        {required && <span className="text-red-500"> *</span>}
-      </span>
-      <input
-        type="file"
-        onChange={(event) => updateDocumentField(field, event.target.files?.[0] ?? null)}
-        className="w-full min-w-0 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
-        accept="image/*,.pdf,.doc,.docx"
-      />
-      <span className="text-xs text-slate-500">
-        {file ? file.name : 'Upload document or choose file'}
-      </span>
-    </label>
-  )
+  const renderUploadField = (label, field, file, required = false, acceptTypes = '.pdf', errorKey = '') => {
+    const status = uploadStatuses[field] || 'idle'
+
+    return (
+      <label className="grid gap-2">
+        <span className="text-sm font-semibold text-slate-700">
+          {label}
+          {required && <span className="text-red-500"> *</span>}
+        </span>
+        <input
+          type="file"
+          onChange={(event) => handleDocumentInputChange(field, event)}
+          className="w-full min-w-0 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+          accept={acceptTypes}
+        />
+        <span className="text-xs text-slate-500">
+          {file ? file.name : 'Upload document or choose file'}
+        </span>
+        {status === 'loading' && (
+          <span className="text-sm text-slate-500 flex items-center gap-2">
+            <span className="h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700"></span>
+            Uploading...
+          </span>
+        )}
+        {status === 'success' && (
+          <span className="text-sm text-emerald-700">Upload successful</span>
+        )}
+        {errorKey && validationErrors[errorKey] ? (
+          <span className="text-sm text-red-600">{validationErrors[errorKey]}</span>
+        ) : null}
+      </label>
+    )
+  }
 
   const renderStepContent = () => {
     if (selectedLoanType === 'personal') {
@@ -678,17 +884,43 @@ function DashboardPage() {
               {renderField('Next of kin name', personalData.employmentInfo.nextOfKinName, (value) => updateSectionField('employmentInfo', 'nextOfKinName', value, 'alpha'), 'text', '', {}, true, 'employmentInfo.nextOfKinName')}
               {renderField('Next of kin phone', personalData.employmentInfo.nextOfKinPhone, (value) => updateSectionField('employmentInfo', 'nextOfKinPhone', value, 'phone'), 'tel', '', { maxLength: 10 }, true, 'employmentInfo.nextOfKinPhone')}
               {renderField('Next of kin email', personalData.employmentInfo.nextOfKinEmail, (value) => updateSectionField('employmentInfo', 'nextOfKinEmail', value, 'email'), 'email', '', {}, true, 'employmentInfo.nextOfKinEmail')}
-              {renderField('Relationship', personalData.employmentInfo.nextOfKinRelationship, (value) => updateSectionField('employmentInfo', 'nextOfKinRelationship', value, 'alpha'), 'text', '', {}, true, 'employmentInfo.nextOfKinRelationship')}
+              <label className="grid gap-2">
+                <span className="text-sm font-semibold text-slate-700">
+                  Relationship
+                  <span className="text-red-500"> *</span>
+                </span>
+                <select
+                  value={personalData.employmentInfo.nextOfKinRelationship}
+                  onChange={(event) => updateSectionField('employmentInfo', 'nextOfKinRelationship', event.target.value)}
+                  className="w-full min-w-0 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                >
+                  <option value="">Select relationship</option>
+                  <option value="Parent">Parent</option>
+                  <option value="Sibling">Sibling</option>
+                  <option value="Spouse">Spouse</option>
+                  <option value="Child">Child</option>
+                  <option value="Grandparent">Grandparent</option>
+                  <option value="Grandchild">Grandchild</option>
+                  <option value="Uncle/Aunt">Uncle/Aunt</option>
+                  <option value="Nephew/Niece">Nephew/Niece</option>
+                  <option value="Cousin">Cousin</option>
+                  <option value="Guardian">Guardian</option>
+                  <option value="Friend">Friend</option>
+                </select>
+                {validationErrors['employmentInfo.nextOfKinRelationship'] ? (
+                  <span className="text-sm text-red-600">{validationErrors['employmentInfo.nextOfKinRelationship']}</span>
+                ) : null}
+              </label>
             </div>
           )
         case 2:
           return (
             <div className="grid gap-6 xl:grid-cols-3">
-              {renderUploadField('Latest three payslips', 'payslips', personalData.documents.payslips, true)}
-              {renderUploadField('Bank statements (3 months)', 'bankStatements', personalData.documents.bankStatements, true)}
-              {renderUploadField('NRC copy', 'nrcCopy', personalData.documents.nrcCopy, true)}
-              {renderUploadField('Passport-sized photo', 'passportPhoto', personalData.documents.passportPhoto, true)}
-              {renderUploadField('TPIN certificate', 'tpin', personalData.documents.tpin, true)}
+              {renderUploadField('Latest three payslips', 'payslips', personalData.documents.payslips, true, '.pdf', 'documents.payslips')}
+              {renderUploadField('Bank statements (3 months)', 'bankStatements', personalData.documents.bankStatements, true, '.pdf', 'documents.bankStatements')}
+              {renderUploadField('NRC copy', 'nrcCopy', personalData.documents.nrcCopy, true, '.pdf', 'documents.nrcCopy')}
+              {renderUploadField('Passport-sized photo', 'passportPhoto', personalData.documents.passportPhoto, true, 'application/pdf,image/*', 'documents.passportPhoto')}
+              {renderUploadField('TPIN certificate', 'tpin', personalData.documents.tpin, true, '.pdf', 'documents.tpin')}
             </div>
           )
         case 3:
@@ -746,9 +978,19 @@ function DashboardPage() {
                   <span>Total repayable</span>
                   <span>K{totalRepayable.toFixed(2)}</span>
                 </div>
-                <button className="mt-6 inline-flex w-full items-center justify-center rounded-lg bg-sky-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-sky-200/50 transition hover:bg-sky-700" type="button" onClick={handleSubmitApplication}>
-                  Review terms & submit
-                </button>
+                <button
+                className="mt-6 inline-flex w-full items-center justify-center rounded-lg bg-sky-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-sky-200/50 transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-70"
+                type="button"
+                onClick={handleSubmitApplication}
+                disabled={stepLoading || submitting}
+              >
+                {stepLoading ? (
+                  <span className="inline-flex items-center gap-2">
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/60 border-t-white" />
+                    Loading...
+                  </span>
+                ) : 'Review terms & submit'}
+              </button>
               </div>
             </div>
           )
@@ -908,14 +1150,14 @@ function DashboardPage() {
       case 2:
         return (
           <div className="grid gap-6 xl:grid-cols-3">
-            {renderUploadField('PACRA certificate', 'pacraCertificate', businessData.documents.pacraCertificate, true)}
-            {renderUploadField('Form 2', 'form2', businessData.documents.form2, true)}
-            {renderUploadField('Tax clearance certificate / TPIN', 'taxClearance', businessData.documents.taxClearance, true)}
-            {renderUploadField('Latest tax compliance return', 'latestTaxComplianceReturn', businessData.documents.latestTaxComplianceReturn, true)}
-            {renderUploadField('Order / Invoice (if applying for order financing or invoice discounting)', 'orderOrInvoice', businessData.documents.orderOrInvoice, false)}
-            {renderUploadField('Bank statements (6 months)', 'bankStatements', businessData.documents.bankStatements, true)}
-            {renderUploadField('Applicant Passport-sized photo', 'passportPhoto', businessData.documents.passportPhoto, true)}
-            {renderUploadField('Board resolution', 'boardResolution', businessData.documents.boardResolution, true)}
+            {renderUploadField('PACRA certificate', 'pacraCertificate', businessData.documents.pacraCertificate, true, '.pdf', 'documents.pacraCertificate')}
+            {renderUploadField('Form 2', 'form2', businessData.documents.form2, true, '.pdf', 'documents.form2')}
+            {renderUploadField('Tax clearance certificate / TPIN', 'taxClearance', businessData.documents.taxClearance, true, '.pdf', 'documents.taxClearance')}
+            {renderUploadField('Latest tax compliance return', 'latestTaxComplianceReturn', businessData.documents.latestTaxComplianceReturn, true, '.pdf', 'documents.latestTaxComplianceReturn')}
+            {renderUploadField('Order / Invoice (if applying for order financing or invoice discounting)', 'orderOrInvoice', businessData.documents.orderOrInvoice, false, '.pdf', 'documents.orderOrInvoice')}
+            {renderUploadField('Bank statements (6 months)', 'bankStatements', businessData.documents.bankStatements, true, '.pdf', 'documents.bankStatements')}
+            {renderUploadField('Applicant Passport-sized photo', 'passportPhoto', businessData.documents.passportPhoto, true, 'application/pdf,image/*', 'documents.passportPhoto')}
+            {renderUploadField('Board resolution', 'boardResolution', businessData.documents.boardResolution, true, '.pdf', 'documents.boardResolution')}
 
             <div className="xl:col-span-2 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -956,13 +1198,25 @@ function DashboardPage() {
                         </span>
                         <input
                           type="file"
-                          onChange={(event) => updateDirectorDocumentField(index, 'nrc', event.target.files?.[0] ?? null)}
+                          onChange={(event) => handleDirectorDocumentInputChange(index, 'nrc', event)}
                           className="w-full min-w-0 rounded-2xl border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
-                          accept="image/*,.pdf,.doc,.docx"
+                          accept=".pdf"
                         />
                         <span className="text-xs text-slate-500">
                           {upload.nrc ? upload.nrc.name : 'Upload director NRC'}
                         </span>
+                        {getUploadStatus(`director.${index}.nrc`) === 'loading' && (
+                          <span className="text-sm text-slate-500 flex items-center gap-2">
+                            <span className="h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
+                            Uploading...
+                          </span>
+                        )}
+                        {getUploadStatus(`director.${index}.nrc`) === 'success' && (
+                          <span className="text-sm text-emerald-700">Upload successful</span>
+                        )}
+                        {validationErrors[`documents.directorUploads[${index}].nrc`] ? (
+                          <span className="text-sm text-red-600">{validationErrors[`documents.directorUploads[${index}].nrc`]}</span>
+                        ) : null}
                       </label>
                       <label className="grid gap-2">
                         <span className="text-sm font-semibold text-slate-700">
@@ -971,13 +1225,25 @@ function DashboardPage() {
                         </span>
                         <input
                           type="file"
-                          onChange={(event) => updateDirectorDocumentField(index, 'passportPhoto', event.target.files?.[0] ?? null)}
+                          onChange={(event) => handleDirectorDocumentInputChange(index, 'passportPhoto', event)}
                           className="w-full min-w-0 rounded-2xl border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
-                          accept="image/*,.pdf,.doc,.docx"
+                          accept="application/pdf,image/*"
                         />
                         <span className="text-xs text-slate-500">
                           {upload.passportPhoto ? upload.passportPhoto.name : 'Upload director passport photo'}
                         </span>
+                        {getUploadStatus(`director.${index}.passportPhoto`) === 'loading' && (
+                          <span className="text-sm text-slate-500 flex items-center gap-2">
+                            <span className="h-3 w-3 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
+                            Uploading...
+                          </span>
+                        )}
+                        {getUploadStatus(`director.${index}.passportPhoto`) === 'success' && (
+                          <span className="text-sm text-emerald-700">Upload successful</span>
+                        )}
+                        {validationErrors[`documents.directorUploads[${index}].passportPhoto`] ? (
+                          <span className="text-sm text-red-600">{validationErrors[`documents.directorUploads[${index}].passportPhoto`]}</span>
+                        ) : null}
                       </label>
                     </div>
                   </div>
@@ -1092,24 +1358,47 @@ function DashboardPage() {
             })}
           </div>
 
-          <div className="mt-6 rounded-[2rem] border border-slate-200 bg-slate-50 p-5 sm:p-6">
+          <div className="relative mt-6 rounded-[2rem] border border-slate-200 bg-slate-50 p-5 sm:p-6">
+            {(stepLoading || submitting) && (
+              <div className="absolute inset-0 z-20 flex items-center justify-center rounded-[2rem] bg-white/90 backdrop-blur-sm p-6">
+                <div className="inline-flex flex-col items-center gap-3 rounded-3xl border border-slate-200 bg-white/95 p-8 shadow-lg shadow-slate-200/40">
+                  <span className="h-10 w-10 animate-spin rounded-full border-4 border-slate-200 border-t-sky-600" />
+                  <div className="text-center text-sm font-semibold text-slate-900">
+                    {submitting ? 'Submitting application...' : 'Loading next step...'}
+                  </div>
+                </div>
+              </div>
+            )}
+
             {renderStepContent()}
 
             <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-between">
               <button
                 type="button"
-                className="rounded-lg border border-slate-300 bg-white px-6 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-100"
+                className="rounded-lg border border-slate-300 bg-white px-6 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-70"
                 onClick={handleBack}
+                disabled={stepLoading}
               >
-                {currentStep === 0 ? 'Back to home' : 'Previous step'}
+                {stepLoading && currentStep > 0 ? (
+                  <span className="inline-flex items-center gap-2">
+                    <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-300 border-t-slate-700" />
+                    Loading...
+                  </span>
+                ) : currentStep === 0 ? 'Back to home' : 'Previous step'}
               </button>
               {currentStep < stepTitles.length - 1 && (
                 <button
                   type="button"
-                  className="rounded-lg bg-sky-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-sky-200/50 transition hover:bg-sky-700"
+                  className="rounded-lg bg-sky-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-sky-200/50 transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-70"
                   onClick={handleNext}
+                  disabled={stepLoading}
                 >
-                  Continue
+                  {stepLoading ? (
+                    <span className="inline-flex items-center gap-2">
+                      <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/60 border-t-white" />
+                      Loading...
+                    </span>
+                  ) : 'Continue'}
                 </button>
               )}
             </div>
