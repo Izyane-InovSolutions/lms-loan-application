@@ -14,6 +14,7 @@ const personalStepTitles = [
   'Residence & Employment',
   'Documents',
   'Loan Terms',
+  'Overview',
 ]
 
 const businessStepTitles = [
@@ -21,6 +22,7 @@ const businessStepTitles = [
   'Directors & Applicant',
   'Documents',
   'Loan Terms',
+  'Overview',
 ]
 
 const personalInitial = {
@@ -592,6 +594,130 @@ function DashboardPage() {
     </label>
   )
 
+  const renderSummaryRow = (label, value) => (
+    <div key={label} className="flex items-start justify-between gap-4 border-b border-slate-200 py-2 text-sm last:border-b-0">
+      <span className="text-slate-500">{label}</span>
+      <span className="text-right font-semibold text-slate-800">{value || '—'}</span>
+    </div>
+  )
+
+  const renderSummaryCard = (title, rows) => (
+    <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+      <h3 className="text-base font-semibold text-slate-800">{title}</h3>
+      <div className="mt-3">{rows}</div>
+    </div>
+  )
+
+  const fileName = (file) => (file ? file.name : 'Not uploaded')
+
+  const renderPersonalOverview = () => (
+    <div className="grid gap-6">
+      <p className="text-sm text-slate-600">
+        Please review your details below before submitting your application. Use "Previous step" to make changes.
+      </p>
+      <div className="grid gap-6 xl:grid-cols-2">
+        {renderSummaryCard('Personal information', [
+          renderSummaryRow('Full name', [personalData.personalInfo.firstName, personalData.personalInfo.middleName, personalData.personalInfo.surname].filter(Boolean).join(' ')),
+          renderSummaryRow('Phone', personalData.personalInfo.phone),
+          renderSummaryRow('Email', personalData.personalInfo.email),
+          renderSummaryRow('NRC', personalData.personalInfo.nrc),
+          renderSummaryRow('Gender', personalData.personalInfo.gender),
+          renderSummaryRow('Marital status', personalData.personalInfo.maritalStatus),
+          renderSummaryRow('Birth date', personalData.personalInfo.birthDate),
+        ])}
+        {renderSummaryCard('Residence & Employment', [
+          renderSummaryRow('Residential address', personalData.employmentInfo.residentialAddress),
+          renderSummaryRow('Occupation', personalData.employmentInfo.occupation),
+          renderSummaryRow('Employer name', personalData.employmentInfo.employerName),
+          renderSummaryRow('Nationality', personalData.employmentInfo.nationality),
+          renderSummaryRow('Principal objective of loan', personalData.employmentInfo.principalObjectiveOfLoan),
+          renderSummaryRow('Next of kin', personalData.employmentInfo.nextOfKinName),
+          renderSummaryRow('Next of kin phone', personalData.employmentInfo.nextOfKinPhone),
+          renderSummaryRow('Next of kin email', personalData.employmentInfo.nextOfKinEmail),
+          renderSummaryRow('Relationship', personalData.employmentInfo.nextOfKinRelationship),
+        ])}
+        {renderSummaryCard('Documents', [
+          renderSummaryRow('Latest three payslips', fileName(personalData.documents.payslips)),
+          renderSummaryRow('Bank statements', fileName(personalData.documents.bankStatements)),
+          renderSummaryRow('NRC copy', fileName(personalData.documents.nrcCopy)),
+          renderSummaryRow('Passport photo', fileName(personalData.documents.passportPhoto)),
+          renderSummaryRow('TPIN certificate', fileName(personalData.documents.tpin)),
+        ])}
+        {renderSummaryCard('Loan terms', [
+          renderSummaryRow('Loan amount', `K${loanData.amount.toLocaleString()}`),
+          renderSummaryRow('Tenure', `${loanData.tenure} months`),
+          renderSummaryRow('Monthly repayment', `K${monthlyRepayment.toFixed(2)}`),
+          renderSummaryRow('Facility fee', `K${facilityFee.toFixed(2)}`),
+          renderSummaryRow('Total repayable', `K${totalRepayable.toFixed(2)}`),
+        ])}
+      </div>
+    </div>
+  )
+
+  const renderBusinessOverview = () => {
+    const directorUploads = businessData.documents.directorUploads || []
+    return (
+      <div className="grid gap-6">
+        <p className="text-sm text-slate-600">
+          Please review your details below before submitting your application. Use "Previous step" to make changes.
+        </p>
+        <div className="grid gap-6 xl:grid-cols-2">
+          {renderSummaryCard('Business information', [
+            renderSummaryRow('Company name', businessData.businessInfo.companyName),
+            renderSummaryRow('Type of business', businessData.businessInfo.businessType),
+            renderSummaryRow('Established date', businessData.businessInfo.establishedDate),
+            renderSummaryRow('Nature of business', businessData.businessInfo.natureOfBusiness),
+            renderSummaryRow('Registered office', businessData.businessInfo.registeredOffice),
+            renderSummaryRow('Collateral pledged', businessData.businessInfo.collateralPledged),
+            renderSummaryRow('Purpose of loan', businessData.businessInfo.purposeOfLoan),
+          ])}
+          {renderSummaryCard('Applicant', [
+            renderSummaryRow('Full name', [businessData.directorInfo.applicantFirstName, businessData.directorInfo.applicantMiddleName, businessData.directorInfo.applicantLastName].filter(Boolean).join(' ')),
+            renderSummaryRow('Phone', businessData.directorInfo.applicantPhone),
+            renderSummaryRow('Email', businessData.directorInfo.applicantEmail),
+            renderSummaryRow('NRC', businessData.directorInfo.applicantNrc),
+            renderSummaryRow('Gender', businessData.directorInfo.applicantGender),
+            renderSummaryRow('Marital status', businessData.directorInfo.applicantMaritalStatus),
+            renderSummaryRow('Birth date', businessData.directorInfo.applicantBirthDate),
+            renderSummaryRow('Address', businessData.directorInfo.applicantAddress),
+            renderSummaryRow('Position', businessData.directorInfo.applicantPosition),
+            renderSummaryRow('Nationality', businessData.directorInfo.applicantNationality),
+          ])}
+          {renderSummaryCard(
+            'Directors',
+            businessData.directorInfo.directors.flatMap((director, index) => [
+              renderSummaryRow(`Director ${index + 1} name`, director.name),
+              renderSummaryRow(`Director ${index + 1} phone`, director.phone),
+              renderSummaryRow(`Director ${index + 1} email`, director.email),
+              renderSummaryRow(`Director ${index + 1} NRC`, director.nrc),
+            ])
+          )}
+          {renderSummaryCard('Documents', [
+            renderSummaryRow('PACRA certificate', fileName(businessData.documents.pacraCertificate)),
+            renderSummaryRow('Form 2', fileName(businessData.documents.form2)),
+            renderSummaryRow('Tax clearance certificate / TPIN', fileName(businessData.documents.taxClearance)),
+            renderSummaryRow('Latest tax compliance return', fileName(businessData.documents.latestTaxComplianceReturn)),
+            renderSummaryRow('Order / Invoice', fileName(businessData.documents.orderOrInvoice)),
+            renderSummaryRow('Bank statements', fileName(businessData.documents.bankStatements)),
+            renderSummaryRow('Passport photo', fileName(businessData.documents.passportPhoto)),
+            renderSummaryRow('Board resolution', fileName(businessData.documents.boardResolution)),
+            ...directorUploads.flatMap((upload, index) => [
+              renderSummaryRow(`Director ${index + 1} NRC upload`, fileName(upload.nrc)),
+              renderSummaryRow(`Director ${index + 1} passport photo`, fileName(upload.passportPhoto)),
+            ]),
+          ])}
+          {renderSummaryCard('Loan terms', [
+            renderSummaryRow('Loan amount', `K${loanData.amount.toLocaleString()}`),
+            renderSummaryRow('Tenure', `${loanData.tenure} months`),
+            renderSummaryRow('Monthly repayment', `K${monthlyRepayment.toFixed(2)}`),
+            renderSummaryRow('Facility fee', `K${facilityFee.toFixed(2)}`),
+            renderSummaryRow('Total repayable', `K${totalRepayable.toFixed(2)}`),
+          ])}
+        </div>
+      </div>
+    )
+  }
+
   const renderStepContent = () => {
     if (selectedLoanType === 'personal') {
       switch (currentStep) {
@@ -746,12 +872,11 @@ function DashboardPage() {
                   <span>Total repayable</span>
                   <span>K{totalRepayable.toFixed(2)}</span>
                 </div>
-                <button className="mt-6 inline-flex w-full items-center justify-center rounded-lg bg-sky-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-sky-200/50 transition hover:bg-sky-700" type="button" onClick={handleSubmitApplication}>
-                  Review terms & submit
-                </button>
               </div>
             </div>
           )
+        case 4:
+          return renderPersonalOverview()
         default:
           return null
       }
@@ -1041,12 +1166,11 @@ function DashboardPage() {
                 <span>Total repayable</span>
                 <span>K{totalRepayable.toFixed(2)}</span>
               </div>
-              <button className="mt-6 inline-flex w-full items-center justify-center rounded-lg bg-sky-600 px-5 py-3 text-sm font-semibold text-white shadow-lg shadow-sky-200/50 transition hover:bg-sky-700" type="button" onClick={handleSubmitApplication}>
-                Review terms & submit
-              </button>
             </div>
           </div>
         )
+      case 4:
+        return renderBusinessOverview()
       default:
         return null
     }
@@ -1103,13 +1227,21 @@ function DashboardPage() {
               >
                 {currentStep === 0 ? 'Back to home' : 'Previous step'}
               </button>
-              {currentStep < stepTitles.length - 1 && (
+              {currentStep < stepTitles.length - 1 ? (
                 <button
                   type="button"
                   className="rounded-lg bg-sky-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-sky-200/50 transition hover:bg-sky-700"
                   onClick={handleNext}
                 >
                   Continue
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="rounded-lg bg-sky-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-sky-200/50 transition hover:bg-sky-700"
+                  onClick={handleSubmitApplication}
+                >
+                  Submit application
                 </button>
               )}
             </div>
