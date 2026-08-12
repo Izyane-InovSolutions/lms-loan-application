@@ -10,6 +10,12 @@ export default defineConfig({
         target: 'http://localhost:8000',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, '/api')
+      },
+      '/erp-api': {
+        target: 'https://api.erp.lms.rolaface.com',
+        changeOrigin: true,
+        secure: true,
+        rewrite: (path) => path.replace(/^\/erp-api/, '')
       }
     }
   }

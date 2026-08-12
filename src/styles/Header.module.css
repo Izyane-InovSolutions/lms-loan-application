@@ -17,11 +17,10 @@
   gap: 1rem;
 }
 
-.brandMark {
+.brandIcon {
   width: 56px;
   height: 56px;
   border-radius: 18px;
-  background: linear-gradient(135deg, #4f46e5, #22d3ee);
   color: white;
   display: grid;
   place-items: center;
@@ -45,6 +44,17 @@
 .brandSubtitle {
   color: #475569;
   font-size: 0.92rem;
+}
+
+.navLink {
+  color: #0369a1;
+  font-weight: 600;
+  font-size: 0.92rem;
+  text-decoration: none;
+}
+
+.navLink:hover {
+  text-decoration: underline;
 }
 
 .menuButton {

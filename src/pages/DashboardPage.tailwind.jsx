@@ -8,6 +8,8 @@ import { DatePicker } from '@mui/x-date-pickers/DatePicker'
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs'
 import TextField from '@mui/material/TextField'
 import dayjs from 'dayjs'
+import { createLoanApplication, extractErrorMessage, uploadFile } from '../services/lmsApi'
+import { buildPersonalPayload, buildBusinessPayload } from '../utils/loanPayloadMapper'
 
 const personalStepTitles = [
   'Personal information',
@@ -81,6 +83,7 @@ const businessInitial = {
     applicantAddress: '',
     applicantPosition: '',
     applicantNationality: '',
+    nextOfKinRelationship: '',
   },
   documents: {
     form2: null,
@@ -103,7 +106,7 @@ const initialLoanState = {
 function DashboardPage() {
   const location = useLocation()
   const navigate = useNavigate()
-  const [selectedLoanType] = useState(
+  const [selectedLoanType, setSelectedLoanType] = useState(
     location.state?.type === 'business' ? 'business' : 'personal'
   )
   const [currentStep, setCurrentStep] = useState(0)
@@ -113,6 +116,7 @@ function DashboardPage() {
   const [showTerms, setShowTerms] = useState(false)
   const [showSuccess, setShowSuccess] = useState(false)
   const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState(null)
   const [validationErrors, setValidationErrors] = useState({})
 
   const stepTitles = selectedLoanType === 'personal' ? personalStepTitles : businessStepTitles
@@ -434,6 +438,7 @@ function DashboardPage() {
     setBusinessData(businessInitial)
     setValidationErrors({})
     setUploadStatuses({})
+    setSubmitError('')
   }
 
   const validateCurrentStep = () => {
@@ -565,6 +570,7 @@ function DashboardPage() {
         requiredField(businessData.directorInfo.applicantAddress, 'directorInfo.applicantAddress', 'Applicant address is required.')
         requiredField(businessData.directorInfo.applicantPosition, 'directorInfo.applicantPosition', 'Applicant position is required.')
         requiredField(businessData.directorInfo.applicantNationality, 'directorInfo.applicantNationality', 'Applicant nationality is required.')
+        requiredField(businessData.directorInfo.nextOfKinRelationship, 'directorInfo.nextOfKinRelationship', 'Next of kin relationship is required.')
         if (businessData.directorInfo.applicantPhone && !isValidPhone(businessData.directorInfo.applicantPhone)) {
           recordError('directorInfo.applicantPhone', 'Phone must be 10 digits and start with 0.')
         }
@@ -673,13 +679,71 @@ function DashboardPage() {
     setShowTerms(true)
   }
 
-  const onAcceptTerms = () => {
+  const uploadPersonalDocuments = async () => {
+    const uploaded = {}
+    for (const field of ['payslips', 'bankStatements', 'nrcCopy', 'passportPhoto', 'tpin']) {
+      const file = personalData.documents[field]
+      if (file) {
+        uploaded[field] = await uploadFile(file)
+      }
+    }
+    return uploaded
+  }
+
+  const uploadBusinessDocuments = async () => {
+    const applicantFields = [
+      'pacraCertificate',
+      'form2',
+      'latestTaxComplianceReturn',
+      'orderOrInvoice',
+      'taxClearance',
+      'bankStatements',
+      'passportPhoto',
+      'boardResolution',
+    ]
+    const uploaded = {}
+    for (const field of applicantFields) {
+      const file = businessData.documents[field]
+      if (file) {
+        uploaded[field] = await uploadFile(file)
+      }
+    }
+
+    const directorUploaded = []
+    for (const upload of businessData.documents.directorUploads || []) {
+      const entry = {}
+      if (upload.nrc) {
+        entry.nrc = await uploadFile(upload.nrc)
+      }
+      if (upload.passportPhoto) {
+        entry.passportPhoto = await uploadFile(upload.passportPhoto)
+      }
+      directorUploaded.push(entry)
+    }
+
+    return { uploaded, directorUploaded }
+  }
+
+  const onAcceptTerms = async () => {
     setShowTerms(false)
     setSubmitting(true)
-    setTimeout(() => {
+    setSubmitError(null)
+    try {
+      if (selectedLoanType === 'personal') {
+        const uploadedFiles = await uploadPersonalDocuments()
+        const payload = buildPersonalPayload(personalData, uploadedFiles)
+        await createLoanApplication(payload)
+      } else {
+        const { uploaded, directorUploaded } = await uploadBusinessDocuments()
+        const payload = buildBusinessPayload(businessData, uploaded, directorUploaded)
+        await createLoanApplication(payload)
+      }
       setShowSuccess(true)
+    } catch (error) {
+      setSubmitError(extractErrorMessage(error))
+    } finally {
       setSubmitting(false)
-    }, 900)
+    }
   }
 
   const renderField = (label, value, onChange, type = 'text', placeholder = '', inputProps = {}, required = false, errorKey = '') => (
@@ -690,7 +754,7 @@ function DashboardPage() {
       </span>
       <input
         type={type}
-        value={value}
+        value={value ?? ''}
         onChange={(event) => onChange(event.target.value)}
         placeholder={placeholder}
         className="w-full min-w-0 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
@@ -891,6 +955,7 @@ function DashboardPage() {
             renderSummaryRow('Address', businessData.directorInfo.applicantAddress),
             renderSummaryRow('Position', businessData.directorInfo.applicantPosition),
             renderSummaryRow('Nationality', businessData.directorInfo.applicantNationality),
+            renderSummaryRow('Next of kin relationship', businessData.directorInfo.nextOfKinRelationship),
           ])}
           {renderSummaryCard(
             'Directors',
@@ -945,7 +1010,7 @@ function DashboardPage() {
                   <span className="text-red-500"> *</span>
                 </span>
                 <select
-                  value={personalData.personalInfo.gender}
+                  value={personalData.personalInfo.gender ?? ''}
                   onChange={(event) => updateSectionField('personalInfo', 'gender', event.target.value, 'alpha')}
                   className="w-full min-w-0 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
                 >
@@ -963,7 +1028,7 @@ function DashboardPage() {
                   <span className="text-red-500"> *</span>
                 </span>
                 <select
-                  value={personalData.personalInfo.maritalStatus}
+                  value={personalData.personalInfo.maritalStatus ?? ''}
                   onChange={(event) => updateSectionField('personalInfo', 'maritalStatus', event.target.value, 'alpha')}
                   className="w-full min-w-0 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
                 >
@@ -993,7 +1058,7 @@ function DashboardPage() {
                   <span className="text-red-500"> *</span>
                 </span>
                 <select
-                  value={personalData.employmentInfo.nationality}
+                  value={personalData.employmentInfo.nationality ?? ''}
                   onChange={(event) => updateSectionField('employmentInfo', 'nationality', event.target.value)}
                   className="w-full min-w-0 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
                 >
@@ -1019,7 +1084,7 @@ function DashboardPage() {
                   <span className="text-red-500"> *</span>
                 </span>
                 <select
-                  value={personalData.employmentInfo.nextOfKinRelationship}
+                  value={personalData.employmentInfo.nextOfKinRelationship ?? ''}
                   onChange={(event) => updateSectionField('employmentInfo', 'nextOfKinRelationship', event.target.value)}
                   className="w-full min-w-0 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
                 >
@@ -1128,7 +1193,7 @@ function DashboardPage() {
                 <span className="text-red-500"> *</span>
               </span>
               <select
-                value={businessData.businessInfo.businessType}
+                value={businessData.businessInfo.businessType ?? ''}
                 onChange={(event) => updateSectionField('businessInfo', 'businessType', event.target.value)}
                 className="w-full min-w-0 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
               >
@@ -1205,7 +1270,7 @@ function DashboardPage() {
                 <span className="text-red-500"> *</span>
               </span>
               <select
-                value={businessData.directorInfo.applicantGender}
+                value={businessData.directorInfo.applicantGender ?? ''}
                 onChange={(event) => updateSectionField('directorInfo', 'applicantGender', event.target.value, 'alpha')}
                 className="w-full min-w-0 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
               >
@@ -1223,7 +1288,7 @@ function DashboardPage() {
                 <span className="text-red-500"> *</span>
               </span>
               <select
-                value={businessData.directorInfo.applicantMaritalStatus}
+                value={businessData.directorInfo.applicantMaritalStatus ?? ''}
                 onChange={(event) => updateSectionField('directorInfo', 'applicantMaritalStatus', event.target.value, 'alpha')}
                 className="w-full min-w-0 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
               >
@@ -1247,7 +1312,7 @@ function DashboardPage() {
                 <span className="text-red-500"> *</span>
               </span>
               <select
-                value={businessData.directorInfo.applicantNationality}
+                value={businessData.directorInfo.applicantNationality ?? ''}
                 onChange={(event) => updateSectionField('directorInfo', 'applicantNationality', event.target.value)}
                 className="w-full min-w-0 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
               >
@@ -1261,6 +1326,33 @@ function DashboardPage() {
               </select>
               {validationErrors['directorInfo.applicantNationality'] ? (
                 <span className="text-sm text-red-600">{validationErrors['directorInfo.applicantNationality']}</span>
+              ) : null}
+            </label>
+            <label className="grid gap-2">
+              <span className="text-sm font-semibold text-slate-700">
+                Next of kin relationship
+                <span className="text-red-500"> *</span>
+              </span>
+              <select
+                value={businessData.directorInfo.nextOfKinRelationship ?? ''}
+                onChange={(event) => updateSectionField('directorInfo', 'nextOfKinRelationship', event.target.value)}
+                className="w-full min-w-0 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+              >
+                <option value="">Select relationship</option>
+                <option value="Parent">Parent</option>
+                <option value="Sibling">Sibling</option>
+                <option value="Spouse">Spouse</option>
+                <option value="Child">Child</option>
+                <option value="Grandparent">Grandparent</option>
+                <option value="Grandchild">Grandchild</option>
+                <option value="Uncle/Aunt">Uncle/Aunt</option>
+                <option value="Nephew/Niece">Nephew/Niece</option>
+                <option value="Cousin">Cousin</option>
+                <option value="Guardian">Guardian</option>
+                <option value="Friend">Friend</option>
+              </select>
+              {validationErrors['directorInfo.nextOfKinRelationship'] ? (
+                <span className="text-sm text-red-600">{validationErrors['directorInfo.nextOfKinRelationship']}</span>
               ) : null}
             </label>
           </div>
@@ -1446,7 +1538,7 @@ function DashboardPage() {
                 Loan application
               </div>
               <h1 className="mt-3 text-3xl font-bold tracking-tight text-slate-950 md:text-4xl">
-                Welcome to {selectedLoanType === 'personal' ? 'Personal' : 'Business'} Loan Application
+                Apply for {selectedLoanType === 'personal' ? 'Personal' : 'Business'} Loan
               </h1>
               <p className="mt-2 text-sm leading-6 text-slate-600 sm:text-base">
                 Complete step {currentStep + 1} of {stepTitles.length} to move forward. Required fields are marked with an asterisk.
@@ -1513,6 +1605,12 @@ function DashboardPage() {
 
             {renderStepContent()}
 
+            {submitError ? (
+              <div className="mt-6 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm text-red-700">
+                {submitError}
+              </div>
+            ) : null}
+
             <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:justify-between">
               <button
                 type="button"
@@ -1530,7 +1628,7 @@ function DashboardPage() {
               {currentStep < stepTitles.length - 1 ? (
                 <button
                   type="button"
-                  className="rounded-lg bg-sky-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-sky-200/50 transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-70"
+                  className="rounded-lg bg-sky-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-sky-200/50 transition background: linear-gradient(135deg, #4b7a9b, #79c1f6); disabled:cursor-not-allowed disabled:opacity-70"
                   onClick={handleNext}
                   disabled={stepLoading}
                 >
@@ -1544,7 +1642,7 @@ function DashboardPage() {
               ) : (
                 <button
                   type="button"
-                  className="rounded-lg bg-sky-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-sky-200/50 transition hover:bg-sky-700"
+                  className="rounded-lg bg-sky-600 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-sky-200/50 transition background: linear-gradient(135deg, #4b7a9b, #79c1f6);"
                   onClick={handleSubmitApplication}
                   disabled={stepLoading || submitting}
                 >
