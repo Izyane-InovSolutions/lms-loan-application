@@ -3,6 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import Header from '../components/Header'
 import TermsModal from '../components/TermsModal'
 import SuccessModal from '../components/SuccessModal'
+import CameraCaptureModal from '../components/CameraCaptureModal'
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider'
 import { DatePicker } from '@mui/x-date-pickers/DatePicker'
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs'
@@ -271,6 +272,14 @@ function DashboardPage() {
 
     setUploadStatus(field, 'loading')
     updateDocumentField(field, file, event.target)
+  }
+
+  const cameraSupported = typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia
+  const [showCameraCapture, setShowCameraCapture] = useState(false)
+
+  const handleCameraCapture = (file) => {
+    setShowCameraCapture(false)
+    handleDocumentInputChange('passportPhoto', { target: { files: [file], value: '' } })
   }
 
   const handleDirectorDocumentInputChange = (index, field, event) => {
@@ -730,13 +739,19 @@ function DashboardPage() {
     setSubmitting(true)
     setSubmitError(null)
     try {
+      const loanDetails = {
+        amount: loanData.amount,
+        tenure: loanData.tenure,
+        totalAmount: Number(totalRepayable.toFixed(2)),
+      }
+
       if (selectedLoanType === 'personal') {
         const uploadedFiles = await uploadPersonalDocuments()
-        const payload = buildPersonalPayload(personalData, uploadedFiles)
+        const payload = buildPersonalPayload(personalData, uploadedFiles, loanDetails)
         await createLoanApplication(payload)
       } else {
         const { uploaded, directorUploaded } = await uploadBusinessDocuments()
-        const payload = buildBusinessPayload(businessData, uploaded, directorUploaded)
+        const payload = buildBusinessPayload(businessData, uploaded, directorUploaded, loanDetails)
         await createLoanApplication(payload)
       }
       setShowSuccess(true)
@@ -833,7 +848,7 @@ function DashboardPage() {
     </label>
   )
 
-   const renderUploadField = (label, field, file, required = false, acceptTypes = '.pdf', errorKey = '') => {
+   const renderUploadField = (label, field, file, required = false, acceptTypes = '.pdf', errorKey = '', allowCamera = false) => {
     const status = uploadStatuses[field] || 'idle'
 
     return (
@@ -842,12 +857,23 @@ function DashboardPage() {
         {label}
         {required && <span className="text-red-500"> *</span>}
       </span>
-      <input
-        type="file"
-        onChange={(event) => handleDocumentInputChange(field, event)}
-        className="w-full min-w-0 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
-        accept={acceptTypes}
-      />
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <input
+          type="file"
+          onChange={(event) => handleDocumentInputChange(field, event)}
+          className="w-full min-w-0 rounded-lg border border-slate-300 bg-slate-50 px-4 py-3 text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+          accept={acceptTypes}
+        />
+        {allowCamera && cameraSupported && (
+          <button
+            type="button"
+            onClick={() => setShowCameraCapture(true)}
+            className="whitespace-nowrap rounded-lg border border-sky-200 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-700 transition hover:bg-sky-100"
+          >
+            Use camera
+          </button>
+        )}
+      </div>
       <span className="text-xs text-slate-500">
         {file ? file.name : 'Upload document or choose file'}
       </span>
@@ -1114,7 +1140,7 @@ function DashboardPage() {
               {renderUploadField('Latest three payslips', 'payslips', personalData.documents.payslips, true, '.pdf', 'documents.payslips')}
               {renderUploadField('Bank statements (3 months)', 'bankStatements', personalData.documents.bankStatements, true, '.pdf', 'documents.bankStatements')}
               {renderUploadField('NRC copy', 'nrcCopy', personalData.documents.nrcCopy, true, '.pdf', 'documents.nrcCopy')}
-              {renderUploadField('Passport-sized photo', 'passportPhoto', personalData.documents.passportPhoto, true, 'application/pdf,image/*', 'documents.passportPhoto')}
+              {renderUploadField('Passport-sized photo', 'passportPhoto', personalData.documents.passportPhoto, true, 'application/pdf,image/*', 'documents.passportPhoto', true)}
               {renderUploadField('TPIN certificate', 'tpin', personalData.documents.tpin, true, '.pdf', 'documents.tpin')}
             </div>
           )
@@ -1367,7 +1393,7 @@ function DashboardPage() {
             {renderUploadField('Latest tax compliance return', 'latestTaxComplianceReturn', businessData.documents.latestTaxComplianceReturn, true, '.pdf', 'documents.latestTaxComplianceReturn')}
             {renderUploadField('Order / Invoice (if applying for order financing or invoice discounting)', 'orderOrInvoice', businessData.documents.orderOrInvoice, false, '.pdf', 'documents.orderOrInvoice')}
             {renderUploadField('Bank statements (6 months)', 'bankStatements', businessData.documents.bankStatements, true, '.pdf', 'documents.bankStatements')}
-            {renderUploadField('Applicant Passport-sized photo', 'passportPhoto', businessData.documents.passportPhoto, true, 'application/pdf,image/*', 'documents.passportPhoto')}
+            {renderUploadField('Applicant Passport-sized photo', 'passportPhoto', businessData.documents.passportPhoto, true, 'application/pdf,image/*', 'documents.passportPhoto', true)}
             {renderUploadField('Board resolution', 'boardResolution', businessData.documents.boardResolution, true, '.pdf', 'documents.boardResolution')}
 
             <div className="xl:col-span-2 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -1665,6 +1691,11 @@ function DashboardPage() {
         <img src={footerLogo} alt="Powered by Izyane" className="h-5 w-auto object-contain" />
       </footer>
 
+      <CameraCaptureModal
+        open={showCameraCapture}
+        onClose={() => setShowCameraCapture(false)}
+        onCapture={handleCameraCapture}
+      />
       <TermsModal open={showTerms} onClose={() => setShowTerms(false)} onAccept={onAcceptTerms} />
       <SuccessModal
         open={showSuccess}

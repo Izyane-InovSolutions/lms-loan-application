@@ -19,7 +19,7 @@ const BUSINESS_DOCUMENT_LABELS = {
   boardResolution: 'Board Resolution',
 }
 
-export const buildPersonalPayload = (personalData, uploadedFiles) => {
+export const buildPersonalPayload = (personalData, uploadedFiles, loanDetails) => {
   const { personalInfo, employmentInfo } = personalData
 
   const documents = Object.entries(PERSONAL_DOCUMENT_LABELS)
@@ -33,6 +33,9 @@ export const buildPersonalPayload = (personalData, uploadedFiles) => {
   return {
     application_type: 'Personal Loan',
     application_date: dayjs().format('YYYY-MM-DD'),
+    amount: loanDetails.amount,
+    total_amount: loanDetails.totalAmount,
+    tenure: String(loanDetails.tenure),
     gender: personalInfo.gender,
     marital_status: personalInfo.maritalStatus,
     nationality: employmentInfo.nationality,
@@ -54,7 +57,7 @@ export const buildPersonalPayload = (personalData, uploadedFiles) => {
   }
 }
 
-export const buildBusinessPayload = (businessData, uploadedFiles, directorUploadedFiles) => {
+export const buildBusinessPayload = (businessData, uploadedFiles, directorUploadedFiles, loanDetails) => {
   const { businessInfo, directorInfo } = businessData
 
   const applicantDocuments = Object.entries(BUSINESS_DOCUMENT_LABELS)
@@ -80,6 +83,9 @@ export const buildBusinessPayload = (businessData, uploadedFiles, directorUpload
   return {
     application_type: 'Business Loan',
     application_date: dayjs().format('YYYY-MM-DD'),
+    amount: loanDetails.amount,
+    total_amount: loanDetails.totalAmount,
+    tenure: String(loanDetails.tenure),
     gender: directorInfo.applicantGender,
     marital_status: directorInfo.applicantMaritalStatus,
     nationality: directorInfo.applicantNationality,
