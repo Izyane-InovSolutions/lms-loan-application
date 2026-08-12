@@ -1,23 +1,53 @@
 .pageShell {
   min-height: 100vh;
   background: #f8fafc;
+  display: flex;
+  flex-direction: column;
 }
 
 .pageContent {
   width: min(1600px, 100%);
   margin: 0 auto;
-  padding: 1.25rem 1.5rem;
+  padding: 0.75rem 1rem 0.75rem;
   display: flex;
   align-items: center;
-  min-height: 100vh;
+  justify-content: center;
+  min-height: calc(100vh - 72px);
+  flex: 1;
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  padding: 0.75rem 1rem 1.5rem;
+  color: #0f172a;
+  font-size: 0.78rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.footerText {
+  opacity: 0.72;
+  font-weight: 600;
+}
+
+.footerLogo {
+  height: 22px;
+  width: auto;
+  display: block;
+  object-fit: contain;
 }
 
 .contentCard {
   width: 100%;
+  max-width: 1240px;
+  margin: 0 auto;
   background: #ffffff;
   border: 1px solid #e2e8f0;
-  border-radius: 24px;
-  box-shadow: 0 24px 64px rgba(15, 23, 42, 0.08);
+  border-radius: 20px;
+  box-shadow: 0 20px 52px rgba(15, 23, 42, 0.08);
   overflow: hidden;
 }
 
@@ -39,7 +69,6 @@
   display: grid;
   grid-template-rows: auto 1fr;
   background: linear-gradient(135deg, #4b7a9b, #79c1f6);
-
   overflow: hidden;
 }
 
@@ -48,7 +77,8 @@
   flex-direction: column;
   align-items: center;
   text-align: center;
-  gap: 0.75rem;
+  gap: 0.4rem;
+  margin-bottom: -6rem;
 }
 
 .heroTitle2 {
@@ -63,14 +93,15 @@
 .heroRight .heroLabel {
   background: rgba(255, 255, 255, 0.15);
   color: #e0ecff;
-  margin-bottom: 0;
 }
 
 .heroLogo {
   width: auto;
-  max-width: 100%;
+  max-width: 85%;
   height: auto;
   display: block;
+  justify-self: center;
+  margin-bottom: -2rem;
 }
 
 .heroRightImage {
@@ -81,12 +112,13 @@
   max-height: 80%;
   object-fit: contain;
   display: block;
+  margin-top: -2rem;
 }
 
 .heroCopy {
   max-width: 720px;
   display: grid;
-  gap: 1.8rem;
+  gap: 1.2rem;
 }
 
 .ctaButton {
@@ -108,7 +140,7 @@
 }
 
 .heroTitle {
-  font-size: clamp(3rem, 4vw, 4.8rem);
+  font-size: clamp(3rem, 2vw, 4.8rem);
   color: #000000;
 }
 
@@ -117,13 +149,31 @@
   color: rgba(0, 0, 0, 0.85);
   font-size: 1.05rem;
   line-height: 1.85;
+  margin-top: -1rem;
 }
 
 .toggleGroup {
   display: inline-grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1rem;
-  margin-bottom: 1.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.resumeButton {
+  width: 100%;
+  padding: 1rem 1.2rem;
+  border-radius: 8px;
+  border: 1px solid rgba(15, 77, 183, 0.18);
+  background: #f8fafc;
+  color: #0f172a;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+}
+
+.resumeButton:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 20px 40px rgba(15, 77, 183, 0.08);
 }
 
 .toggleButton {
@@ -132,6 +182,7 @@
   border: 1px solid rgba(15, 77, 183, 0.18);
   background: white;
   color: #0f172a;
+  box-shadow: 0 10px 40px rgba(56, 189, 248, 0.18);
   font-weight: 700;
   cursor: pointer;
   transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
@@ -139,14 +190,14 @@
 
 .toggleButton:hover {
   transform: translateY(-1px);
-  box-shadow: 0 20px 40px rgba(15, 77, 183, 0.12);
+  box-shadow: 0 10px 40px rgba(56, 189, 248, 0.18);
 }
 
 .toggleButton.active {
   background: linear-gradient(135deg, #4b7a9b, #79c1f6);
   color: white;
   border-color: transparent;
-  box-shadow: 0 20px 40px rgba(56, 189, 248, 0.18);
+  box-shadow: 0 10px 40px rgba(56, 189, 248, 0.18);
 }
 
 .ctaButton {
@@ -163,7 +214,120 @@
 
 .ctaButton:hover {
   transform: translateY(-1px);
-  box-shadow: 0 18px 50px rgba(15, 77, 183, 0.22);
+  box-shadow: 0 10px 50px rgba(15, 77, 183, 0.22);
+}
+
+.resumeModalOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  z-index: 50;
+}
+
+.resumeModal {
+  width: min(100%, 420px);
+  background: white;
+  border-radius: 20px;
+  padding: 1.5rem;
+  box-shadow: 0 10px 60px rgba(15, 23, 42, 0.18);
+}
+
+.resumeModalHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.resumeModalHeader h2 {
+  margin: 0;
+  font-size: 1.5rem;
+  color: #0f172a;
+}
+
+.closeButton {
+  border: none;
+  background: transparent;
+  color: #475569;
+  font-size: 2rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.resumeFieldWrap {
+  display: grid;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+  color: #0f172a;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.resumeInput {
+  width: 100%;
+  border: 1px solid #cbd5e1;
+  background: #f8fafc;
+  border-radius: 10px;
+  padding: 0.8rem 0.9rem;
+  font-size: 1rem;
+  color: #0f172a;
+  outline: none;
+}
+
+.resumeInput:focus {
+  border-color: #0ea5e9;
+  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.12);
+}
+
+.resumeHint {
+  margin: 0 0 1rem;
+  color: #475569;
+  font-size: 0.92rem;
+}
+
+.resumeError {
+  margin: 0 0 1rem;
+  color: #dc2626;
+  font-size: 0.8rem;
+}
+
+.primaryAction,
+.secondaryAction {
+  border: none;
+  border-radius: 10px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.primaryAction {
+  width: 100%;
+  padding: 0.9rem 1rem;
+  background: linear-gradient(135deg, #4b7a9b, #79c1f6);
+  color: white;
+  box-shadow: 0 12px 24px rgba(59, 130, 246, 0.18);
+}
+
+.secondaryAction {
+  padding: 0.8rem 1rem;
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.primaryAction:hover,
+.secondaryAction:hover {
+  transform: translateY(-1px);
+}
+
+.resumeActions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
 }
 
 @media (max-width: 960px) {
@@ -191,7 +355,7 @@
   }
 
   .heroRightImage {
-    width: min(320px, 80%);
+    width: min(320px, 80%); 
   }
 
   .heroTitle2 {

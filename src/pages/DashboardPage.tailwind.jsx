@@ -8,6 +8,7 @@ import { DatePicker } from '@mui/x-date-pickers/DatePicker'
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs'
 import TextField from '@mui/material/TextField'
 import dayjs from 'dayjs'
+import footerLogo from '../assets/izyane-black.svg'
 import { createLoanApplication, extractErrorMessage, uploadFile } from '../services/lmsApi'
 import { buildPersonalPayload, buildBusinessPayload } from '../utils/loanPayloadMapper'
 
@@ -1658,6 +1659,11 @@ function DashboardPage() {
           </div>
         </section>
       </main>
+
+      <footer className="flex items-center justify-center gap-2 pb-6 pt-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-700">
+        <span className="opacity-70">Powered by</span>
+        <img src={footerLogo} alt="Powered by Izyane" className="h-5 w-auto object-contain" />
+      </footer>
 
       <TermsModal open={showTerms} onClose={() => setShowTerms(false)} onAccept={onAcceptTerms} />
       <SuccessModal
