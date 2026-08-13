@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react'
+import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import Header from '../components/Header'
 import TermsModal from '../components/TermsModal'
@@ -12,6 +12,7 @@ import dayjs from 'dayjs'
 import footerLogo from '../assets/izyane-black.svg'
 import { createLoanApplication, extractErrorMessage, uploadFile } from '../services/lmsApi'
 import { buildPersonalPayload, buildBusinessPayload } from '../utils/loanPayloadMapper'
+import { useApplicationDraft } from '../hooks/useApplicationDraft'
 
 const personalStepTitles = [
   'Personal information',
@@ -120,6 +121,36 @@ function DashboardPage() {
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState(null)
   const [validationErrors, setValidationErrors] = useState({})
+
+  const resumedDraft = location.state?.resumedDraft
+  const hydratedResumedDraftRef = useRef(false)
+
+  const {
+    localDraftSummary,
+    resumeLocalDraft,
+    startFresh: startFreshDraft,
+    hydrateFrom: hydrateResumedDraft,
+    clearDraft,
+  } = useApplicationDraft({
+    selectedLoanType,
+    currentStep,
+    personalData,
+    businessData,
+    loanData,
+    setSelectedLoanType,
+    setCurrentStep,
+    setPersonalData,
+    setBusinessData,
+    setLoanData,
+    skipLocalCheck: Boolean(resumedDraft),
+  })
+
+  useEffect(() => {
+    if (resumedDraft && !hydratedResumedDraftRef.current) {
+      hydratedResumedDraftRef.current = true
+      hydrateResumedDraft(resumedDraft)
+    }
+  }, [resumedDraft, hydrateResumedDraft])
 
   const stepTitles = selectedLoanType === 'personal' ? personalStepTitles : businessStepTitles
   const maxAmount = selectedLoanType === 'personal' ? 8000 : 50000
@@ -755,6 +786,7 @@ function DashboardPage() {
         await createLoanApplication(payload)
       }
       setShowSuccess(true)
+      clearDraft()
     } catch (error) {
       setSubmitError(extractErrorMessage(error))
     } finally {
@@ -1572,6 +1604,31 @@ function DashboardPage() {
               </p>
             </div>
 </div>
+
+          {localDraftSummary ? (
+            <div className="mb-6 flex flex-col gap-3 rounded-2xl border border-sky-200 bg-sky-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-sky-900">
+                We found an application in progress ({localDraftSummary.loanType === 'personal' ? 'Personal' : 'Business'} loan,
+                step {localDraftSummary.currentStep + 1}, saved {new Date(localDraftSummary.savedAt).toLocaleString()}). Resume it, or start a new application?
+              </p>
+              <div className="flex shrink-0 gap-2">
+                <button
+                  type="button"
+                  onClick={startFreshDraft}
+                  className="rounded-lg border border-sky-300 bg-white px-4 py-2 text-sm font-semibold text-sky-700 transition hover:bg-sky-100"
+                >
+                  Start fresh
+                </button>
+                <button
+                  type="button"
+                  onClick={resumeLocalDraft}
+                  className="rounded-lg bg-sky-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-sky-700"
+                >
+                  Resume
+                </button>
+              </div>
+            </div>
+          ) : null}
 
           <div className="relative px-2">
             <div

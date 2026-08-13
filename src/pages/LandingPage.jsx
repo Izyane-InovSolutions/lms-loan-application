@@ -4,23 +4,28 @@ import styles from '../styles/LandingPage.module.css'
 import hero from '../assets/hero1.png'
 import logo from '../assets/izyane.png'
 import footerLogo from '../assets/izyane-black.svg'
+import { requestOtp, verifyOtp, hydrateDraftFiles, extractDraftErrorMessage } from '../services/draftApi'
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 function LandingPage() {
   const [selectedType, setSelectedType] = useState('personal')
   const [showResumeModal, setShowResumeModal] = useState(false)
-  const [phoneNumber, setPhoneNumber] = useState('')
+  const [email, setEmail] = useState('')
   const [otpSent, setOtpSent] = useState(false)
   const [otpCode, setOtpCode] = useState('')
-  const [generatedOtp, setGeneratedOtp] = useState('')
   const [otpError, setOtpError] = useState('')
+  const [sendingOtp, setSendingOtp] = useState(false)
+  const [verifyingOtp, setVerifyingOtp] = useState(false)
   const navigate = useNavigate()
 
   const resetResumeFlow = () => {
-    setPhoneNumber('')
+    setEmail('')
     setOtpSent(false)
     setOtpCode('')
-    setGeneratedOtp('')
     setOtpError('')
+    setSendingOtp(false)
+    setVerifyingOtp(false)
   }
 
   const handleResumeModalClose = () => {
@@ -28,41 +33,53 @@ function LandingPage() {
     resetResumeFlow()
   }
 
-  const handleSendOtp = () => {
-    const normalizedPhone = phoneNumber.replace(/\s+/g, '')
-
-    if (!/^0\d{9}$/.test(normalizedPhone)) {
-      setOtpError('Enter a valid Zambian phone number starting with 0.')
+  const handleSendOtp = async () => {
+    const normalizedEmail = email.trim().toLowerCase()
+    if (!EMAIL_PATTERN.test(normalizedEmail)) {
+      setOtpError('Enter a valid email address.')
       return
     }
 
-    const sixDigitOtp = String(Math.floor(100000 + Math.random() * 900000))
-    setGeneratedOtp(sixDigitOtp)
-    setOtpSent(true)
+    setSendingOtp(true)
     setOtpError('')
+    try {
+      await requestOtp(normalizedEmail)
+      setOtpSent(true)
+    } catch (error) {
+      setOtpError(extractDraftErrorMessage(error))
+    } finally {
+      setSendingOtp(false)
+    }
   }
 
-  const handleResendOtp = () => {
-    const sixDigitOtp = String(Math.floor(100000 + Math.random() * 900000))
-    setGeneratedOtp(sixDigitOtp)
+  const handleResendOtp = async () => {
     setOtpCode('')
-    setOtpError('')
+    await handleSendOtp()
   }
 
-  const handleOtpVerify = () => {
+  const handleOtpVerify = async () => {
     if (!otpCode.trim()) {
-      setOtpError('Enter the OTP sent to your phone.')
+      setOtpError('Enter the OTP sent to your email.')
       return
     }
 
-    if (otpCode.trim() !== generatedOtp) {
-      setOtpError('The OTP entered is incorrect. Please try again.')
-      return
-    }
+    setVerifyingOtp(true)
+    setOtpError('')
+    try {
+      const normalizedEmail = email.trim().toLowerCase()
+      const { draftToken, draft } = await verifyOtp(normalizedEmail, otpCode.trim())
+      const hydratedDraft = await hydrateDraftFiles(draft)
 
-    setShowResumeModal(false)
-    resetResumeFlow()
-    navigate('/apply', { state: { type: selectedType } })
+      setShowResumeModal(false)
+      resetResumeFlow()
+      navigate('/apply', {
+        state: { type: hydratedDraft.loanType, resumedDraft: { ...hydratedDraft, draftToken } },
+      })
+    } catch (error) {
+      setOtpError(extractDraftErrorMessage(error))
+    } finally {
+      setVerifyingOtp(false)
+    }
   }
 
   return (
@@ -150,26 +167,25 @@ function LandingPage() {
             {!otpSent ? (
               <>
                 <label className={styles.resumeFieldWrap}>
-                  <span>Phone number</span>
+                  <span>Email address</span>
                   <input
-                    type="tel"
-                    value={phoneNumber}
-                    onChange={(event) => setPhoneNumber(event.target.value)}
-                    placeholder="e.g. 0977123456"
+                    type="email"
+                    value={email}
+                    onChange={(event) => setEmail(event.target.value)}
+                    placeholder="e.g. you@example.com"
                     className={styles.resumeInput}
-                    maxLength={10}
                   />
                 </label>
 
                 {otpError ? <p className={styles.resumeError}>{otpError}</p> : null}
 
-                <button type="button" className={styles.primaryAction} onClick={handleSendOtp}>
-                  Receive OTP
+                <button type="button" className={styles.primaryAction} onClick={handleSendOtp} disabled={sendingOtp}>
+                  {sendingOtp ? 'Sending…' : 'Receive OTP'}
                 </button>
               </>
             ) : (
               <>
-                <p className={styles.resumeHint}>Enter the 6-digit OTP sent to {phoneNumber}</p>
+                <p className={styles.resumeHint}>Enter the 6-digit OTP sent to {email}</p>
                 <label className={styles.resumeFieldWrap}>
                   <span>OTP</span>
                   <input
@@ -185,11 +201,11 @@ function LandingPage() {
                 {otpError ? <p className={styles.resumeError}>{otpError}</p> : null}
 
                 <div className={styles.resumeActions}>
-                  <button type="button" className={styles.secondaryAction} onClick={handleResendOtp}>
+                  <button type="button" className={styles.secondaryAction} onClick={handleResendOtp} disabled={sendingOtp}>
                     Resend OTP
                   </button>
-                  <button type="button" className={styles.primaryAction} onClick={handleOtpVerify}>
-                    Verify OTP
+                  <button type="button" className={styles.primaryAction} onClick={handleOtpVerify} disabled={verifyingOtp}>
+                    {verifyingOtp ? 'Verifying…' : 'Verify OTP'}
                   </button>
                 </div>
               </>

@@ -14,12 +14,16 @@
     "@mui/icons-material": "^9.2.0",
     "@mui/material": "^9.2.0",
     "@mui/x-date-pickers": "^9.10.1",
+    "@vercel/blob": "^2.8.0",
+    "@vercel/kv": "^3.0.0",
     "axios": "^1.6.8",
     "dayjs": "^1.11.21",
     "face-api.js": "^0.22.2",
+    "formidable": "^3.5.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^6.22.0"
+    "react-router-dom": "^6.22.0",
+    "resend": "^6.19.0"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.2.1",
