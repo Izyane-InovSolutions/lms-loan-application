@@ -96,7 +96,16 @@ export function useApplicationDraft({
 
     clearTimeout(remoteSaveTimer.current)
     remoteSaveTimer.current = setTimeout(async () => {
-      const payload = { loanType: selectedLoanType, currentStep, personalData, businessData, loanData }
+      // File objects have no enumerable properties, so JSON.stringify would silently
+      // collapse each attached document to `{}` — sanitize to the same __draftFile__
+      // placeholders the local cache uses, so hydrateDraftFiles can re-attach them on resume.
+      const payload = {
+        loanType: selectedLoanType,
+        currentStep,
+        personalData: extractFiles(personalData, 'personal').sanitized,
+        businessData: extractFiles(businessData, 'business').sanitized,
+        loanData,
+      }
       try {
         if (!draftToken) {
           const result = await createDraft({ email, ...payload })
