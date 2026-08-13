@@ -1,3 +1,6 @@
-import { kv } from '@vercel/kv'
+import { kv as vercelKv } from '@vercel/kv'
+import { createMemoryKv } from './memoryKv.js'
 
-export default kv
+const hasVercelKv = Boolean(process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN)
+
+export default hasVercelKv ? vercelKv : createMemoryKv()
