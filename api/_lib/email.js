@@ -1,10 +1,31 @@
-import { Resend } from 'resend'
+import nodemailer from 'nodemailer'
 
-const resend = new Resend(process.env.RESEND_API_KEY)
-const FROM_EMAIL = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev'
+const isTrue = (value) => String(value).toLowerCase() === 'true'
+
+const useSsl = isTrue(process.env.EMAIL_USE_SSL)
+const useTls = isTrue(process.env.EMAIL_USE_TLS)
+const FROM_EMAIL = process.env.DEFAULT_FROM_EMAIL || process.env.EMAIL_HOST_USER
+
+let transporter = null
+
+const getTransporter = () => {
+  if (!transporter) {
+    transporter = nodemailer.createTransport({
+      host: process.env.EMAIL_HOST,
+      port: Number(process.env.EMAIL_PORT || 587),
+      secure: useSsl, // true for implicit TLS (port 465), false for STARTTLS (port 587)
+      requireTLS: !useSsl && useTls,
+      auth: {
+        user: process.env.EMAIL_HOST_USER,
+        pass: process.env.EMAIL_HOST_PASSWORD,
+      },
+    })
+  }
+  return transporter
+}
 
 export const sendOtpEmail = async (email, code) => {
-  await resend.emails.send({
+  await getTransporter().sendMail({
     from: FROM_EMAIL,
     to: email,
     subject: 'Your loan application resume code',
