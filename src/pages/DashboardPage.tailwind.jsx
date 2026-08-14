@@ -3,7 +3,7 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import Header from '../components/Header'
 import TermsModal from '../components/TermsModal'
 import SuccessModal from '../components/SuccessModal'
-import CameraCaptureModal from '../components/CameraCaptureModal'
+import { FaceCaptureCamera } from '../components/FaceCaptureCamera'
 import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider'
 import { DatePicker } from '@mui/x-date-pickers/DatePicker'
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs'
@@ -308,8 +308,17 @@ function DashboardPage() {
   const cameraSupported = typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia
   const [showCameraCapture, setShowCameraCapture] = useState(false)
 
-  const handleCameraCapture = (file) => {
+  const handleCameraCapture = (dataUrl) => {
     setShowCameraCapture(false)
+    const [meta, base64] = dataUrl.split(',')
+    const mimeMatch = /data:(.*?);base64/.exec(meta)
+    const mimeType = mimeMatch ? mimeMatch[1] : 'image/png'
+    const binary = atob(base64)
+    const bytes = new Uint8Array(binary.length)
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i)
+    }
+    const file = new File([bytes], `passport-photo-${Date.now()}.png`, { type: mimeType })
     handleDocumentInputChange('passportPhoto', { target: { files: [file], value: '' } })
   }
 
@@ -1768,11 +1777,25 @@ function DashboardPage() {
         <img src={footerLogo} alt="Powered by Izyane" className="h-5 w-auto object-contain" />
       </footer>
 
-      <CameraCaptureModal
-        open={showCameraCapture}
-        onClose={() => setShowCameraCapture(false)}
-        onCapture={handleCameraCapture}
-      />
+      {showCameraCapture && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 px-4" onClick={() => setShowCameraCapture(false)}>
+          <div
+            className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-4 flex items-center justify-between gap-4">
+              <h3 className="text-lg font-semibold text-slate-900">Take passport photo</h3>
+              <button type="button" className="text-2xl leading-none text-slate-400" onClick={() => setShowCameraCapture(false)} aria-label="Close camera">
+                ×
+              </button>
+            </div>
+            <FaceCaptureCamera
+              onCapture={handleCameraCapture}
+              onCancel={() => setShowCameraCapture(false)}
+            />
+          </div>
+        </div>
+      )}
       <TermsModal open={showTerms} onClose={() => setShowTerms(false)} onAccept={onAcceptTerms} />
       <SuccessModal
         open={showSuccess}
