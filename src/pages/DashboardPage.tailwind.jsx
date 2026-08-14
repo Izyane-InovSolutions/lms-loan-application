@@ -716,6 +716,11 @@ function DashboardPage() {
     }
   }
 
+  const goToStep = (stepIndex) => {
+    setCurrentStep(stepIndex)
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
   const handleSubmitApplication = () => {
     setShowTerms(true)
   }
@@ -933,9 +938,23 @@ function DashboardPage() {
     </div>
   )
 
-  const renderSummaryCard = (title, rows) => (
+  const renderSummaryCard = (title, rows, stepIndex) => (
     <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
-      <h3 className="text-base font-semibold text-slate-800">{title}</h3>
+      <div className="flex items-center justify-between gap-3">
+        <h3 className="text-base font-semibold text-slate-800">{title}</h3>
+        {typeof stepIndex === 'number' && (
+          <button
+            type="button"
+            onClick={() => goToStep(stepIndex)}
+            className="inline-flex items-center gap-1 rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-sky-700 transition hover:bg-sky-50 hover:border-sky-200"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-3.5 w-3.5">
+              <path d="M13.586 3.586a2 2 0 1 1 2.828 2.828l-8.5 8.5a2 2 0 0 1-.878.507l-3 .857a.5.5 0 0 1-.618-.618l.857-3a2 2 0 0 1 .507-.878l8.5-8.5-.696-.696ZM12.5 5l-8 8-.5 1.5L5.5 14l1.5-.5 8-8L12.5 5Z" />
+            </svg>
+            Edit
+          </button>
+        )}
+      </div>
       <div className="mt-3">{rows}</div>
     </div>
   )
@@ -945,7 +964,7 @@ function DashboardPage() {
   const renderPersonalOverview = () => (
     <div className="grid gap-6">
       <p className="text-sm text-slate-600">
-        Please review your details below before submitting your application. Use "Previous step" to make changes.
+        Please review your details below before submitting your application. Use the "Edit" button to make changes to that section.
       </p>
       <div className="grid gap-6 xl:grid-cols-2">
         {renderSummaryCard('Personal information', [
@@ -956,7 +975,7 @@ function DashboardPage() {
           renderSummaryRow('Gender', personalData.personalInfo.gender),
           renderSummaryRow('Marital status', personalData.personalInfo.maritalStatus),
           renderSummaryRow('Birth date', personalData.personalInfo.birthDate),
-        ])}
+        ], 0)}
         {renderSummaryCard('Residence & Employment', [
           renderSummaryRow('Residential address', personalData.employmentInfo.residentialAddress),
           renderSummaryRow('Occupation', personalData.employmentInfo.occupation),
@@ -967,21 +986,21 @@ function DashboardPage() {
           renderSummaryRow('Next of kin phone', personalData.employmentInfo.nextOfKinPhone),
           renderSummaryRow('Next of kin email', personalData.employmentInfo.nextOfKinEmail),
           renderSummaryRow('Relationship', personalData.employmentInfo.nextOfKinRelationship),
-        ])}
+        ], 1)}
         {renderSummaryCard('Documents', [
           renderSummaryRow('Latest three payslips', fileName(personalData.documents.payslips)),
           renderSummaryRow('Bank statements', fileName(personalData.documents.bankStatements)),
           renderSummaryRow('NRC copy', fileName(personalData.documents.nrcCopy)),
           renderSummaryRow('Passport photo', fileName(personalData.documents.passportPhoto)),
           renderSummaryRow('TPIN certificate', fileName(personalData.documents.tpin)),
-        ])}
+        ], 2)}
         {renderSummaryCard('Loan terms', [
           renderSummaryRow('Loan amount', `K${loanData.amount.toLocaleString()}`),
           renderSummaryRow('Tenure', `${loanData.tenure} months`),
           renderSummaryRow('Monthly repayment', `K${monthlyRepayment.toFixed(2)}`),
           renderSummaryRow('Facility fee', `K${facilityFee.toFixed(2)}`),
           renderSummaryRow('Total repayable', `K${totalRepayable.toFixed(2)}`),
-        ])}
+        ], 3)}
       </div>
     </div>
   )
@@ -991,7 +1010,7 @@ function DashboardPage() {
     return (
       <div className="grid gap-6">
         <p className="text-sm text-slate-600">
-          Please review your details below before submitting your application. Use "Previous step" to make changes.
+          Please review your details below before submitting your application. Use the "Edit" button to make changes to that section.
         </p>
         <div className="grid gap-6 xl:grid-cols-2">
           {renderSummaryCard('Business information', [
@@ -1002,7 +1021,7 @@ function DashboardPage() {
             renderSummaryRow('Registered office', businessData.businessInfo.registeredOffice),
             renderSummaryRow('Collateral pledged', businessData.businessInfo.collateralPledged),
             renderSummaryRow('Purpose of loan', businessData.businessInfo.purposeOfLoan),
-          ])}
+          ], 0)}
           {renderSummaryCard('Applicant', [
             renderSummaryRow('Full name', [businessData.directorInfo.applicantFirstName, businessData.directorInfo.applicantMiddleName, businessData.directorInfo.applicantLastName].filter(Boolean).join(' ')),
             renderSummaryRow('Phone', businessData.directorInfo.applicantPhone),
@@ -1015,7 +1034,7 @@ function DashboardPage() {
             renderSummaryRow('Position', businessData.directorInfo.applicantPosition),
             renderSummaryRow('Nationality', businessData.directorInfo.applicantNationality),
             renderSummaryRow('Next of kin relationship', businessData.directorInfo.nextOfKinRelationship),
-          ])}
+          ], 1)}
           {renderSummaryCard(
             'Directors',
             businessData.directorInfo.directors.flatMap((director, index) => [
@@ -1023,7 +1042,8 @@ function DashboardPage() {
               renderSummaryRow(`Director ${index + 1} phone`, director.phone),
               renderSummaryRow(`Director ${index + 1} email`, director.email),
               renderSummaryRow(`Director ${index + 1} NRC`, director.nrc),
-            ])
+            ]),
+            1
           )}
           {renderSummaryCard('Documents', [
             renderSummaryRow('PACRA certificate', fileName(businessData.documents.pacraCertificate)),
@@ -1038,14 +1058,14 @@ function DashboardPage() {
               renderSummaryRow(`Director ${index + 1} NRC upload`, fileName(upload.nrc)),
               renderSummaryRow(`Director ${index + 1} passport photo`, fileName(upload.passportPhoto)),
             ]),
-          ])}
+          ], 2)}
           {renderSummaryCard('Loan terms', [
             renderSummaryRow('Loan amount', `K${loanData.amount.toLocaleString()}`),
             renderSummaryRow('Tenure', `${loanData.tenure} months`),
             renderSummaryRow('Monthly repayment', `K${monthlyRepayment.toFixed(2)}`),
             renderSummaryRow('Facility fee', `K${facilityFee.toFixed(2)}`),
             renderSummaryRow('Total repayable', `K${totalRepayable.toFixed(2)}`),
-          ])}
+          ], 3)}
         </div>
       </div>
     )

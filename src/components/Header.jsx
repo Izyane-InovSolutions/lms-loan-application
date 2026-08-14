@@ -13,8 +13,8 @@ function Header() {
           <div className={styles.brandSubtitle}>Limited</div>
         </div>
       </div>
-      <Link to="/applications" className={styles.navLink}>
-        My Applications
+      <Link to="/" className={styles.navLink}>
+        Back to Home
       </Link>
     </header>
   )
