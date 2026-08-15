@@ -87,6 +87,11 @@ export default defineConfig(({ mode }) => {
 
   return {
   plugins: [react(), localApiDevPlugin(), localBlobStaticPlugin()],
+  resolve: {
+    alias: {
+      '@': path.resolve(process.cwd(), 'src'),
+    },
+  },
   server: {
     port: 3000,
     proxy: {

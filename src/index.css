@@ -1,3 +1,110 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/*
+ * Design tokens. Values are sampled from the iZyane IISP mark:
+ *   --primary  deep globe blue (#1B4F72)
+ *   --brand    rocket red (#D0021B), reserved for accents — never for large fills
+ * Every colour the UI uses is declared here as HSL channels so shadcn components
+ * can compose them (`hsl(var(--primary) / 0.5)`) and so a rebrand is a one-file change.
+ */
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 210 40% 11%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 210 40% 11%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 210 40% 11%;
+
+    --primary: 204 62% 28%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 205 40% 96%;
+    --secondary-foreground: 204 62% 22%;
+
+    --muted: 210 40% 96%;
+    --muted-foreground: 215 16% 47%;
+
+    --accent: 205 88% 94%;
+    --accent-foreground: 204 62% 25%;
+
+    --brand: 353 85% 43%;
+    --brand-foreground: 0 0% 100%;
+
+    --success: 152 60% 30%;
+    --success-foreground: 0 0% 100%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 214 32% 91%;
+    --input: 214 32% 91%;
+    --ring: 204 62% 28%;
+
+    --radius: 0.75rem;
+  }
+
+  .dark {
+    --background: 210 45% 7%;
+    --foreground: 210 40% 96%;
+
+    --card: 210 42% 10%;
+    --card-foreground: 210 40% 96%;
+
+    --popover: 210 42% 10%;
+    --popover-foreground: 210 40% 96%;
+
+    --primary: 205 80% 62%;
+    --primary-foreground: 210 45% 8%;
+
+    --secondary: 210 34% 16%;
+    --secondary-foreground: 210 40% 96%;
+
+    --muted: 210 34% 16%;
+    --muted-foreground: 215 20% 65%;
+
+    --accent: 210 34% 18%;
+    --accent-foreground: 205 88% 82%;
+
+    --brand: 353 80% 58%;
+    --brand-foreground: 0 0% 100%;
+
+    --success: 152 50% 45%;
+    --success-foreground: 210 45% 8%;
+
+    --destructive: 0 62% 52%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 210 30% 20%;
+    --input: 210 30% 20%;
+    --ring: 205 80% 62%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: 'cv11', 'ss01';
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Anchor targets sit below the sticky header rather than under it. */
+  html {
+    scroll-behavior: smooth;
+    scroll-padding-top: 5.5rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
