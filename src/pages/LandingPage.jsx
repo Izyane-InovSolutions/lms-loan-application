@@ -11,23 +11,32 @@ import { Faq } from '@/components/landing/Faq'
 import { CallToAction } from '@/components/landing/CallToAction'
 import { SiteFooter } from '@/components/landing/SiteFooter'
 import { ResumeApplicationDialog } from '@/components/landing/ResumeApplicationDialog'
+import { StartApplicationDialog } from '@/components/landing/StartApplicationDialog'
+import { applyPath } from '@/config/applicationSteps'
 
 function LandingPage() {
   const [resumeOpen, setResumeOpen] = useState(false)
+  const [pendingLoanType, setPendingLoanType] = useState(null)
   const navigate = useNavigate()
 
-  const handleApply = useCallback(
-    (type) => {
-      navigate('/apply', { state: { type } })
+  // Every "apply" entry point asks for an email first so the draft can sync from
+  // the very first field; the wizard prefills it and carries on.
+  const handleApply = useCallback((type) => setPendingLoanType(type), [])
+
+  const handleStart = useCallback(
+    (email) => {
+      const type = pendingLoanType || 'personal'
+      setPendingLoanType(null)
+      navigate(applyPath(type, 0), { state: email ? { startEmail: email } : undefined })
     },
-    [navigate]
+    [navigate, pendingLoanType]
   )
 
   const handleResume = useCallback(() => setResumeOpen(true), [])
 
   const handleResumed = useCallback(
     (draft) => {
-      navigate('/apply', { state: { type: draft.loanType, resumedDraft: draft } })
+      navigate(applyPath(draft.loanType, draft.currentStep || 0), { state: { resumedDraft: draft } })
     },
     [navigate]
   )
@@ -47,6 +56,15 @@ function LandingPage() {
       </main>
 
       <SiteFooter />
+
+      <StartApplicationDialog
+        open={Boolean(pendingLoanType)}
+        onOpenChange={(open) => {
+          if (!open) setPendingLoanType(null)
+        }}
+        loanType={pendingLoanType}
+        onStart={handleStart}
+      />
 
       <ResumeApplicationDialog open={resumeOpen} onOpenChange={setResumeOpen} onResumed={handleResumed} />
     </div>

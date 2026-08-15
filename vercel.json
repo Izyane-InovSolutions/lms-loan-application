@@ -1,5 +1,8 @@
 {
   "crons": [
     { "path": "/api/cron/purge-expired-drafts", "schedule": "0 3 * * *" }
+  ],
+  "rewrites": [
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]
 }

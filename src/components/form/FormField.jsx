@@ -19,7 +19,7 @@ export function FormField({ name, label, required = false, error, hint, classNam
   const describedBy = [error ? errorId : null, hint ? hintId : null].filter(Boolean).join(' ') || undefined
 
   return (
-    <div className={cn('grid content-start gap-2', className)}>
+    <div className={cn('grid min-w-0 grid-cols-1 content-start gap-2', className)}>
       <Label htmlFor={id} className="flex items-baseline gap-1">
         <span>{label}</span>
         {required ? (

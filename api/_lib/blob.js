@@ -6,6 +6,42 @@ const hasVercelBlob = Boolean(process.env.BLOB_READ_WRITE_TOKEN)
 const LOCAL_BLOB_DIR = path.resolve(process.cwd(), '.local-blob')
 const LOCAL_BLOB_URL_PREFIX = '/local-blob/'
 
+/*
+ * Storage keys are built from a client-supplied fieldKey and the uploaded filename,
+ * so they are sanitised before use:
+ *
+ *  - Length: a filesystem path component caps at 255 bytes, and browser-generated
+ *    download names routinely exceed that (a Google Docs export blew past it and
+ *    failed every upload with ENAMETOOLONG). Segments are capped, extension kept.
+ *  - Traversal: fieldKey arrives from the browser, so `..` is collapsed rather than
+ *    trusted — otherwise a crafted key could escape the blob directory locally.
+ *
+ * Only the storage key is affected; the draft record keeps the original filename, so
+ * applicants still see the name they uploaded.
+ */
+const MAX_SEGMENT_LENGTH = 120
+
+const sanitizeSegment = (segment, isFilename) => {
+  const cleaned = String(segment)
+    .replace(/[^A-Za-z0-9._@-]+/g, '-')
+    .replace(/\.{2,}/g, '.')
+    .replace(/-{2,}/g, '-')
+    .replace(/^[-.]+|[-.]+$/g, '')
+
+  const safe = cleaned || 'file'
+  if (safe.length <= MAX_SEGMENT_LENGTH) return safe
+  if (!isFilename) return safe.slice(0, MAX_SEGMENT_LENGTH)
+
+  const dot = safe.lastIndexOf('.')
+  const extension = dot > 0 && safe.length - dot <= 12 ? safe.slice(dot) : ''
+  return safe.slice(0, MAX_SEGMENT_LENGTH - extension.length) + extension
+}
+
+export const sanitizePathname = (pathname) => {
+  const segments = String(pathname).split('/').filter(Boolean)
+  return segments.map((segment, index) => sanitizeSegment(segment, index === segments.length - 1)).join('/')
+}
+
 // Vercel Blob only supports public-access objects today; URLs are unguessable
 // (random suffix) rather than access-controlled, so treat the URL itself as the secret.
 const putVercel = (pathname, data, options) =>
@@ -28,8 +64,10 @@ const delLocal = async (urls) => {
   )
 }
 
-export const putBlob = (pathname, data, options = {}) =>
-  hasVercelBlob ? putVercel(pathname, data, options) : putLocal(pathname, data)
+export const putBlob = (pathname, data, options = {}) => {
+  const safePathname = sanitizePathname(pathname)
+  return hasVercelBlob ? putVercel(safePathname, data, options) : putLocal(safePathname, data)
+}
 
 export const deleteBlobsForDraft = async (draft) => {
   const urls = Object.values(draft?.documents || {})

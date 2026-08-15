@@ -49,7 +49,11 @@ export function FileUploadField({
   const isAttached = Boolean(file) && !error
 
   return (
-    <div className={cn('grid content-start gap-2', className)}>
+    // min-w-0 lets this shrink below the filename's min-content width (grid items
+    // default to min-width:auto), and grid-cols-1 gives the inner column a 0 floor.
+    // Without both, `truncate` on the filename can never engage and long names
+    // push the card past its column.
+    <div className={cn('grid min-w-0 grid-cols-1 content-start gap-2', className)}>
       <Label htmlFor={id} className="flex items-baseline gap-1">
         <span>{label}</span>
         {required ? (

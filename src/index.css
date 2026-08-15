@@ -108,3 +108,42 @@
     scroll-behavior: auto;
   }
 }
+
+/*
+ * Print. The overview step is designed to be printed or saved as PDF, so paper gets
+ * a light palette regardless of the viewer's theme, and page chrome is suppressed
+ * with `print:hidden` at the call sites.
+ */
+@media print {
+  @page {
+    margin: 14mm;
+  }
+
+  html {
+    scroll-behavior: auto;
+  }
+
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 0 0% 0%;
+    --card: 0 0% 100%;
+    --muted-foreground: 0 0% 32%;
+    --border: 0 0% 80%;
+  }
+
+  body {
+    background: #fff;
+  }
+
+  /* Keep a section and its heading together on one sheet. */
+  section,
+  article,
+  img {
+    break-inside: avoid;
+  }
+
+  /* Links print as plain text; the URLs here are object URLs and meaningless on paper. */
+  a[href]::after {
+    content: '';
+  }
+}

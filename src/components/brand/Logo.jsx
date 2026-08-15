@@ -1,3 +1,4 @@
+/* eslint-disable no-unused-vars */
 import React from 'react'
 
 import { cn } from '@/lib/utils'
@@ -18,14 +19,14 @@ export function Logo({ className, showWordmark = true, size = 'default' }) {
       <span className={cn('grid shrink-0 place-items-center overflow-hidden rounded-md bg-white ring-1 ring-border', tile)}>
         <img src={mark} alt="" aria-hidden="true" className="size-full object-contain p-0.5" />
       </span>
-      {showWordmark ? (
+      {/* {showWordmark ? (
         <span className="flex flex-col leading-none">
           <span className={cn('font-semibold tracking-tight', size === 'sm' ? 'text-sm' : 'text-base')}>iZyane</span>
           <span className="mt-1 text-[0.68rem] font-medium uppercase tracking-[0.14em] text-muted-foreground">
             Loan Portal
           </span>
         </span>
-      ) : null}
+      ) : null} */}
     </span>
   )
 }

@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
   ArrowLeft,
   ArrowRight,
@@ -10,15 +10,16 @@ import {
   FolderOpen,
   Home,
   Loader2,
+  LogOut,
   Phone,
   Plus,
+  Printer,
   Send,
   Trash2,
   User,
   Users,
   Wallet,
 } from 'lucide-react'
-import Header from '../components/Header'
 import TermsModal from '../components/TermsModal'
 import SuccessModal from '../components/SuccessModal'
 import { FaceCaptureCamera } from '../components/FaceCaptureCamera'
@@ -41,23 +42,15 @@ import { FieldGroup } from '@/components/form/FieldGroup'
 import { FileUploadField } from '@/components/form/FileUploadField'
 import { StepProgress } from '@/components/application/StepProgress'
 import { ErrorSummary } from '@/components/application/ErrorSummary'
-import { SummaryCard, SummaryRow } from '@/components/application/SummaryCard'
-
-const personalStepTitles = [
-  'Personal information',
-  'Residence & Employment',
-  'Documents',
-  'Loan Terms',
-  'Overview',
-]
-
-const businessStepTitles = [
-  'Business information',
-  'Directors & Applicant',
-  'Documents',
-  'Loan Terms',
-  'Overview',
-]
+import {
+  ApplicationSummary,
+  AttachmentList,
+  SummaryHighlights,
+  SummaryRow,
+  SummarySection,
+} from '@/components/application/ApplicationSummary'
+import { DocumentPreviewDialog } from '@/components/application/DocumentPreviewDialog'
+import { STEP_TITLES, applyPath, isLoanType, isValidStepSlug, stepIndex } from '@/config/applicationSteps'
 
 const GENDER_OPTIONS = ['Male', 'Female']
 const MARITAL_STATUS_OPTIONS = ['Single', 'Married', 'Widowed', 'Divorced', 'Separated']
@@ -184,13 +177,64 @@ const initialLoanState = {
 function DashboardPage() {
   const location = useLocation()
   const navigate = useNavigate()
-  const [selectedLoanType, setSelectedLoanType] = useState(
-    location.state?.type === 'business' ? 'business' : 'personal'
+  const { type: typeParam, step: stepParam } = useParams()
+
+  // The URL owns which loan type and which step we are on. Everything else stays
+  // component state, so a refresh or a Back press lands on the right screen while
+  // the draft layer restores the answers.
+  const selectedLoanType = isLoanType(typeParam)
+    ? typeParam
+    : location.state?.type === 'business'
+      ? 'business'
+      : 'personal'
+  const stepTitles = STEP_TITLES[selectedLoanType]
+  const currentStep = stepIndex(selectedLoanType, stepParam)
+
+  // Mirrors of the derived values, updated eagerly by the setters below so that
+  // two setter calls in the same tick (draft hydration sets type *and* step)
+  // compose instead of the second one reading a stale type.
+  const loanTypeRef = useRef(selectedLoanType)
+  const stepRef = useRef(currentStep)
+  loanTypeRef.current = selectedLoanType
+  stepRef.current = currentStep
+
+  const navigateToStep = useCallback(
+    (type, index, { replace = false } = {}) => {
+      navigate(applyPath(type, index), { replace })
+    },
+    [navigate]
   )
-  const [currentStep, setCurrentStep] = useState(0)
+
+  // Passed to useApplicationDraft: resuming a draft should not push history.
+  const setSelectedLoanType = useCallback(
+    (type) => {
+      const next = isLoanType(type) ? type : 'personal'
+      loanTypeRef.current = next
+      navigateToStep(next, stepRef.current, { replace: true })
+    },
+    [navigateToStep]
+  )
+
+  const setCurrentStep = useCallback(
+    (index) => {
+      stepRef.current = index
+      navigateToStep(loanTypeRef.current, index, { replace: true })
+    },
+    [navigateToStep]
+  )
+
+  // Normalise bare or unknown URLs (/apply, /apply/personal, bad slug) onto the
+  // canonical path, carrying router state through so a resumed draft survives.
+  useEffect(() => {
+    if (!isLoanType(typeParam) || !isValidStepSlug(typeParam, stepParam)) {
+      navigate(applyPath(selectedLoanType, 0), { replace: true, state: location.state })
+    }
+  }, [typeParam, stepParam, selectedLoanType, navigate, location.state])
+
   const [personalData, setPersonalData] = useState(personalInitial)
   const [businessData, setBusinessData] = useState(businessInitial)
   const [loanData, setLoanData] = useState(initialLoanState)
+  const [previewAttachment, setPreviewAttachment] = useState(null)
   const [showTerms, setShowTerms] = useState(false)
   const [showSuccess, setShowSuccess] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -207,6 +251,8 @@ function DashboardPage() {
     startFresh: startFreshDraft,
     hydrateFrom: hydrateResumedDraft,
     clearDraft,
+    flushLocalDraft,
+    flushRemoteDraft,
   } = useApplicationDraft({
     selectedLoanType,
     currentStep,
@@ -228,7 +274,37 @@ function DashboardPage() {
     }
   }, [resumedDraft, hydrateResumedDraft])
 
-  const stepTitles = selectedLoanType === 'personal' ? personalStepTitles : businessStepTitles
+  // Email captured on the landing page. Seeding it here means useApplicationDraft
+  // has a sync key immediately, rather than only once the applicant reaches the
+  // email field (step 1 personal / step 2 business). Never overrides a resumed
+  // draft or an address the applicant has already typed.
+  const startEmail = location.state?.startEmail
+  const seededEmailRef = useRef(false)
+
+  useEffect(() => {
+    if (!startEmail || seededEmailRef.current || resumedDraft) return
+    seededEmailRef.current = true
+
+    if (selectedLoanType === 'personal') {
+      setPersonalData((prev) =>
+        prev.personalInfo.email
+          ? prev
+          : { ...prev, personalInfo: { ...prev.personalInfo, email: startEmail } }
+      )
+    } else {
+      setBusinessData((prev) =>
+        prev.directorInfo.applicantEmail
+          ? prev
+          : { ...prev, directorInfo: { ...prev.directorInfo, applicantEmail: startEmail } }
+      )
+    }
+  }, [startEmail, selectedLoanType, resumedDraft])
+
+  // Each step starts at the top, including on browser Back/Forward.
+  useEffect(() => {
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }, [currentStep])
+
   const maxAmount = selectedLoanType === 'personal' ? 8000 : 50000
   const minAmount = selectedLoanType === 'personal' ? 500 : 5000
   const interestRate = 0.05
@@ -785,23 +861,42 @@ function DashboardPage() {
     }
 
     if (currentStep < stepTitles.length - 1) {
-      setCurrentStep((prev) => prev + 1)
-      window.scrollTo({ top: 0, behavior: 'smooth' })
+      // Completing a step is a natural checkpoint: sync it now rather than waiting
+      // out the debounce, so an abandoned application is still resumable up to the
+      // last step the applicant finished. Fire-and-forget — never block navigation.
+      flushRemoteDraft()
+      // Pushed, not replaced, so browser Back returns to the previous step
+      // rather than abandoning the application.
+      navigateToStep(selectedLoanType, currentStep + 1)
     }
   }
 
   const handleBack = () => {
     if (currentStep > 0) {
-      setCurrentStep((prev) => prev - 1)
-      window.scrollTo({ top: 0, behavior: 'smooth' })
+      navigateToStep(selectedLoanType, currentStep - 1)
     } else {
       navigate('/')
     }
   }
 
-  const goToStep = (stepIndex) => {
-    setCurrentStep(stepIndex)
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+  const goToStep = (index) => {
+    navigateToStep(selectedLoanType, index)
+  }
+
+  const [exiting, setExiting] = useState(false)
+
+  const handleSaveAndExit = async () => {
+    setExiting(true)
+    try {
+      // Local first (always succeeds, instant), then push to the server so the
+      // application can be picked up on another device. Awaiting the remote call is
+      // the point: leaving used to cancel the pending sync, so nothing was stored.
+      await flushLocalDraft()
+      await flushRemoteDraft()
+    } finally {
+      setExiting(false)
+      navigate('/')
+    }
   }
 
   const handleSubmitApplication = () => {
@@ -998,13 +1093,55 @@ function DashboardPage() {
 
   const renderSummaryRow = (label, value) => <SummaryRow key={label} label={label} value={value} />
 
-  const renderSummaryCard = (title, rows, stepIndex) => (
-    <SummaryCard key={title} title={title} stepIndex={stepIndex} onEdit={goToStep}>
+  const renderSummarySection = (title, rows, stepIndex) => (
+    <SummarySection key={title} title={title} stepIndex={stepIndex} onEdit={goToStep}>
       {rows}
-    </SummaryCard>
+    </SummarySection>
   )
 
-  const fileName = (file) => (file ? file.name : 'Not uploaded')
+  /** Headline figures repeated at the top of the printed summary. */
+  const summaryHighlights = [
+    { label: 'Loan amount', value: `K${loanData.amount.toLocaleString()}` },
+    { label: 'Tenure', value: `${loanData.tenure} months` },
+    { label: 'Monthly repayment', value: `K${monthlyRepayment.toFixed(2)}` },
+    { label: 'Total repayable', value: `K${totalRepayable.toFixed(2)}` },
+  ]
+
+  const loanTermRows = [
+    renderSummaryRow('Loan amount', `K${loanData.amount.toLocaleString()}`),
+    renderSummaryRow('Tenure', `${loanData.tenure} months`),
+    renderSummaryRow('Monthly repayment', `K${monthlyRepayment.toFixed(2)}`),
+    renderSummaryRow('Interest (5% flat)', `K${(loanData.amount * interestRate).toFixed(2)}`),
+    renderSummaryRow('Facility fee', `K${facilityFee.toFixed(2)}`),
+    renderSummaryRow('Total repayable', `K${totalRepayable.toFixed(2)}`),
+  ]
+
+  const personalAttachments = [
+    { key: 'payslips', label: 'Latest three payslips', file: personalData.documents.payslips },
+    { key: 'bankStatements', label: 'Bank statements', file: personalData.documents.bankStatements },
+    { key: 'nrcCopy', label: 'NRC copy', file: personalData.documents.nrcCopy },
+    { key: 'passportPhoto', label: 'Passport photo', file: personalData.documents.passportPhoto },
+    { key: 'tpin', label: 'TPIN certificate', file: personalData.documents.tpin },
+  ]
+
+  const businessAttachments = [
+    { key: 'pacraCertificate', label: 'PACRA certificate', file: businessData.documents.pacraCertificate },
+    { key: 'form2', label: 'Form 2', file: businessData.documents.form2 },
+    { key: 'taxClearance', label: 'Tax clearance certificate / TPIN', file: businessData.documents.taxClearance },
+    {
+      key: 'latestTaxComplianceReturn',
+      label: 'Latest tax compliance return',
+      file: businessData.documents.latestTaxComplianceReturn,
+    },
+    { key: 'orderOrInvoice', label: 'Order / Invoice', file: businessData.documents.orderOrInvoice },
+    { key: 'bankStatements', label: 'Bank statements', file: businessData.documents.bankStatements },
+    { key: 'passportPhoto', label: 'Passport photo', file: businessData.documents.passportPhoto },
+    { key: 'boardResolution', label: 'Board resolution', file: businessData.documents.boardResolution },
+    ...(businessData.documents.directorUploads || []).flatMap((upload, index) => [
+      { key: `director-${index}-nrc`, label: `Director ${index + 1} NRC upload`, file: upload.nrc },
+      { key: `director-${index}-photo`, label: `Director ${index + 1} passport photo`, file: upload.passportPhoto },
+    ]),
+  ]
 
   // ---------------------------------------------------------------------------
   // Steps
@@ -1048,7 +1185,7 @@ function DashboardPage() {
         }, 'number', 'e.g. 6', { min: 1, max: 36 }, true)}
       </FieldGroup>
 
-      <div className="xl:sticky xl:top-24 xl:self-start">
+      <div className="xl:sticky xl:top-8 xl:self-start">
         <div className="rounded-lg border bg-card p-6 shadow-soft">
           <div className="flex items-center gap-3 border-b border-border pb-4">
             <span className="grid size-9 shrink-0 place-items-center rounded-md bg-accent text-accent-foreground">
@@ -1082,13 +1219,28 @@ function DashboardPage() {
     </div>
   )
 
+  const overviewIntro = (
+    <div className="flex flex-wrap items-center justify-between gap-3 print:hidden">
+      <p className="text-sm text-muted-foreground">
+        Please review your details below before submitting. Use Edit to change a section, or Preview to check an
+        attachment.
+      </p>
+      <Button type="button" variant="outline" size="sm" onClick={() => window.print()}>
+        <Printer />
+        Print / Save as PDF
+      </Button>
+    </div>
+  )
+
+  const generatedOn = dayjs().format('D MMMM YYYY')
+
   const renderPersonalOverview = () => (
     <div className="grid gap-6">
-      <p className="text-sm text-muted-foreground">
-        Please review your details below before submitting your application. Use the Edit button to change a section.
-      </p>
-      <div className="grid gap-6 xl:grid-cols-2">
-        {renderSummaryCard('Personal information', [
+      {overviewIntro}
+      <ApplicationSummary loanTypeLabel="Personal Loan" generatedOn={generatedOn}>
+        <div className="grid gap-5 pt-5">
+          <SummaryHighlights items={summaryHighlights} />
+          {renderSummarySection('Personal information', [
           renderSummaryRow('Full name', [personalData.personalInfo.firstName, personalData.personalInfo.middleName, personalData.personalInfo.surname].filter(Boolean).join(' ')),
           renderSummaryRow('Phone', personalData.personalInfo.phone),
           renderSummaryRow('Email', personalData.personalInfo.email),
@@ -1097,7 +1249,7 @@ function DashboardPage() {
           renderSummaryRow('Marital status', personalData.personalInfo.maritalStatus),
           renderSummaryRow('Birth date', personalData.personalInfo.birthDate),
         ], 0)}
-        {renderSummaryCard('Residence & Employment', [
+          {renderSummarySection('Residence & Employment', [
           renderSummaryRow('Residential address', personalData.employmentInfo.residentialAddress),
           renderSummaryRow('Occupation', personalData.employmentInfo.occupation),
           renderSummaryRow('Employer name', personalData.employmentInfo.employerName),
@@ -1108,33 +1260,24 @@ function DashboardPage() {
           renderSummaryRow('Next of kin email', personalData.employmentInfo.nextOfKinEmail),
           renderSummaryRow('Relationship', personalData.employmentInfo.nextOfKinRelationship),
         ], 1)}
-        {renderSummaryCard('Documents', [
-          renderSummaryRow('Latest three payslips', fileName(personalData.documents.payslips)),
-          renderSummaryRow('Bank statements', fileName(personalData.documents.bankStatements)),
-          renderSummaryRow('NRC copy', fileName(personalData.documents.nrcCopy)),
-          renderSummaryRow('Passport photo', fileName(personalData.documents.passportPhoto)),
-          renderSummaryRow('TPIN certificate', fileName(personalData.documents.tpin)),
-        ], 2)}
-        {renderSummaryCard('Loan terms', [
-          renderSummaryRow('Loan amount', `K${loanData.amount.toLocaleString()}`),
-          renderSummaryRow('Tenure', `${loanData.tenure} months`),
-          renderSummaryRow('Monthly repayment', `K${monthlyRepayment.toFixed(2)}`),
-          renderSummaryRow('Facility fee', `K${facilityFee.toFixed(2)}`),
-          renderSummaryRow('Total repayable', `K${totalRepayable.toFixed(2)}`),
-        ], 3)}
-      </div>
+
+          <SummarySection title="Documents" stepIndex={2} onEdit={goToStep} plain>
+            <AttachmentList attachments={personalAttachments} onPreview={setPreviewAttachment} />
+          </SummarySection>
+
+          {renderSummarySection('Loan terms', loanTermRows, 3)}
+        </div>
+      </ApplicationSummary>
     </div>
   )
 
-  const renderBusinessOverview = () => {
-    const directorUploads = businessData.documents.directorUploads || []
-    return (
-      <div className="grid gap-6">
-        <p className="text-sm text-muted-foreground">
-          Please review your details below before submitting your application. Use the Edit button to change a section.
-        </p>
-        <div className="grid gap-6 xl:grid-cols-2">
-          {renderSummaryCard('Business information', [
+  const renderBusinessOverview = () => (
+    <div className="grid gap-6">
+      {overviewIntro}
+      <ApplicationSummary loanTypeLabel="Business Loan" generatedOn={generatedOn}>
+        <div className="grid gap-5 pt-5">
+          <SummaryHighlights items={summaryHighlights} />
+          {renderSummarySection('Business information', [
             renderSummaryRow('Company name', businessData.businessInfo.companyName),
             renderSummaryRow('Type of business', businessData.businessInfo.businessType),
             renderSummaryRow('Established date', businessData.businessInfo.establishedDate),
@@ -1143,7 +1286,7 @@ function DashboardPage() {
             renderSummaryRow('Collateral pledged', businessData.businessInfo.collateralPledged),
             renderSummaryRow('Purpose of loan', businessData.businessInfo.purposeOfLoan),
           ], 0)}
-          {renderSummaryCard('Applicant', [
+          {renderSummarySection('Applicant', [
             renderSummaryRow('Full name', [businessData.directorInfo.applicantFirstName, businessData.directorInfo.applicantMiddleName, businessData.directorInfo.applicantLastName].filter(Boolean).join(' ')),
             renderSummaryRow('Phone', businessData.directorInfo.applicantPhone),
             renderSummaryRow('Email', businessData.directorInfo.applicantEmail),
@@ -1156,7 +1299,7 @@ function DashboardPage() {
             renderSummaryRow('Nationality', businessData.directorInfo.applicantNationality),
             renderSummaryRow('Next of kin relationship', businessData.directorInfo.nextOfKinRelationship),
           ], 1)}
-          {renderSummaryCard(
+          {renderSummarySection(
             'Directors',
             businessData.directorInfo.directors.flatMap((director, index) => [
               renderSummaryRow(`Director ${index + 1} name`, director.name),
@@ -1166,31 +1309,16 @@ function DashboardPage() {
             ]),
             1
           )}
-          {renderSummaryCard('Documents', [
-            renderSummaryRow('PACRA certificate', fileName(businessData.documents.pacraCertificate)),
-            renderSummaryRow('Form 2', fileName(businessData.documents.form2)),
-            renderSummaryRow('Tax clearance certificate / TPIN', fileName(businessData.documents.taxClearance)),
-            renderSummaryRow('Latest tax compliance return', fileName(businessData.documents.latestTaxComplianceReturn)),
-            renderSummaryRow('Order / Invoice', fileName(businessData.documents.orderOrInvoice)),
-            renderSummaryRow('Bank statements', fileName(businessData.documents.bankStatements)),
-            renderSummaryRow('Passport photo', fileName(businessData.documents.passportPhoto)),
-            renderSummaryRow('Board resolution', fileName(businessData.documents.boardResolution)),
-            ...directorUploads.flatMap((upload, index) => [
-              renderSummaryRow(`Director ${index + 1} NRC upload`, fileName(upload.nrc)),
-              renderSummaryRow(`Director ${index + 1} passport photo`, fileName(upload.passportPhoto)),
-            ]),
-          ], 2)}
-          {renderSummaryCard('Loan terms', [
-            renderSummaryRow('Loan amount', `K${loanData.amount.toLocaleString()}`),
-            renderSummaryRow('Tenure', `${loanData.tenure} months`),
-            renderSummaryRow('Monthly repayment', `K${monthlyRepayment.toFixed(2)}`),
-            renderSummaryRow('Facility fee', `K${facilityFee.toFixed(2)}`),
-            renderSummaryRow('Total repayable', `K${totalRepayable.toFixed(2)}`),
-          ], 3)}
+
+          <SummarySection title="Documents" stepIndex={2} onEdit={goToStep} plain>
+            <AttachmentList attachments={businessAttachments} onPreview={setPreviewAttachment} />
+          </SummarySection>
+
+          {renderSummarySection('Loan terms', loanTermRows, 3)}
         </div>
-      </div>
-    )
-  }
+      </ApplicationSummary>
+    </div>
+  )
 
   const renderStepContent = () => {
     if (selectedLoanType === 'personal') {
@@ -1443,23 +1571,29 @@ function DashboardPage() {
 
   return (
     <div className="flex min-h-screen flex-col bg-secondary/30">
-      <Header />
-
       <main className="container flex-1 py-8">
         <div className="mx-auto max-w-6xl">
-          <div className="flex flex-wrap items-center gap-3">
-            <Badge variant="accent">
-              {selectedLoanType === 'personal' ? 'Personal loan' : 'Business loan'}
-            </Badge>
-            <span className="text-sm text-muted-foreground">
-              Step {currentStep + 1} of {stepTitles.length}
-            </span>
+          {/* No site chrome on the wizard — a single deliberate exit lives here,
+              and it flushes the draft before leaving so the label is accurate. */}
+          <div className="flex flex-wrap items-center justify-between gap-3 print:hidden">
+            <div className="flex flex-wrap items-center gap-3">
+              <Badge variant="accent">
+                {selectedLoanType === 'personal' ? 'Personal loan' : 'Business loan'}
+              </Badge>
+              <span className="text-sm text-muted-foreground">
+                Step {currentStep + 1} of {stepTitles.length}
+              </span>
+            </div>
+            <Button type="button" variant="ghost" size="sm" onClick={handleSaveAndExit} disabled={exiting}>
+              {exiting ? <Loader2 className="animate-spin" /> : <LogOut />}
+              {exiting ? 'Saving…' : 'Save & exit'}
+            </Button>
           </div>
 
-          <h1 className="mt-3 text-3xl font-bold tracking-tight text-foreground sm:text-4xl">
+          <h1 className="mt-3 text-3xl font-bold tracking-tight text-foreground sm:text-4xl print:hidden">
             Apply for {selectedLoanType === 'personal' ? 'Personal' : 'Business'} Loan
           </h1>
-          <p className="mt-2 max-w-2xl text-muted-foreground">
+          <p className="mt-2 max-w-2xl text-muted-foreground print:hidden">
             {stepTitles[currentStep]} — fields marked with an asterisk are required. Your progress is saved as you go.
           </p>
 
@@ -1480,7 +1614,7 @@ function DashboardPage() {
             </div>
           ) : null}
 
-          <div className="mt-6 rounded-lg border bg-card p-5 shadow-soft sm:p-6">
+          <div className="mt-6 rounded-lg border bg-card p-5 shadow-soft sm:p-6 print:hidden">
             <StepProgress steps={stepTitles} currentStep={currentStep} onStepSelect={goToStep} />
           </div>
 
@@ -1508,11 +1642,17 @@ function DashboardPage() {
               ) : null}
             </div>
 
-            <div className="sticky bottom-0 z-10 mt-6 flex flex-col gap-3 rounded-lg border bg-background/95 p-4 shadow-lift backdrop-blur sm:flex-row sm:items-center sm:justify-between">
-              <Button type="button" variant="outline" onClick={handleBack} disabled={submitting}>
-                <ArrowLeft />
-                {currentStep === 0 ? 'Back to home' : 'Previous step'}
-              </Button>
+            <div className="sticky bottom-0 z-10 mt-6 flex flex-col gap-3 rounded-lg border bg-background/95 p-4 shadow-lift backdrop-blur sm:flex-row sm:items-center sm:justify-between print:hidden">
+              {/* Step 0 has nothing to go back to, and leaving is already offered
+                  once by "Save & exit" above — so no duplicate exit down here. */}
+              {currentStep > 0 ? (
+                <Button type="button" variant="outline" onClick={handleBack} disabled={submitting}>
+                  <ArrowLeft />
+                  Previous step
+                </Button>
+              ) : (
+                <span className="hidden sm:block" aria-hidden="true" />
+              )}
 
               {!isFinalStep ? (
                 <Button type="submit">
@@ -1530,10 +1670,18 @@ function DashboardPage() {
         </div>
       </main>
 
-      <footer className="flex items-center justify-center gap-2 pb-6 pt-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+      <footer className="flex items-center justify-center gap-2 pb-6 pt-2 text-[10px] font-semibold uppercase tracking-[0.18em] text-muted-foreground print:hidden">
         <span>Powered by</span>
         <img src={footerLogo} alt="Powered by Izyane" className="h-5 w-auto object-contain" />
       </footer>
+
+      <DocumentPreviewDialog
+        open={Boolean(previewAttachment)}
+        onOpenChange={(open) => {
+          if (!open) setPreviewAttachment(null)
+        }}
+        attachment={previewAttachment}
+      />
 
       <Dialog open={showCameraCapture} onOpenChange={setShowCameraCapture}>
         <DialogContent>

@@ -90,36 +90,54 @@ export function useApplicationDraft({
     return () => clearTimeout(localSaveTimer.current)
   }, [selectedLoanType, currentStep, personalData, businessData, loanData, draftToken])
 
-  useEffect(() => {
-    const email = getEmail(selectedLoanType, personalData, businessData)
-    if (!email || !EMAIL_PATTERN.test(email)) return
+  const syncEmail = getEmail(selectedLoanType, personalData, businessData)
+  const canSyncRemotely = Boolean(syncEmail) && EMAIL_PATTERN.test(syncEmail || '')
 
+  /**
+   * Pushes the draft to the server immediately, cancelling any pending debounce.
+   *
+   * Exposed so explicit checkpoints — leaving via "Save & exit", finishing a step —
+   * can guarantee a server-side copy exists. Relying on the debounce alone meant a
+   * draft that was only ever edited within the last few seconds was cancelled by the
+   * effect cleanup on unmount, so nothing was ever stored and cross-device resume
+   * reported no application found.
+   */
+  const flushRemoteDraft = useCallback(async () => {
+    if (!canSyncRemotely) return null
     clearTimeout(remoteSaveTimer.current)
-    remoteSaveTimer.current = setTimeout(async () => {
-      // File objects have no enumerable properties, so JSON.stringify would silently
-      // collapse each attached document to `{}` — sanitize to the same __draftFile__
-      // placeholders the local cache uses, so hydrateDraftFiles can re-attach them on resume.
-      const payload = {
-        loanType: selectedLoanType,
-        currentStep,
-        personalData: extractFiles(personalData, 'personal').sanitized,
-        businessData: extractFiles(businessData, 'business').sanitized,
-        loanData,
+
+    // File objects have no enumerable properties, so JSON.stringify would silently
+    // collapse each attached document to `{}` — sanitize to the same __draftFile__
+    // placeholders the local cache uses, so hydrateDraftFiles can re-attach them on resume.
+    const payload = {
+      loanType: selectedLoanType,
+      currentStep,
+      personalData: extractFiles(personalData, 'personal').sanitized,
+      businessData: extractFiles(businessData, 'business').sanitized,
+      loanData,
+    }
+
+    try {
+      if (!draftToken) {
+        const result = await createDraft({ email: syncEmail, ...payload })
+        setDraftToken(result.draftToken)
+        return result.draftToken
       }
-      try {
-        if (!draftToken) {
-          const result = await createDraft({ email, ...payload })
-          setDraftToken(result.draftToken)
-        } else {
-          await updateDraft(draftToken, payload)
-        }
-      } catch {
-        // Best-effort background sync — the local cache already has the data,
-        // so a flaky network here doesn't lose anything for the same-device case.
-      }
-    }, REMOTE_SAVE_DEBOUNCE_MS)
+      await updateDraft(draftToken, payload)
+      return draftToken
+    } catch {
+      // Best-effort sync — the local cache already has the data, so a flaky network
+      // here doesn't lose anything for the same-device case.
+      return null
+    }
+  }, [canSyncRemotely, syncEmail, selectedLoanType, currentStep, personalData, businessData, loanData, draftToken])
+
+  useEffect(() => {
+    if (!canSyncRemotely) return undefined
+    clearTimeout(remoteSaveTimer.current)
+    remoteSaveTimer.current = setTimeout(flushRemoteDraft, REMOTE_SAVE_DEBOUNCE_MS)
     return () => clearTimeout(remoteSaveTimer.current)
-  }, [selectedLoanType, currentStep, personalData, businessData, loanData, draftToken])
+  }, [canSyncRemotely, flushRemoteDraft])
 
   useEffect(() => {
     if (!draftToken) return
@@ -137,6 +155,22 @@ export function useApplicationDraft({
     })
   }, [draftToken, selectedLoanType, personalData, businessData])
 
+  // Writes the local cache immediately instead of waiting out the debounce.
+  // Used by "Save & exit" so the label is literally true — without this, keystrokes
+  // from the last 800ms would be lost on the way out.
+  const flushLocalDraft = useCallback(
+    () =>
+      saveLocalDraft({
+        loanType: selectedLoanType,
+        currentStep,
+        personalData,
+        businessData,
+        loanData,
+        draftToken,
+      }),
+    [selectedLoanType, currentStep, personalData, businessData, loanData, draftToken]
+  )
+
   const clearDraft = useCallback(async () => {
     const token = draftToken
     setDraftToken(null)
@@ -147,5 +181,14 @@ export function useApplicationDraft({
     }
   }, [draftToken])
 
-  return { localDraftSummary, resumeLocalDraft, startFresh, hydrateFrom, clearDraft }
+  return {
+    localDraftSummary,
+    resumeLocalDraft,
+    startFresh,
+    hydrateFrom,
+    clearDraft,
+    flushLocalDraft,
+    flushRemoteDraft,
+    canSyncRemotely,
+  }
 }
