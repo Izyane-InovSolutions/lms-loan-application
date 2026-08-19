@@ -253,6 +253,8 @@ function DashboardPage() {
     clearDraft,
     flushLocalDraft,
     flushRemoteDraft,
+    canSyncRemotely,
+    remoteSyncError,
   } = useApplicationDraft({
     selectedLoanType,
     currentStep,
@@ -895,10 +897,14 @@ function DashboardPage() {
       // application can be picked up on another device. Awaiting the remote call is
       // the point: leaving used to cancel the pending sync, so nothing was stored.
       await flushLocalDraft()
-      await flushRemoteDraft()
+      const synced = await flushRemoteDraft()
+      // Staying put on a failed sync is deliberate: the banner explains the draft
+      // only exists on this device, so the applicant can retry rather than discover
+      // on their phone that the application is unreachable.
+      if (canSyncRemotely && !synced) return
+      navigate('/')
     } finally {
       setExiting(false)
-      navigate('/')
     }
   }
 
@@ -1599,6 +1605,16 @@ function DashboardPage() {
           <p className="mt-2 max-w-2xl text-muted-foreground print:hidden">
             {stepTitles[currentStep]} — fields marked with an asterisk are required. Your progress is saved as you go.
           </p>
+
+          {remoteSyncError ? (
+            <div
+              role="alert"
+              className="mt-6 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm font-medium text-destructive print:hidden"
+            >
+              Your progress is saved on this device, but we couldn’t sync it to your account ({remoteSyncError}) — until
+              it syncs, this application won’t be available if you resume on another device.
+            </div>
+          ) : null}
 
           {localDraftSummary ? (
             <div className="mt-6 flex flex-col gap-3 rounded-lg border border-primary/25 bg-accent/60 p-4 sm:flex-row sm:items-center sm:justify-between">
