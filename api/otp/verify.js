@@ -36,6 +36,16 @@ export default async function handler(req, res) {
 
   const draft = await kv.get(`draft:${email}`)
   if (!draft) {
+    // TEMPORARY diagnostic — remove once the resume misses are explained. The draft
+    // writes return 200 while this read returns nothing, so the open question is only
+    // whether both sides agree on the key. Printing the key looked up alongside the
+    // keys that actually exist answers that in a single request.
+    try {
+      const [, keys] = await kv.scan(0, { match: 'draft:*', count: 100 })
+      console.warn('[resume] draft miss', { lookedUp: `draft:${email}`, existing: keys })
+    } catch (error) {
+      console.warn('[resume] draft miss; scan failed', { lookedUp: `draft:${email}`, error: error?.message })
+    }
     return res.status(404).json({ message: 'No in-progress application found for this email.' })
   }
 

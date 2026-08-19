@@ -45,6 +45,10 @@ export default async function handler(req, res) {
     const token = generateToken()
     await kv.set(`draftToken:${token}`, email, { ex: DRAFT_TTL_SECONDS })
 
+    // TEMPORARY diagnostic — pairs with the miss log in otp/verify.js so the key the
+    // draft is stored under can be compared against the key resume looks up.
+    console.log('[resume] draft stored', { key: `draft:${email}` })
+
     return res.status(200).json({ draftToken: token, draft })
   }
 
