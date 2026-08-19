@@ -14,6 +14,16 @@ const REMOTE_SAVE_DEBOUNCE_MS = 5000
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 const RETRY_DELAYS_MS = [1000, 3000]
 
+// No status at all means the request never got an answer (offline, DNS, timeout) —
+// the transient case worth repeating. A 4xx is a verdict on this specific request
+// (file too large, bad token, no draft) and will fail identically however often it
+// is sent, so repeating it just triples the noise and delays the error the applicant
+// needs to see.
+const isRetryable = (error) => {
+  const status = error?.response?.status
+  return status === undefined || status >= 500
+}
+
 // Upstash is reached over HTTP, so a cold start, rate limit or dropped connection
 // fails the whole write rather than queueing it. Retrying twice turns the common
 // transient case back into a successful sync instead of a missing server copy.
@@ -22,7 +32,7 @@ const withRetry = async (operation) => {
     try {
       return await operation()
     } catch (error) {
-      if (attempt >= RETRY_DELAYS_MS.length) throw error
+      if (attempt >= RETRY_DELAYS_MS.length || !isRetryable(error)) throw error
       await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attempt]))
     }
   }
@@ -53,7 +63,11 @@ export function useApplicationDraft({
 }) {
   const [localDraftSummary, setLocalDraftSummary] = useState(null)
   const [draftToken, setDraftToken] = useState(null)
+  // Kept apart from remoteSyncError on purpose: a failed attachment upload leaves the
+  // draft itself perfectly resumable, so warning that the whole application is
+  // unreachable would be false. Only the documents are missing.
   const [remoteSyncError, setRemoteSyncError] = useState(null)
+  const [documentSyncError, setDocumentSyncError] = useState(null)
   const uploadedSignaturesRef = useRef(new Map())
   const localSaveTimer = useRef(null)
   const remoteSaveTimer = useRef(null)
@@ -87,6 +101,7 @@ export function useApplicationDraft({
     setLocalDraftSummary(null)
     setDraftToken(null)
     setRemoteSyncError(null)
+    setDocumentSyncError(null)
     clearLocalDraft()
   }, [])
 
@@ -180,11 +195,13 @@ export function useApplicationDraft({
       const signature = fileSignature(file)
       if (uploadedSignaturesRef.current.get(path) === signature) return
       uploadedSignaturesRef.current.set(path, signature)
-      withRetry(() => uploadDraftDocument(draftToken, path, file)).catch((error) => {
-        console.error(`Draft document upload failed for ${path}`, error)
-        uploadedSignaturesRef.current.delete(path)
-        setRemoteSyncError('Some attached documents could not be saved to your online draft.')
-      })
+      withRetry(() => uploadDraftDocument(draftToken, path, file))
+        .then(() => setDocumentSyncError(null))
+        .catch((error) => {
+          console.error(`Draft document upload failed for ${path}`, error)
+          uploadedSignaturesRef.current.delete(path)
+          setDocumentSyncError(extractDraftErrorMessage(error))
+        })
     })
   }, [draftToken, selectedLoanType, personalData, businessData])
 
@@ -208,6 +225,7 @@ export function useApplicationDraft({
     const token = draftToken
     setDraftToken(null)
     setRemoteSyncError(null)
+    setDocumentSyncError(null)
     uploadedSignaturesRef.current.clear()
     await clearLocalDraft()
     if (token) {
@@ -225,5 +243,6 @@ export function useApplicationDraft({
     flushRemoteDraft,
     canSyncRemotely,
     remoteSyncError,
+    documentSyncError,
   }
 }
