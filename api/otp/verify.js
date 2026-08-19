@@ -32,8 +32,6 @@ export default async function handler(req, res) {
     return res.status(400).json({ message: 'The code entered is incorrect.' })
   }
 
-  await kv.del(otpKey)
-
   const draft = await kv.get(`draft:${email}`)
   if (!draft) {
     // TEMPORARY diagnostic — remove once the resume misses are explained. The draft
@@ -41,13 +39,29 @@ export default async function handler(req, res) {
     // whether both sides agree on the key. Printing the key looked up alongside the
     // keys that actually exist answers that in a single request.
     try {
-      const [, keys] = await kv.scan(0, { match: 'draft:*', count: 100 })
-      console.warn('[resume] draft miss', { lookedUp: `draft:${email}`, existing: keys })
+      // SCAN applies COUNT before MATCH, so one pass only inspects the first slice of
+      // the keyspace — with draftToken:* and otp:* sharing the store that silently
+      // truncated the list and made it look like drafts were missing that were not.
+      // Iterate to cursor 0 so the output is actually the full set.
+      const keys = []
+      let cursor = 0
+      do {
+        const [next, batch] = await kv.scan(cursor, { match: 'draft:*', count: 500 })
+        cursor = Number(next)
+        keys.push(...batch)
+      } while (cursor !== 0 && keys.length < 500)
+      console.warn('[resume] draft miss', { lookedUp: `draft:${email}`, existing: keys.sort() })
     } catch (error) {
       console.warn('[resume] draft miss; scan failed', { lookedUp: `draft:${email}`, error: error?.message })
     }
     return res.status(404).json({ message: 'No in-progress application found for this email.' })
   }
+
+  // Consumed only now that the resume is certain to succeed. Burning the code before
+  // the draft lookup meant a miss returned "no in-progress application found", and the
+  // retry of that same still-valid code then reported "that code has expired" — two
+  // different errors for one problem, with a fresh code needed after every attempt.
+  await kv.del(otpKey)
 
   const token = generateToken()
   await kv.set(`draftToken:${token}`, email, { ex: DRAFT_TTL_SECONDS })
