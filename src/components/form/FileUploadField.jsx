@@ -13,7 +13,7 @@ const formatBytes = (bytes) => {
 
 /** Derives the human hint from the accept string, mirroring the validators. */
 const acceptHint = (accept) =>
-  accept?.includes('image') ? 'PDF, JPG or PNG · up to 3 MB' : 'PDF only · up to 5 MB'
+  accept?.includes('image') ? 'PDF, JPG or PNG · up to 3 MB' : 'PDF only · up to 4 MB'
 
 /**
  * Document upload control.
