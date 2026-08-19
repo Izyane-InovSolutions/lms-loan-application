@@ -9,6 +9,15 @@ const pickDraftFields = (body) => {
   return { loanType, currentStep, personalData, businessData, loanData }
 }
 
+// The draft is keyed by email so the OTP flow can find it, but the email lives in the
+// form and stays editable. Mirrors getEmail() in useApplicationDraft.js.
+const emailFromBody = (body) =>
+  normalizeEmail(
+    body?.loanType === 'personal'
+      ? body?.personalData?.personalInfo?.email
+      : body?.businessData?.directorInfo?.applicantEmail
+  )
+
 const resolveTokenAuth = async (req) => {
   const auth = req.headers.authorization || ''
   const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : null
@@ -54,6 +63,21 @@ export default async function handler(req, res) {
       ...pickDraftFields(req.body),
       savedAt: Date.now(),
     }
+
+    // Correcting the email mid-application used to strand the draft: the token still
+    // resolved to the address captured at creation, so every later save landed on the
+    // old key and `draft:<new address>` never existed. Resuming with the address the
+    // applicant actually typed then reported "no in-progress application found",
+    // permanently, for that application only — which is why some resumed and some did
+    // not. Move the record so the key tracks the current address.
+    const nextEmail = emailFromBody(req.body)
+    if (nextEmail && nextEmail !== tokenAuth.email) {
+      await kv.set(`draft:${nextEmail}`, draft, { ex: DRAFT_TTL_SECONDS })
+      await kv.set(`draftToken:${tokenAuth.token}`, nextEmail, { ex: DRAFT_TTL_SECONDS })
+      await kv.del(`draft:${tokenAuth.email}`)
+      return res.status(200).json({ draft })
+    }
+
     await kv.set(`draft:${tokenAuth.email}`, draft, { ex: DRAFT_TTL_SECONDS })
     await kv.expire(`draftToken:${tokenAuth.token}`, DRAFT_TTL_SECONDS)
     return res.status(200).json({ draft })

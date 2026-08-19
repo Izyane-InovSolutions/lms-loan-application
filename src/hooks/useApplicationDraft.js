@@ -1,11 +1,32 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { extractFiles } from '../utils/fileTree'
 import { saveLocalDraft, loadLocalDraft, clearLocalDraft } from '../utils/localDraftStore'
-import { createDraft, updateDraft, deleteDraft, uploadDraftDocument } from '../services/draftApi'
+import {
+  createDraft,
+  updateDraft,
+  deleteDraft,
+  uploadDraftDocument,
+  extractDraftErrorMessage,
+} from '../services/draftApi'
 
 const LOCAL_SAVE_DEBOUNCE_MS = 800
 const REMOTE_SAVE_DEBOUNCE_MS = 5000
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+const RETRY_DELAYS_MS = [1000, 3000]
+
+// Upstash is reached over HTTP, so a cold start, rate limit or dropped connection
+// fails the whole write rather than queueing it. Retrying twice turns the common
+// transient case back into a successful sync instead of a missing server copy.
+const withRetry = async (operation) => {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await operation()
+    } catch (error) {
+      if (attempt >= RETRY_DELAYS_MS.length) throw error
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAYS_MS[attempt]))
+    }
+  }
+}
 
 const getEmail = (loanType, personalData, businessData) =>
   loanType === 'personal'
@@ -32,6 +53,7 @@ export function useApplicationDraft({
 }) {
   const [localDraftSummary, setLocalDraftSummary] = useState(null)
   const [draftToken, setDraftToken] = useState(null)
+  const [remoteSyncError, setRemoteSyncError] = useState(null)
   const uploadedSignaturesRef = useRef(new Map())
   const localSaveTimer = useRef(null)
   const remoteSaveTimer = useRef(null)
@@ -64,6 +86,7 @@ export function useApplicationDraft({
   const startFresh = useCallback(() => {
     setLocalDraftSummary(null)
     setDraftToken(null)
+    setRemoteSyncError(null)
     clearLocalDraft()
   }, [])
 
@@ -118,16 +141,24 @@ export function useApplicationDraft({
     }
 
     try {
-      if (!draftToken) {
-        const result = await createDraft({ email: syncEmail, ...payload })
-        setDraftToken(result.draftToken)
-        return result.draftToken
-      }
-      await updateDraft(draftToken, payload)
-      return draftToken
-    } catch {
-      // Best-effort sync — the local cache already has the data, so a flaky network
-      // here doesn't lose anything for the same-device case.
+      const token = await withRetry(async () => {
+        if (!draftToken) {
+          const result = await createDraft({ email: syncEmail, ...payload })
+          return result.draftToken
+        }
+        await updateDraft(draftToken, payload)
+        return draftToken
+      })
+      if (token !== draftToken) setDraftToken(token)
+      setRemoteSyncError(null)
+      return token
+    } catch (error) {
+      // Not best-effort: otp/verify.js resolves a cross-device resume from the server
+      // copy alone, so a write that never lands is reported to the applicant as "no
+      // in-progress application found" even though their own device still shows it.
+      // Swallowing this silently is what made that look like Redis dropping records.
+      console.error('Draft sync failed', error)
+      setRemoteSyncError(extractDraftErrorMessage(error))
       return null
     }
   }, [canSyncRemotely, syncEmail, selectedLoanType, currentStep, personalData, businessData, loanData, draftToken])
@@ -149,8 +180,10 @@ export function useApplicationDraft({
       const signature = fileSignature(file)
       if (uploadedSignaturesRef.current.get(path) === signature) return
       uploadedSignaturesRef.current.set(path, signature)
-      uploadDraftDocument(draftToken, path, file).catch(() => {
+      withRetry(() => uploadDraftDocument(draftToken, path, file)).catch((error) => {
+        console.error(`Draft document upload failed for ${path}`, error)
         uploadedSignaturesRef.current.delete(path)
+        setRemoteSyncError('Some attached documents could not be saved to your online draft.')
       })
     })
   }, [draftToken, selectedLoanType, personalData, businessData])
@@ -174,6 +207,7 @@ export function useApplicationDraft({
   const clearDraft = useCallback(async () => {
     const token = draftToken
     setDraftToken(null)
+    setRemoteSyncError(null)
     uploadedSignaturesRef.current.clear()
     await clearLocalDraft()
     if (token) {
@@ -190,5 +224,6 @@ export function useApplicationDraft({
     flushLocalDraft,
     flushRemoteDraft,
     canSyncRemotely,
+    remoteSyncError,
   }
 }

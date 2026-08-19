@@ -47,6 +47,17 @@ export const sanitizePathname = (pathname) => {
 const putVercel = (pathname, data, options) =>
   vercelPut(pathname, data, { access: 'public', addRandomSuffix: true, ...options })
 
+// Same trap as the KV fallback in kv.js: on Vercel the bundle directory is read-only,
+// so putLocal fails every upload with `ENOENT ... mkdir '/var/task/.local-blob'` — a
+// filesystem error that reads like a bug in the upload handler rather than a missing
+// store. Name the actual cause instead of silently degrading to a dev-only code path.
+const throwUnconfigured = () => {
+  throw new Error(
+    'No Blob store is configured for this deployment. Add a Blob store (Vercel dashboard ' +
+      '→ Storage) and link it to this project so BLOB_READ_WRITE_TOKEN is injected.'
+  )
+}
+
 // Local dev fallback (no BLOB_READ_WRITE_TOKEN configured): write to disk and serve
 // via the /local-blob/* static middleware registered in vite.config.js.
 const putLocal = async (pathname, data) => {
@@ -66,7 +77,9 @@ const delLocal = async (urls) => {
 
 export const putBlob = (pathname, data, options = {}) => {
   const safePathname = sanitizePathname(pathname)
-  return hasVercelBlob ? putVercel(safePathname, data, options) : putLocal(safePathname, data)
+  if (hasVercelBlob) return putVercel(safePathname, data, options)
+  if (process.env.VERCEL) return throwUnconfigured()
+  return putLocal(safePathname, data)
 }
 
 export const deleteBlobsForDraft = async (draft) => {
@@ -76,7 +89,7 @@ export const deleteBlobsForDraft = async (draft) => {
   if (!urls.length) return
   if (hasVercelBlob) {
     await vercelDel(urls)
-  } else {
+  } else if (!process.env.VERCEL) {
     await delLocal(urls)
   }
 }
