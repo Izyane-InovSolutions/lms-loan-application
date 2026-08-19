@@ -3,6 +3,10 @@ import { deleteBlobsForDraft } from '../_lib/blob.js'
 import { normalizeEmail, generateToken } from '../_lib/token.js'
 
 const DRAFT_TTL_SECONDS = 7 * 24 * 60 * 60
+// Each alias is a full copy written on every save, so the list is capped rather than
+// growing once per edit to the email field. Keeping the most recent few covers the
+// realistic case (a typo corrected once or twice) without unbounded writes.
+const MAX_DRAFT_ALIASES = 5
 
 const pickDraftFields = (body) => {
   const { loanType, currentStep, personalData, businessData, loanData } = body || {}
@@ -68,22 +72,21 @@ export default async function handler(req, res) {
       savedAt: Date.now(),
     }
 
-    // Correcting the email mid-application used to strand the draft: the token still
-    // resolved to the address captured at creation, so every later save landed on the
-    // old key and `draft:<new address>` never existed. Resuming with the address the
-    // applicant actually typed then reported "no in-progress application found",
-    // permanently, for that application only — which is why some resumed and some did
-    // not. Move the record so the key tracks the current address.
-    const nextEmail = emailFromBody(req.body)
-    if (nextEmail && nextEmail !== tokenAuth.email) {
-      await kv.set(`draft:${nextEmail}`, draft, { ex: DRAFT_TTL_SECONDS })
-      await kv.set(`draftToken:${tokenAuth.token}`, nextEmail, { ex: DRAFT_TTL_SECONDS })
-      await kv.del(`draft:${tokenAuth.email}`)
-      return res.status(200).json({ draft })
-    }
+    // The draft is keyed by an address the applicant can still edit, so correcting a
+    // typo mid-application changes where it belongs. Every address used so far is kept
+    // pointing at the current record: resume then works with whichever one they enter,
+    // and no key is ever deleted — an earlier version of this moved the record and
+    // removed the old key, which silently destroyed drafts mid-session.
+    const nextEmail = emailFromBody(req.body) || tokenAuth.email
+    const keys = [...new Set([...(existing.aliases || []), tokenAuth.email, nextEmail])].slice(-MAX_DRAFT_ALIASES)
+    draft.aliases = keys
 
-    await kv.set(`draft:${tokenAuth.email}`, draft, { ex: DRAFT_TTL_SECONDS })
-    await kv.expire(`draftToken:${tokenAuth.token}`, DRAFT_TTL_SECONDS)
+    await Promise.all(keys.map((key) => kv.set(`draft:${key}`, draft, { ex: DRAFT_TTL_SECONDS })))
+    await kv.set(`draftToken:${tokenAuth.token}`, nextEmail, { ex: DRAFT_TTL_SECONDS })
+
+    if (nextEmail !== tokenAuth.email) {
+      console.log('[resume] draft re-keyed', { from: `draft:${tokenAuth.email}`, to: `draft:${nextEmail}` })
+    }
     return res.status(200).json({ draft })
   }
 
@@ -100,7 +103,10 @@ export default async function handler(req, res) {
     if (draft) {
       await deleteBlobsForDraft(draft)
     }
-    await kv.del(`draft:${tokenAuth.email}`)
+    // Clearing has to reach every address the record was written under, or a leftover
+    // copy would let a submitted or discarded application resume from the dead.
+    const keys = [...new Set([...(draft?.aliases || []), tokenAuth.email])]
+    await Promise.all(keys.map((key) => kv.del(`draft:${key}`)))
     await kv.del(`draftToken:${tokenAuth.token}`)
     return res.status(200).json({ message: 'Draft cleared.' })
   }
