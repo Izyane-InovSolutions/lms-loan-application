@@ -4,7 +4,10 @@ import kv from '../_lib/kv.js'
 import { putBlob } from '../_lib/blob.js'
 
 const DRAFT_TTL_SECONDS = 7 * 24 * 60 * 60
-const MAX_FILE_SIZE = 15 * 1024 * 1024
+// Vercel caps a function's request body at 4.5 MB and rejects anything larger before
+// this handler runs, so a higher limit here would be fiction. Clients validate at 4 MB
+// (see DashboardPage) — this is the backstop for anything that skips that check.
+const MAX_FILE_SIZE = 4.5 * 1024 * 1024
 
 const resolveEmailFromToken = async (req) => {
   const auth = req.headers.authorization || ''
@@ -25,7 +28,18 @@ export default async function handler(req, res) {
   }
 
   const form = formidable({ maxFileSize: MAX_FILE_SIZE })
-  const [fields, files] = await form.parse(req)
+  let fields
+  let files
+  try {
+    ;[fields, files] = await form.parse(req)
+  } catch (error) {
+    // formidable throws on an oversized or malformed upload; without this the throw
+    // surfaces as a bare 500 with no JSON body for the client to read a message from.
+    const tooLarge = error?.code === 1009 || /maxFileSize/i.test(String(error?.message))
+    return res
+      .status(tooLarge ? 413 : 400)
+      .json({ message: tooLarge ? 'That file is too large. Upload a file of 4 MB or less.' : 'Could not read the uploaded file.' })
+  }
   const fieldKey = fields.fieldKey?.[0]
   const file = files.file?.[0]
 

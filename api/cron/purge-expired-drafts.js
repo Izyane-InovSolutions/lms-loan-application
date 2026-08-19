@@ -12,6 +12,12 @@ export default async function handler(req, res) {
     }
   }
 
+  // Nothing to sweep when no Blob store is linked (local runs, or a deployment before
+  // the store is attached) — and `list` would throw on the missing token.
+  if (!process.env.BLOB_READ_WRITE_TOKEN) {
+    return res.status(200).json({ scanned: 0, deleted: 0, skipped: 'no blob store configured' })
+  }
+
   let cursor
   let deleted = 0
   let scanned = 0

@@ -365,7 +365,10 @@ function DashboardPage() {
     return age >= 18 && age <= 65
   }
 
-  const PDF_MAX_FILE_SIZE = 5 * 1024 * 1024
+  // Capped below Vercel's 4.5 MB request-body limit for serverless functions: a larger
+  // file is rejected by the platform before /api/draft/documents runs, so the applicant
+  // would get an opaque 413 instead of this message.
+  const PDF_MAX_FILE_SIZE = 4 * 1024 * 1024
   const PHOTO_MAX_FILE_SIZE = 3 * 1024 * 1024
   const isPdfFile = (file) => file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
   const isImageFile = (file) => file.type.startsWith('image/') || /\.(jpe?g|png)$/i.test(file.name)
@@ -373,7 +376,7 @@ function DashboardPage() {
   const validatePdfFile = (file) => {
     if (!file) return ''
     if (!isPdfFile(file)) return 'Not a valid format. PDF only.'
-    if (file.size > PDF_MAX_FILE_SIZE) return 'File must be 5 MB or smaller.'
+    if (file.size > PDF_MAX_FILE_SIZE) return 'File must be 4 MB or smaller.'
     return ''
   }
 
