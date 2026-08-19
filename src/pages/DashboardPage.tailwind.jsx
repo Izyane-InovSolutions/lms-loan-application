@@ -255,6 +255,7 @@ function DashboardPage() {
     flushRemoteDraft,
     canSyncRemotely,
     remoteSyncError,
+    documentSyncError,
   } = useApplicationDraft({
     selectedLoanType,
     currentStep,
@@ -1613,6 +1614,19 @@ function DashboardPage() {
             >
               Your progress is saved on this device, but we couldn’t sync it to your account ({remoteSyncError}) — until
               it syncs, this application won’t be available if you resume on another device.
+            </div>
+          ) : null}
+
+          {/* Deliberately milder than the draft-sync warning above: the application
+              itself synced, so it stays resumable — the attachments just need
+              re-uploading once the upload problem is resolved. */}
+          {documentSyncError ? (
+            <div
+              role="alert"
+              className="mt-6 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm font-medium text-destructive print:hidden"
+            >
+              Your application is saved, but some attached documents couldn’t be uploaded ({documentSyncError}). You can
+              carry on — re-attach them before submitting, or they won’t be included.
             </div>
           ) : null}
 

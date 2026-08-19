@@ -2,7 +2,11 @@ import { put as vercelPut, del as vercelDel } from '@vercel/blob'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
-const hasVercelBlob = Boolean(process.env.BLOB_READ_WRITE_TOKEN)
+// Read per call rather than once at module scope. A module-level snapshot is taken
+// when the function instance boots, which is the wrong moment if the variable is
+// marked Sensitive (absent at build time) — the snapshot captures undefined and every
+// later request reports "no Blob store" while the dashboard plainly shows one set.
+const hasVercelBlob = () => Boolean(process.env.BLOB_READ_WRITE_TOKEN)
 const LOCAL_BLOB_DIR = path.resolve(process.cwd(), '.local-blob')
 const LOCAL_BLOB_URL_PREFIX = '/local-blob/'
 
@@ -52,9 +56,14 @@ const putVercel = (pathname, data, options) =>
 // filesystem error that reads like a bug in the upload handler rather than a missing
 // store. Name the actual cause instead of silently degrading to a dev-only code path.
 const throwUnconfigured = () => {
+  // Names only, never values. Distinguishes "the variable never reached the function"
+  // (nothing listed — needs a Blob store linked, or a redeploy to pick up a variable
+  // added after this build) from "it arrived but is empty" (listed but still falsy).
+  const visible = Object.keys(process.env).filter((key) => /BLOB/i.test(key))
   throw new Error(
-    'No Blob store is configured for this deployment. Add a Blob store (Vercel dashboard ' +
-      '→ Storage) and link it to this project so BLOB_READ_WRITE_TOKEN is injected.'
+    'No Blob store is configured for this deployment. BLOB-matching variables visible to ' +
+      `this function: ${visible.join(', ') || 'none'}. Link a Blob store (Vercel dashboard ` +
+      '→ Storage) and redeploy so BLOB_READ_WRITE_TOKEN is injected at runtime.'
   )
 }
 
@@ -77,7 +86,7 @@ const delLocal = async (urls) => {
 
 export const putBlob = (pathname, data, options = {}) => {
   const safePathname = sanitizePathname(pathname)
-  if (hasVercelBlob) return putVercel(safePathname, data, options)
+  if (hasVercelBlob()) return putVercel(safePathname, data, options)
   if (process.env.VERCEL) return throwUnconfigured()
   return putLocal(safePathname, data)
 }
@@ -87,7 +96,7 @@ export const deleteBlobsForDraft = async (draft) => {
     .map((ref) => ref?.url)
     .filter(Boolean)
   if (!urls.length) return
-  if (hasVercelBlob) {
+  if (hasVercelBlob()) {
     await vercelDel(urls)
   } else if (!process.env.VERCEL) {
     await delLocal(urls)
