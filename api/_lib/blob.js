@@ -6,7 +6,11 @@ import path from 'node:path'
 // when the function instance boots, which is the wrong moment if the variable is
 // marked Sensitive (absent at build time) — the snapshot captures undefined and every
 // later request reports "no Blob store" while the dashboard plainly shows one set.
-const hasVercelBlob = () => Boolean(process.env.BLOB_READ_WRITE_TOKEN)
+// Trimmed, because a variable defined with a blank or whitespace-only value is set as
+// far as `Boolean` is concerned but useless as a credential — that reads as configured
+// here and then fails deep inside the SDK as an opaque auth error instead.
+const blobToken = () => (process.env.BLOB_READ_WRITE_TOKEN || '').trim()
+const hasVercelBlob = () => blobToken().length > 0
 const LOCAL_BLOB_DIR = path.resolve(process.cwd(), '.local-blob')
 const LOCAL_BLOB_URL_PREFIX = '/local-blob/'
 
@@ -48,22 +52,27 @@ export const sanitizePathname = (pathname) => {
 
 // Vercel Blob only supports public-access objects today; URLs are unguessable
 // (random suffix) rather than access-controlled, so treat the URL itself as the secret.
+// Token passed explicitly rather than left to the SDK's own env lookup, so the value
+// validated above is the one actually used.
 const putVercel = (pathname, data, options) =>
-  vercelPut(pathname, data, { access: 'public', addRandomSuffix: true, ...options })
+  vercelPut(pathname, data, { access: 'public', addRandomSuffix: true, token: blobToken(), ...options })
 
 // Same trap as the KV fallback in kv.js: on Vercel the bundle directory is read-only,
 // so putLocal fails every upload with `ENOENT ... mkdir '/var/task/.local-blob'` — a
 // filesystem error that reads like a bug in the upload handler rather than a missing
 // store. Name the actual cause instead of silently degrading to a dev-only code path.
 const throwUnconfigured = () => {
-  // Names only, never values. Distinguishes "the variable never reached the function"
-  // (nothing listed — needs a Blob store linked, or a redeploy to pick up a variable
-  // added after this build) from "it arrived but is empty" (listed but still falsy).
-  const visible = Object.keys(process.env).filter((key) => /BLOB/i.test(key))
+  // Length only, never the value. A name that is present but blank means something is
+  // defining it as empty — typically a manually added project variable shadowing the
+  // one the linked Blob store injects.
+  const raw = process.env.BLOB_READ_WRITE_TOKEN
   throw new Error(
-    'No Blob store is configured for this deployment. BLOB-matching variables visible to ' +
-      `this function: ${visible.join(', ') || 'none'}. Link a Blob store (Vercel dashboard ` +
-      '→ Storage) and redeploy so BLOB_READ_WRITE_TOKEN is injected at runtime.'
+    raw === undefined
+      ? 'No Blob store is configured: BLOB_READ_WRITE_TOKEN is not set for this deployment. ' +
+        'Link a Blob store (Vercel dashboard → Storage) and redeploy.'
+      : `No Blob store is configured: BLOB_READ_WRITE_TOKEN is set but blank (length ${raw.length}). ` +
+        'A Blob store is linked, so its token is being shadowed by an empty variable of the same ' +
+        'name — delete that entry under Vercel → Settings → Environment Variables and redeploy.'
   )
 }
 
@@ -97,7 +106,7 @@ export const deleteBlobsForDraft = async (draft) => {
     .filter(Boolean)
   if (!urls.length) return
   if (hasVercelBlob()) {
-    await vercelDel(urls)
+    await vercelDel(urls, { token: blobToken() })
   } else if (!process.env.VERCEL) {
     await delLocal(urls)
   }
