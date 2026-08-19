@@ -22,6 +22,14 @@
     "react/prop-types": "warn",
     "no-unused-vars": ["warn", { "argsIgnorePattern": "^_" }]
   },
+  "overrides": [
+    {
+      "files": ["src/components/**/*.jsx"],
+      "rules": {
+        "react/prop-types": "off"
+      }
+    }
+  ],
   "settings": {
     "react": {
       "version": "detect"

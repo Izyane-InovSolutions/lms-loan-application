@@ -1,58 +1,72 @@
-import React, { useState } from 'react'
+import React, { useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import Header from '../components/Header'
-import styles from '../styles/LandingPage.module.css'
+
+import { SiteHeader } from '@/components/landing/SiteHeader'
+import { Hero } from '@/components/landing/Hero'
+import { LoanProducts } from '@/components/landing/LoanProducts'
+import { HowItWorks } from '@/components/landing/HowItWorks'
+import { Requirements } from '@/components/landing/Requirements'
+import { TrustSection } from '@/components/landing/TrustSection'
+import { Faq } from '@/components/landing/Faq'
+import { CallToAction } from '@/components/landing/CallToAction'
+import { SiteFooter } from '@/components/landing/SiteFooter'
+import { ResumeApplicationDialog } from '@/components/landing/ResumeApplicationDialog'
+import { StartApplicationDialog } from '@/components/landing/StartApplicationDialog'
+import { applyPath } from '@/config/applicationSteps'
 
 function LandingPage() {
-  const [selectedType, setSelectedType] = useState('personal')
+  const [resumeOpen, setResumeOpen] = useState(false)
+  const [pendingLoanType, setPendingLoanType] = useState(null)
   const navigate = useNavigate()
 
+  // Every "apply" entry point asks for an email first so the draft can sync from
+  // the very first field; the wizard prefills it and carries on.
+  const handleApply = useCallback((type) => setPendingLoanType(type), [])
+
+  const handleStart = useCallback(
+    (email) => {
+      const type = pendingLoanType || 'personal'
+      setPendingLoanType(null)
+      navigate(applyPath(type, 0), { state: email ? { startEmail: email } : undefined })
+    },
+    [navigate, pendingLoanType]
+  )
+
+  const handleResume = useCallback(() => setResumeOpen(true), [])
+
+  const handleResumed = useCallback(
+    (draft) => {
+      navigate(applyPath(draft.loanType, draft.currentStep || 0), { state: { resumedDraft: draft } })
+    },
+    [navigate]
+  )
+
   return (
-    <div className={styles.pageShell}>
-      <Header />
+    <div className="flex min-h-screen flex-col bg-background">
+      <SiteHeader onApply={handleApply} onResume={handleResume} />
 
-      <main className={styles.pageContent}>
-        <section className={styles.heroSection}>
-          <div className={styles.heroCopy}>
-            <span className={styles.heroLabel}>TAILORED FINANCING FOR EVERY NEED</span>
-            <h1 className={styles.heroTitle}>Loan Application</h1>
-            <p className={styles.heroText}>
-              Choose between Business Loan and Personal Loan application journeys. Our streamlined process guides you through each step and helps you submit documents securely, so you can complete your request faster.
-            </p>
-
-            <div className={styles.toggleGroup}>
-              <button
-                type="button"
-                className={`${styles.toggleButton} ${selectedType === 'personal' ? styles.active : ''}`}
-                onClick={() => {
-                  setSelectedType('personal')
-                  navigate('/apply', { state: { type: 'personal' } })
-                }}
-              >
-                Personal Loan
-              </button>
-              <button
-                type="button"
-                className={`${styles.toggleButton} ${selectedType === 'business' ? styles.active : ''}`}
-                onClick={() => {
-                  setSelectedType('business')
-                  navigate('/apply', { state: { type: 'business' } })
-                }}
-              >
-                Business Loan
-              </button>
-            </div>
-          </div>
-
-          <div className={styles.imageFrame}>
-            <img
-              src="https://images.unsplash.com/photo-1522202176988-66273c2fd55f?auto=format&fit=crop&w=1500&q=80"
-              alt="Loan application illustration"
-              className={styles.heroImage}
-            />
-          </div>
-        </section>
+      <main className="flex-1">
+        <Hero onApply={handleApply} onResume={handleResume} />
+        <LoanProducts onApply={handleApply} />
+        <HowItWorks />
+        <Requirements />
+        <TrustSection />
+        <Faq />
+        <CallToAction onApply={handleApply} onResume={handleResume} />
       </main>
+
+      <SiteFooter />
+
+      <StartApplicationDialog
+        open={Boolean(pendingLoanType)}
+        onOpenChange={(open) => {
+          if (!open) setPendingLoanType(null)
+        }}
+        loanType={pendingLoanType}
+        onStart={handleStart}
+      />
+
+      <ResumeApplicationDialog open={resumeOpen} onOpenChange={setResumeOpen} onResumed={handleResumed} />
     </div>
   )
 }
