@@ -25,6 +25,10 @@ const acceptHint = (accept) =>
  * `status` is the caller's existing idle | loading | success | error state. Note
  * that nothing is transmitted at this point: files are sent when the application
  * is submitted, so the success wording is "Attached", not "Uploaded".
+ *
+ * `cameraFirst` puts the camera button on the left as the primary action (for
+ * fields like the passport photo, once a camera has been detected) while still
+ * leaving file upload available as a de-emphasized fallback link.
  */
 export function FileUploadField({
   name,
@@ -35,11 +39,12 @@ export function FileUploadField({
   error,
   status = 'idle',
   onChange,
-  allowCamera = false,
+  cameraFirst = false,
   onUseCamera,
   className,
 }) {
   const id = fieldId(name)
+  const cameraId = `${id}-camera`
   const errorId = `${id}-error`
   const hintId = `${id}-hint`
 
@@ -54,7 +59,7 @@ export function FileUploadField({
     // Without both, `truncate` on the filename can never engage and long names
     // push the card past its column.
     <div className={cn('grid min-w-0 grid-cols-1 content-start gap-2', className)}>
-      <Label htmlFor={id} className="flex items-baseline gap-1">
+      <Label htmlFor={cameraFirst ? cameraId : id} className="flex items-baseline gap-1">
         <span>{label}</span>
         {required ? (
           <span className="text-destructive" aria-hidden="true">
@@ -83,20 +88,41 @@ export function FileUploadField({
         />
 
         <div className="flex items-center gap-3">
-          <span
-            className={cn(
-              'grid size-9 shrink-0 place-items-center rounded-md',
-              isAttached ? 'bg-success/10 text-success' : error ? 'bg-destructive/10 text-destructive' : 'bg-secondary text-muted-foreground'
-            )}
-          >
-            {isBusy ? (
-              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-            ) : isAttached ? (
-              <FileText className="size-4" aria-hidden="true" />
-            ) : (
-              <UploadCloud className="size-4" aria-hidden="true" />
-            )}
-          </span>
+          {cameraFirst ? (
+            <button
+              type="button"
+              id={cameraId}
+              onClick={onUseCamera}
+              disabled={isBusy}
+              aria-describedby={error ? errorId : hintId}
+              className={cn(
+                'inline-flex shrink-0 items-center gap-1.5 rounded-md border border-input bg-background px-2.5 py-2 text-xs font-semibold transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                isAttached ? 'text-success' : 'text-primary'
+              )}
+            >
+              {isBusy ? (
+                <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+              ) : (
+                <Camera className="size-3.5" aria-hidden="true" />
+              )}
+              {isAttached ? 'Retake' : 'Camera'}
+            </button>
+          ) : (
+            <span
+              className={cn(
+                'grid size-9 shrink-0 place-items-center rounded-md',
+                isAttached ? 'bg-success/10 text-success' : error ? 'bg-destructive/10 text-destructive' : 'bg-secondary text-muted-foreground'
+              )}
+            >
+              {isBusy ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+              ) : isAttached ? (
+                <FileText className="size-4" aria-hidden="true" />
+              ) : (
+                <UploadCloud className="size-4" aria-hidden="true" />
+              )}
+            </span>
+          )}
 
           <div className="min-w-0 flex-1">
             {file ? (
@@ -107,6 +133,15 @@ export function FileUploadField({
                 <p className="text-xs text-muted-foreground">
                   {isBusy ? 'Attaching…' : [formatBytes(file.size), isAttached ? 'Attached' : null].filter(Boolean).join(' · ')}
                 </p>
+              </>
+            ) : cameraFirst ? (
+              <>
+                <p id={hintId} className="text-sm font-medium text-foreground">
+                  Take a live photo with your camera
+                </p>
+                <Label htmlFor={id} className="cursor-pointer text-xs text-muted-foreground hover:underline">
+                  or choose a file instead
+                </Label>
               </>
             ) : (
               <>
@@ -125,22 +160,16 @@ export function FileUploadField({
               <CheckCircle2 className="mr-1 size-4 text-success" aria-hidden="true" />
             ) : null}
 
-            {allowCamera ? (
-              <button
-                type="button"
-                onClick={onUseCamera}
-                className="inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-2.5 py-1.5 text-xs font-semibold text-foreground transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <Camera className="size-3.5" aria-hidden="true" />
-                Camera
-              </button>
-            ) : null}
-
             {file ? (
               <>
                 <Label
                   htmlFor={id}
-                  className="cursor-pointer rounded-md border border-input bg-background px-2.5 py-1.5 text-xs font-semibold transition-colors hover:bg-secondary"
+                  className={cn(
+                    'cursor-pointer transition-colors',
+                    cameraFirst
+                      ? 'px-1 text-xs text-muted-foreground hover:text-foreground hover:underline'
+                      : 'rounded-md border border-input bg-background px-2.5 py-1.5 text-xs font-semibold hover:bg-secondary'
+                  )}
                 >
                   Replace
                 </Label>
