@@ -242,7 +242,9 @@ function DashboardPage() {
   const [validationErrors, setValidationErrors] = useState({})
 
   const resumedDraft = location.state?.resumedDraft
+  const prefilledApplication = location.state?.prefilledApplication
   const hydratedResumedDraftRef = useRef(false)
+  const hydratedPrefilledApplicationRef = useRef(false)
   const errorSummaryRef = useRef(null)
 
   const {
@@ -267,7 +269,7 @@ function DashboardPage() {
     setPersonalData,
     setBusinessData,
     setLoanData,
-    skipLocalCheck: Boolean(resumedDraft),
+    skipLocalCheck: Boolean(resumedDraft || prefilledApplication),
   })
 
   useEffect(() => {
@@ -276,6 +278,14 @@ function DashboardPage() {
       hydrateResumedDraft(resumedDraft)
     }
   }, [resumedDraft, hydrateResumedDraft])
+
+  useEffect(() => {
+    if (!prefilledApplication || hydratedPrefilledApplicationRef.current || resumedDraft) return
+    hydratedPrefilledApplicationRef.current = true
+    setPersonalData(prefilledApplication.personalData)
+    setBusinessData(prefilledApplication.businessData)
+    setLoanData(prefilledApplication.loanData)
+  }, [prefilledApplication, resumedDraft])
 
   // Email captured on the landing page. Seeding it here means useApplicationDraft
   // has a sync key immediately, rather than only once the applicant reaches the
@@ -936,7 +946,7 @@ function DashboardPage() {
     for (const field of ['payslips', 'bankStatements', 'nrcCopy', 'passportPhoto', 'tpin']) {
       const file = personalData.documents[field]
       if (file) {
-        uploaded[field] = await uploadFile(file)
+        uploaded[field] = file.__source === 'lms' ? file.reference : await uploadFile(file)
       }
     }
     return uploaded
@@ -957,7 +967,7 @@ function DashboardPage() {
     for (const field of applicantFields) {
       const file = businessData.documents[field]
       if (file) {
-        uploaded[field] = await uploadFile(file)
+        uploaded[field] = file.__source === 'lms' ? file.reference : await uploadFile(file)
       }
     }
 
@@ -965,10 +975,10 @@ function DashboardPage() {
     for (const upload of businessData.documents.directorUploads || []) {
       const entry = {}
       if (upload.nrc) {
-        entry.nrc = await uploadFile(upload.nrc)
+        entry.nrc = upload.nrc.__source === 'lms' ? upload.nrc.reference : await uploadFile(upload.nrc)
       }
       if (upload.passportPhoto) {
-        entry.passportPhoto = await uploadFile(upload.passportPhoto)
+        entry.passportPhoto = upload.passportPhoto.__source === 'lms' ? upload.passportPhoto.reference : await uploadFile(upload.passportPhoto)
       }
       directorUploaded.push(entry)
     }
@@ -1662,6 +1672,13 @@ function DashboardPage() {
                   Resume
                 </Button>
               </div>
+            </div>
+          ) : null}
+
+          {prefilledApplication && currentStep < stepTitles.length - 1 ? (
+            <div className="mt-6 rounded-lg border border-primary/25 bg-accent/60 p-4 text-sm text-accent-foreground print:hidden">
+              Your application has been auto-filled from your existing application. Kindly edit where necessary and
+              upload all the required fresh documents.
             </div>
           ) : null}
 
