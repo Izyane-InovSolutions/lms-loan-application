@@ -33,7 +33,7 @@ export const LOAN_PRODUCTS = [
     description:
       'Borrow against your salary for school fees, medical costs, home improvements or any personal need. Repay over a tenure you choose.',
     minAmount: 500,
-    maxAmount: 8000,
+    maxAmount: 100000,
     exampleAmount: 5000,
     steps: ['Personal information', 'Residence & Employment', 'Documents', 'Loan Terms', 'Overview'],
     documents: ['Salary Slip', 'Bank Statement', 'NRC Copy', 'Passport Photo', 'TPIN Certificate'],
@@ -45,7 +45,7 @@ export const LOAN_PRODUCTS = [
     description:
       'Working capital for registered Zambian businesses — fund an order, bridge a payment gap, or invest in equipment and stock.',
     minAmount: 5000,
-    maxAmount: 50000,
+    maxAmount: 500000,
     exampleAmount: 25000,
     steps: ['Business information', 'Directors & Applicant', 'Documents', 'Loan Terms', 'Overview'],
     documents: [

@@ -317,7 +317,7 @@ function DashboardPage() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }, [currentStep])
 
-  const maxAmount = selectedLoanType === 'personal' ? 8000 : 50000
+  const maxAmount = selectedLoanType === 'personal' ? 100000 : 500000
   const minAmount = selectedLoanType === 'personal' ? 500 : 5000
   const interestRate = 0.05
   const facilityFee = 175
