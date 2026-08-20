@@ -1,7 +1,8 @@
 import axios from 'axios'
 import { injectFiles } from '../utils/fileTree'
 
-const draftApiClient = axios.create({ baseURL: '/api' })
+const draftApiBaseUrl = import.meta.env.DEV ? '/api' : import.meta.env.VITE_DRAFT_API_URL || '/erp-api'
+const draftApiClient = axios.create({ baseURL: draftApiBaseUrl })
 
 const authHeaders = (token) => ({ headers: { Authorization: `Bearer ${token}` } })
 
