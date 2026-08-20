@@ -27,11 +27,13 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 export function StartApplicationDialog({ open, onOpenChange, loanType, onStart }) {
   const [email, setEmail] = useState('')
   const [error, setError] = useState('')
+  const [starting, setStarting] = useState(false)
 
   useEffect(() => {
     if (open) {
       setEmail('')
       setError('')
+      setStarting(false)
     }
   }, [open])
 
@@ -42,7 +44,18 @@ export function StartApplicationDialog({ open, onOpenChange, loanType, onStart }
       setError('Enter a valid email address, or choose to continue without one.')
       return
     }
-    onStart(normalized)
+    setStarting(true)
+    setError('')
+    Promise.resolve(onStart(normalized))
+      .catch((startError) => setError(startError.message || 'We could not look up your previous application.'))
+      .finally(() => setStarting(false))
+  }
+
+  const handleFreshStart = () => {
+    setStarting(true)
+    Promise.resolve(onStart(''))
+      .catch((startError) => setError(startError.message || 'We could not start the application.'))
+      .finally(() => setStarting(false))
   }
 
   const label = loanType === 'business' ? 'business loan' : 'personal loan'
@@ -92,11 +105,11 @@ export function StartApplicationDialog({ open, onOpenChange, loanType, onStart }
           </div>
 
           <div className="grid gap-2">
-            <Button type="submit" className="w-full">
-              Continue
-              <ArrowRight />
+            <Button type="submit" className="w-full" disabled={starting}>
+              {starting ? 'Checking your applications…' : 'Continue'}
+              {!starting ? <ArrowRight /> : null}
             </Button>
-            <Button type="button" variant="ghost" className="w-full" onClick={() => onStart('')}>
+            <Button type="button" variant="ghost" className="w-full" onClick={handleFreshStart} disabled={starting}>
               Continue without saving to another device
             </Button>
           </div>
