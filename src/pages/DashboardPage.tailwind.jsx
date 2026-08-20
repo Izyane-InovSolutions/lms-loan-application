@@ -462,8 +462,32 @@ function DashboardPage() {
     updateDocumentField(field, file, event.target)
   }
 
-  const cameraSupported = typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia
+  // Actual device presence (not just API support) — the passport photo field is
+  // camera-only when a camera exists, so this has to reflect real hardware, not
+  // just whether getUserMedia is defined.
+  const [hasCamera, setHasCamera] = useState(false)
   const [showCameraCapture, setShowCameraCapture] = useState(false)
+
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.enumerateDevices) return
+
+    let cancelled = false
+    const detect = () => {
+      navigator.mediaDevices
+        .enumerateDevices()
+        .then((devices) => {
+          if (!cancelled) setHasCamera(devices.some((device) => device.kind === 'videoinput'))
+        })
+        .catch(() => {})
+    }
+
+    detect()
+    navigator.mediaDevices.addEventListener?.('devicechange', detect)
+    return () => {
+      cancelled = true
+      navigator.mediaDevices.removeEventListener?.('devicechange', detect)
+    }
+  }, [])
 
   const handleCameraCapture = (dataUrl) => {
     setShowCameraCapture(false)
@@ -1085,7 +1109,7 @@ function DashboardPage() {
     )
   }
 
-  const renderUploadField = (label, field, file, required = false, acceptTypes = '.pdf', errorKey = '', allowCamera = false) => (
+  const renderUploadField = (label, field, file, required = false, acceptTypes = '.pdf', errorKey = '', cameraCapable = false) => (
     <FileUploadField
       key={field}
       name={errorKey || `documents.${field}`}
@@ -1096,7 +1120,7 @@ function DashboardPage() {
       error={validationErrors[errorKey]}
       status={getUploadStatus(field)}
       onChange={(event) => handleDocumentInputChange(field, event)}
-      allowCamera={allowCamera && cameraSupported}
+      cameraFirst={cameraCapable && hasCamera}
       onUseCamera={() => setShowCameraCapture(true)}
     />
   )
