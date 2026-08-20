@@ -47,6 +47,7 @@ export function FileUploadField({
 
   const isBusy = status === 'loading'
   const isAttached = Boolean(file) && !error
+  const isExistingReference = file?.__source === 'lms'
 
   return (
     // min-w-0 lets this shrink below the filename's min-content width (grid items
@@ -105,7 +106,7 @@ export function FileUploadField({
                   {file.name}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  {isBusy ? 'Attaching…' : [formatBytes(file.size), isAttached ? 'Attached' : null].filter(Boolean).join(' · ')}
+                  {isBusy ? 'Attaching…' : [isExistingReference ? 'Existing document' : formatBytes(file.size), isAttached ? 'Attached' : null].filter(Boolean).join(' · ')}
                 </p>
               </>
             ) : (
