@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useEffect, useState } from 'react'
 import { Download, ExternalLink, FileQuestion } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -11,6 +11,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { useObjectUrl, isPreviewableImage, isPreviewablePdf, formatBytes } from '@/hooks/useObjectUrl'
+import { downloadLoanApplicationFile } from '@/services/lmsApi'
 
 /**
  * Renders an attached document in place.
@@ -25,7 +26,33 @@ import { useObjectUrl, isPreviewableImage, isPreviewablePdf, formatBytes } from 
  * left over between the header and footer.
  */
 export function DocumentPreviewDialog({ open, onOpenChange, attachment }) {
-  const file = open ? attachment?.file : null
+  const [referencedFile, setReferencedFile] = useState(null)
+  const [referenceError, setReferenceError] = useState('')
+  const sourceFile = attachment?.file
+  const isReference = sourceFile?.__source === 'lms'
+
+  useEffect(() => {
+    if (!open || !isReference) {
+      setReferencedFile(null)
+      setReferenceError('')
+      return undefined
+    }
+
+    let cancelled = false
+    setReferenceError('')
+    downloadLoanApplicationFile(sourceFile.reference)
+      .then((blob) => {
+        if (!cancelled) setReferencedFile(new File([blob], sourceFile.name, { type: blob.type || sourceFile.type }))
+      })
+      .catch(() => {
+        if (!cancelled) setReferenceError('This document could not be loaded from the LMS.')
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [open, isReference, sourceFile])
+
+  const file = open ? (isReference ? referencedFile : sourceFile) : null
   const url = useObjectUrl(file)
 
   const isImage = isPreviewableImage(attachment?.file)
@@ -46,7 +73,9 @@ export function DocumentPreviewDialog({ open, onOpenChange, attachment }) {
             height instead of pushing the footer off-screen. */}
         <div className="min-h-0 flex-1 bg-secondary/40">
           {!url ? (
-            <div className="grid h-full place-items-center text-sm text-muted-foreground">Loading preview…</div>
+            <div className="grid h-full place-items-center text-sm text-muted-foreground">
+              {referenceError || 'Loading preview…'}
+            </div>
           ) : isImage ? (
             <div className="h-full overflow-auto p-4">
               <img src={url} alt={attachment.label} className="mx-auto max-h-full w-auto object-contain" />
