@@ -12,11 +12,14 @@ import { CallToAction } from '@/components/landing/CallToAction'
 import { SiteFooter } from '@/components/landing/SiteFooter'
 import { ResumeApplicationDialog } from '@/components/landing/ResumeApplicationDialog'
 import { StartApplicationDialog } from '@/components/landing/StartApplicationDialog'
+import { ApplicationStatusDialog } from '@/components/landing/ApplicationStatusDialog'
 import { applyPath } from '@/config/applicationSteps'
 
 function LandingPage() {
   const [resumeOpen, setResumeOpen] = useState(false)
   const [pendingLoanType, setPendingLoanType] = useState(null)
+  const [statusOpen, setStatusOpen] = useState(false)
+  const [statusEmail, setStatusEmail] = useState('')
   const navigate = useNavigate()
 
   // Every "apply" entry point asks for an email first so the draft can sync from
@@ -34,6 +37,11 @@ function LandingPage() {
 
   const handleResume = useCallback(() => setResumeOpen(true), [])
 
+  const handleCheckStatus = useCallback((email) => {
+    setStatusEmail(email)
+    setStatusOpen(true)
+  }, [])
+
   const handleResumed = useCallback(
     (draft) => {
       navigate(applyPath(draft.loanType, draft.currentStep || 0), { state: { resumedDraft: draft } })
@@ -46,7 +54,7 @@ function LandingPage() {
       <SiteHeader onApply={handleApply} onResume={handleResume} />
 
       <main className="flex-1">
-        <Hero onApply={handleApply} onResume={handleResume} />
+        <Hero onApply={handleApply} onCheckStatus={handleCheckStatus} />
         <LoanProducts onApply={handleApply} />
         <HowItWorks />
         <Requirements />
@@ -67,6 +75,8 @@ function LandingPage() {
       />
 
       <ResumeApplicationDialog open={resumeOpen} onOpenChange={setResumeOpen} onResumed={handleResumed} />
+
+      <ApplicationStatusDialog open={statusOpen} onOpenChange={setStatusOpen} email={statusEmail} />
     </div>
   )
 }
