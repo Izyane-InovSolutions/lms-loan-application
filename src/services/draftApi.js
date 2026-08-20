@@ -1,7 +1,10 @@
 import axios from 'axios'
 import { injectFiles } from '../utils/fileTree'
 
-const draftApiBaseUrl = import.meta.env.DEV ? '/api' : import.meta.env.VITE_DRAFT_API_URL || '/erp-api'
+// The draft mini-backend is this project's own api/* functions, served at /api in dev
+// (localApiDevPlugin in vite.config.js) and on Vercel alike — never /erp-api, which
+// rewrites to the external LMS host and has no draft/otp routes.
+const draftApiBaseUrl = import.meta.env.VITE_DRAFT_API_URL || '/api'
 const draftApiClient = axios.create({ baseURL: draftApiBaseUrl })
 
 const authHeaders = (token) => ({ headers: { Authorization: `Bearer ${token}` } })
