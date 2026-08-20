@@ -68,14 +68,14 @@ export const buildBusinessPayload = (businessData, uploadedFiles, directorUpload
       file: uploadedFiles[field],
     }))
 
-  const directorDocuments = (directorUploadedFiles || []).flatMap((upload) => {
+  const directorDocuments = (directorUploadedFiles || []).flatMap((upload, index) => {
     if (!upload) return []
     const entries = []
     if (upload.nrc) {
-      entries.push({ document_for: 'Director', document_name: 'Director NRC', file: upload.nrc })
+      entries.push({ document_for: 'Director', document_name: `Director ${index + 1} NRC`, file: upload.nrc })
     }
     if (upload.passportPhoto) {
-      entries.push({ document_for: 'Director', document_name: 'Director Passport Photo', file: upload.passportPhoto })
+      entries.push({ document_for: 'Director', document_name: `Director ${index + 1} Passport Photo`, file: upload.passportPhoto })
     }
     return entries
   })
@@ -89,7 +89,6 @@ export const buildBusinessPayload = (businessData, uploadedFiles, directorUpload
     gender: directorInfo.applicantGender,
     marital_status: directorInfo.applicantMaritalStatus,
     nationality: directorInfo.applicantNationality,
-    next_of_kin_relationship: directorInfo.nextOfKinRelationship,
     directors: (directorInfo.directors || []).map((director) => ({
       director_name: director.name,
       director_phone: director.phone,

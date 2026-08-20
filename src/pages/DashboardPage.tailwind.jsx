@@ -154,7 +154,6 @@ const businessInitial = {
     applicantAddress: '',
     applicantPosition: '',
     applicantNationality: '',
-    nextOfKinRelationship: '',
   },
   documents: {
     form2: null,
@@ -799,7 +798,6 @@ function DashboardPage() {
         requiredField(businessData.directorInfo.applicantAddress, 'directorInfo.applicantAddress', 'Applicant address is required.')
         requiredField(businessData.directorInfo.applicantPosition, 'directorInfo.applicantPosition', 'Applicant position is required.')
         requiredField(businessData.directorInfo.applicantNationality, 'directorInfo.applicantNationality', 'Applicant nationality is required.')
-        requiredField(businessData.directorInfo.nextOfKinRelationship, 'directorInfo.nextOfKinRelationship', 'Next of kin relationship is required.')
         if (businessData.directorInfo.applicantPhone && !isValidPhone(businessData.directorInfo.applicantPhone)) {
           recordError('directorInfo.applicantPhone', 'Phone must be 10 digits and start with 0.')
         }
@@ -1331,7 +1329,6 @@ function DashboardPage() {
             renderSummaryRow('Address', businessData.directorInfo.applicantAddress),
             renderSummaryRow('Position', businessData.directorInfo.applicantPosition),
             renderSummaryRow('Nationality', businessData.directorInfo.applicantNationality),
-            renderSummaryRow('Next of kin relationship', businessData.directorInfo.nextOfKinRelationship),
           ], 1)}
           {renderSummarySection(
             'Directors',
@@ -1508,7 +1505,6 @@ function DashboardPage() {
               {renderField('Applicant address', businessData.directorInfo.applicantAddress, (value) => updateSectionField('directorInfo', 'applicantAddress', value), 'text', '', {}, true, 'directorInfo.applicantAddress')}
               {renderField('Applicant position', businessData.directorInfo.applicantPosition, (value) => updateSectionField('directorInfo', 'applicantPosition', value), 'text', '', {}, true, 'directorInfo.applicantPosition')}
               {renderSelectField('Applicant nationality', businessData.directorInfo.applicantNationality, (value) => updateSectionField('directorInfo', 'applicantNationality', value), NATIONALITY_OPTIONS, 'Select nationality', true, 'directorInfo.applicantNationality')}
-              {renderSelectField('Next of kin relationship', businessData.directorInfo.nextOfKinRelationship, (value) => updateSectionField('directorInfo', 'nextOfKinRelationship', value), RELATIONSHIP_OPTIONS, 'Select relationship', true, 'directorInfo.nextOfKinRelationship')}
             </FieldGroup>
           </div>
         )
