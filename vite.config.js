@@ -11,6 +11,7 @@ function localApiDevPlugin() {
   const routes = {
     '/api/otp/request': '/api/otp/request.js',
     '/api/otp/verify': '/api/otp/verify.js',
+    '/api/otp/verify-email': '/api/otp/verify-email.js',
     '/api/draft': '/api/draft/index.js',
     '/api/draft/documents': '/api/draft/documents.js',
   }

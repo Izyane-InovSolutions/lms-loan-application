@@ -9,6 +9,11 @@ export const requestOtp = (email) => draftApiClient.post('/otp/request', { email
 
 export const verifyOtp = (email, code) => draftApiClient.post('/otp/verify', { email, code }).then((r) => r.data)
 
+// Same code, checked without requiring an in-progress draft — for flows that only need
+// to confirm the caller owns the email address (e.g. looking up submitted applications).
+export const verifyEmailOtp = (email, code) =>
+  draftApiClient.post('/otp/verify-email', { email, code }).then((r) => r.data)
+
 export const createDraft = (payload) => draftApiClient.post('/draft', payload).then((r) => r.data)
 
 export const updateDraft = (token, payload) =>
