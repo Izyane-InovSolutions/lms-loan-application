@@ -14,6 +14,8 @@ import { ResumeApplicationDialog } from '@/components/landing/ResumeApplicationD
 import { StartApplicationDialog } from '@/components/landing/StartApplicationDialog'
 import { ApplicationStatusDialog } from '@/components/landing/ApplicationStatusDialog'
 import { applyPath } from '@/config/applicationSteps'
+import { getLoanApplicationsByEmail } from '@/services/lmsApi'
+import { mapApplicationToFormState, selectLatestApplication } from '@/utils/applicationPrefillMapper'
 
 function LandingPage() {
   const [resumeOpen, setResumeOpen] = useState(false)
@@ -27,10 +29,25 @@ function LandingPage() {
   const handleApply = useCallback((type) => setPendingLoanType(type), [])
 
   const handleStart = useCallback(
-    (email) => {
+    async (email) => {
       const type = pendingLoanType || 'personal'
+      if (!email) {
+        setPendingLoanType(null)
+        navigate(applyPath(type, 0))
+        return
+      }
+
+      const applications = await getLoanApplicationsByEmail(email)
+      const latestApplication = selectLatestApplication(applications, type)
+      if (!latestApplication) {
+        setPendingLoanType(null)
+        navigate(applyPath(type, 0), { state: { startEmail: email } })
+        return
+      }
+
+      const formState = mapApplicationToFormState(latestApplication, type)
       setPendingLoanType(null)
-      navigate(applyPath(type, 0), { state: email ? { startEmail: email } : undefined })
+      navigate(applyPath(type, 0), { state: { startEmail: email, prefilledApplication: formState } })
     },
     [navigate, pendingLoanType]
   )

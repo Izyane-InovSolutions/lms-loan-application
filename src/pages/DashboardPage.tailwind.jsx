@@ -242,7 +242,9 @@ function DashboardPage() {
   const [validationErrors, setValidationErrors] = useState({})
 
   const resumedDraft = location.state?.resumedDraft
+  const prefilledApplication = location.state?.prefilledApplication
   const hydratedResumedDraftRef = useRef(false)
+  const hydratedPrefilledApplicationRef = useRef(false)
   const errorSummaryRef = useRef(null)
 
   const {
@@ -267,7 +269,7 @@ function DashboardPage() {
     setPersonalData,
     setBusinessData,
     setLoanData,
-    skipLocalCheck: Boolean(resumedDraft),
+    skipLocalCheck: Boolean(resumedDraft || prefilledApplication),
   })
 
   useEffect(() => {
@@ -276,6 +278,14 @@ function DashboardPage() {
       hydrateResumedDraft(resumedDraft)
     }
   }, [resumedDraft, hydrateResumedDraft])
+
+  useEffect(() => {
+    if (!prefilledApplication || hydratedPrefilledApplicationRef.current || resumedDraft) return
+    hydratedPrefilledApplicationRef.current = true
+    setPersonalData(prefilledApplication.personalData)
+    setBusinessData(prefilledApplication.businessData)
+    setLoanData(prefilledApplication.loanData)
+  }, [prefilledApplication, resumedDraft])
 
   // Email captured on the landing page. Seeding it here means useApplicationDraft
   // has a sync key immediately, rather than only once the applicant reaches the
@@ -344,21 +354,14 @@ function DashboardPage() {
     }
 
     if (fieldType === 'phone') {
-      const digits = value.replace(/\D/g, '')
-      if (digits.startsWith('0')) {
-        return digits.slice(0, 10)
-      }
-      return digits.length > 0 ? digits.slice(0, 10) : ''
+      return value.replace(/\D/g, '').slice(0, 9)
     }
 
     return value
   }
 
   const isValidNRC = (value) => /^[0-9]{6}\/[0-9]{2}\/[0-9]{1,2}$/.test(value)
-  const isValidPhone = (value) => {
-    const phone = value.replace(/\s+/g, '')
-    return /^0\d{9}$/.test(phone)
-  }
+  const isValidPhone = (value) => /^(96|97|95|76|77|57|75)\d{7}$/.test(value)
   const isValidEmail = (value) => /^[^\s@]+@[A-Za-z0-9-]+\.com$/.test(value)
   const isValidBirthDate = (value) => {
     if (!value) return false
@@ -426,7 +429,7 @@ function DashboardPage() {
       setValidationError(
         `${section}.${field}`,
         normalizedValue && !isValidPhone(normalizedValue)
-          ? 'Phone must be 10 digits and start with 0.'
+          ? 'Enter 9 digits starting with 95, 96, 97, 75, 76, 77, or 57.'
           : ''
       )
     }
@@ -625,17 +628,27 @@ function DashboardPage() {
   }
 
   const updateDirectorField = (index, field, value, fieldType = 'default') => {
+    const normalizedValue = normalizeValue(value, fieldType)
     setBusinessData((prev) => ({
       ...prev,
       directorInfo: {
         ...prev.directorInfo,
         directors: prev.directorInfo.directors.map((director, directorIndex) =>
           directorIndex === index
-            ? { ...director, [field]: normalizeValue(value, fieldType) }
+            ? { ...director, [field]: normalizedValue }
             : director
         ),
       },
     }))
+
+    if (fieldType === 'phone') {
+      setValidationError(
+        `directorInfo.directors[${index}].${field}`,
+        normalizedValue && !isValidPhone(normalizedValue)
+          ? 'Enter 9 digits starting with 95, 96, 97, 75, 76, 77, or 57.'
+          : ''
+      )
+    }
   }
 
   const addDirector = () => {
@@ -698,7 +711,7 @@ function DashboardPage() {
           recordError('personalInfo.birthDate', 'Age must be between 18 and 65.')
         }
         if (personalData.personalInfo.phone && !isValidPhone(personalData.personalInfo.phone)) {
-          recordError('personalInfo.phone', 'Phone must be 10 digits and start with 0.')
+          recordError('personalInfo.phone', 'Enter 9 digits starting with 95, 96, 97, 75, 76, 77, or 57.')
         }
         if (personalData.personalInfo.email && !isValidEmail(personalData.personalInfo.email)) {
           recordError('personalInfo.email', 'Email must end with a .com domain.')
@@ -719,7 +732,7 @@ function DashboardPage() {
         requiredField(personalData.employmentInfo.nextOfKinEmail, 'employmentInfo.nextOfKinEmail', 'Next of kin email is required.')
         requiredField(personalData.employmentInfo.nextOfKinRelationship, 'employmentInfo.nextOfKinRelationship', 'Relationship is required.')
         if (personalData.employmentInfo.nextOfKinPhone && !isValidPhone(personalData.employmentInfo.nextOfKinPhone)) {
-          recordError('employmentInfo.nextOfKinPhone', 'Phone must be 10 digits and start with 0.')
+          recordError('employmentInfo.nextOfKinPhone', 'Enter 9 digits starting with 95, 96, 97, 75, 76, 77, or 57.')
         }
         if (personalData.employmentInfo.nextOfKinEmail && !isValidEmail(personalData.employmentInfo.nextOfKinEmail)) {
           recordError('employmentInfo.nextOfKinEmail', 'Email must end with a .com domain.')
@@ -776,7 +789,7 @@ function DashboardPage() {
           requiredField(director.email, `directorInfo.directors[${index}].email`, `Director ${index + 1} email is required.`)
           requiredField(director.nrc, `directorInfo.directors[${index}].nrc`, `Director ${index + 1} NRC is required.`)
           if (director.phone && !isValidPhone(director.phone)) {
-            recordError(`directorInfo.directors[${index}].phone`, 'Phone must be 10 digits and start with 0.')
+            recordError(`directorInfo.directors[${index}].phone`, 'Enter 9 digits starting with 95, 96, 97, 75, 76, 77, or 57.')
           }
           if (director.email && !isValidEmail(director.email)) {
             recordError(`directorInfo.directors[${index}].email`, 'Email must end with a .com domain.')
@@ -801,7 +814,7 @@ function DashboardPage() {
         requiredField(businessData.directorInfo.applicantNationality, 'directorInfo.applicantNationality', 'Applicant nationality is required.')
         requiredField(businessData.directorInfo.nextOfKinRelationship, 'directorInfo.nextOfKinRelationship', 'Next of kin relationship is required.')
         if (businessData.directorInfo.applicantPhone && !isValidPhone(businessData.directorInfo.applicantPhone)) {
-          recordError('directorInfo.applicantPhone', 'Phone must be 10 digits and start with 0.')
+          recordError('directorInfo.applicantPhone', 'Enter 9 digits starting with 95, 96, 97, 75, 76, 77, or 57.')
         }
         if (businessData.directorInfo.applicantEmail && !isValidEmail(businessData.directorInfo.applicantEmail)) {
           recordError('directorInfo.applicantEmail', 'Email must end with a .com domain.')
@@ -957,7 +970,7 @@ function DashboardPage() {
     for (const field of ['payslips', 'bankStatements', 'nrcCopy', 'passportPhoto', 'tpin']) {
       const file = personalData.documents[field]
       if (file) {
-        uploaded[field] = await uploadFile(file)
+        uploaded[field] = file.__source === 'lms' ? file.reference : await uploadFile(file)
       }
     }
     return uploaded
@@ -978,7 +991,7 @@ function DashboardPage() {
     for (const field of applicantFields) {
       const file = businessData.documents[field]
       if (file) {
-        uploaded[field] = await uploadFile(file)
+        uploaded[field] = file.__source === 'lms' ? file.reference : await uploadFile(file)
       }
     }
 
@@ -986,10 +999,10 @@ function DashboardPage() {
     for (const upload of businessData.documents.directorUploads || []) {
       const entry = {}
       if (upload.nrc) {
-        entry.nrc = await uploadFile(upload.nrc)
+        entry.nrc = upload.nrc.__source === 'lms' ? upload.nrc.reference : await uploadFile(upload.nrc)
       }
       if (upload.passportPhoto) {
-        entry.passportPhoto = await uploadFile(upload.passportPhoto)
+        entry.passportPhoto = upload.passportPhoto.__source === 'lms' ? upload.passportPhoto.reference : await uploadFile(upload.passportPhoto)
       }
       directorUploaded.push(entry)
     }
@@ -1035,14 +1048,29 @@ function DashboardPage() {
     return (
       <FormField key={label} name={name} label={label} required={required} error={validationErrors[errorKey]}>
         {(field) => (
-          <Input
-            {...field}
-            type={type}
-            value={value ?? ''}
-            onChange={(event) => onChange(event.target.value)}
-            placeholder={placeholder}
-            {...inputProps}
-          />
+          type === 'tel' ? (
+            <div className="flex h-11 overflow-hidden rounded-md border border-input bg-background transition-colors focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 has-[input[aria-invalid=true]]:border-destructive">
+              <span className="flex items-center border-r border-input bg-muted px-3.5 text-base text-muted-foreground">+260</span>
+              <Input
+                {...field}
+                type={type}
+                value={value ?? ''}
+                onChange={(event) => onChange(event.target.value)}
+                placeholder={placeholder}
+                className="h-full rounded-none border-0 px-3.5 focus-visible:ring-0"
+                {...inputProps}
+              />
+            </div>
+          ) : (
+            <Input
+              {...field}
+              type={type}
+              value={value ?? ''}
+              onChange={(event) => onChange(event.target.value)}
+              placeholder={placeholder}
+              {...inputProps}
+            />
+          )
         )}
       </FormField>
     )
@@ -1367,7 +1395,7 @@ function DashboardPage() {
               </FieldGroup>
 
               <FieldGroup title="Contact details" description="We use these to reach you about your application." icon={Phone} columns={2}>
-                {renderField('Phone', personalData.personalInfo.phone, (value) => updateSectionField('personalInfo', 'phone', value, 'phone'), 'tel', '0977123456', { maxLength: 10, autoComplete: 'tel' }, true, 'personalInfo.phone')}
+                {renderField('Phone', personalData.personalInfo.phone, (value) => updateSectionField('personalInfo', 'phone', value, 'phone'), 'tel', '961234567', { maxLength: 9, autoComplete: 'tel' }, true, 'personalInfo.phone')}
                 {renderField('Email', personalData.personalInfo.email, (value) => updateSectionField('personalInfo', 'email', value, 'email'), 'email', 'you@example.com', { autoComplete: 'email' }, true, 'personalInfo.email')}
               </FieldGroup>
 
@@ -1392,7 +1420,7 @@ function DashboardPage() {
 
               <FieldGroup title="Next of kin" description="Someone we can contact if we cannot reach you." icon={Users} columns={2}>
                 {renderField('Next of kin name', personalData.employmentInfo.nextOfKinName, (value) => updateSectionField('employmentInfo', 'nextOfKinName', value, 'alpha'), 'text', '', {}, true, 'employmentInfo.nextOfKinName')}
-                {renderField('Next of kin phone', personalData.employmentInfo.nextOfKinPhone, (value) => updateSectionField('employmentInfo', 'nextOfKinPhone', value, 'phone'), 'tel', '0977123456', { maxLength: 10 }, true, 'employmentInfo.nextOfKinPhone')}
+                {renderField('Next of kin phone', personalData.employmentInfo.nextOfKinPhone, (value) => updateSectionField('employmentInfo', 'nextOfKinPhone', value, 'phone'), 'tel', '961234567', { maxLength: 9 }, true, 'employmentInfo.nextOfKinPhone')}
                 {renderField('Next of kin email', personalData.employmentInfo.nextOfKinEmail, (value) => updateSectionField('employmentInfo', 'nextOfKinEmail', value, 'email'), 'email', 'name@example.com', {}, true, 'employmentInfo.nextOfKinEmail')}
                 {renderSelectField('Relationship', personalData.employmentInfo.nextOfKinRelationship, (value) => updateSectionField('employmentInfo', 'nextOfKinRelationship', value), RELATIONSHIP_OPTIONS, 'Select relationship', true, 'employmentInfo.nextOfKinRelationship')}
               </FieldGroup>
@@ -1480,7 +1508,7 @@ function DashboardPage() {
                     </div>
                     <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
                       {renderField(`Director ${index + 1} name`, director.name, (value) => updateDirectorField(index, 'name', value, 'alpha'), 'text', '', {}, true, `directorInfo.directors[${index}].name`)}
-                      {renderField(`Director ${index + 1} phone`, director.phone, (value) => updateDirectorField(index, 'phone', value, 'phone'), 'tel', '0977123456', { maxLength: 10 }, true, `directorInfo.directors[${index}].phone`)}
+                      {renderField(`Director ${index + 1} phone`, director.phone, (value) => updateDirectorField(index, 'phone', value, 'phone'), 'tel', '961234567', { maxLength: 9 }, true, `directorInfo.directors[${index}].phone`)}
                       {renderField(`Director ${index + 1} email`, director.email, (value) => updateDirectorField(index, 'email', value, 'email'), 'email', 'name@example.com', {}, true, `directorInfo.directors[${index}].email`)}
                       {renderField(`Director ${index + 1} NRC`, director.nrc, (value) => updateDirectorField(index, 'nrc', value, 'nrc'), 'text', '123456/78/9', { maxLength: 12 }, true, `directorInfo.directors[${index}].nrc`)}
                     </div>
@@ -1496,7 +1524,7 @@ function DashboardPage() {
             </FieldGroup>
 
             <FieldGroup title="Applicant contact & identity" icon={Fingerprint} columns={3}>
-              {renderField('Applicant phone', businessData.directorInfo.applicantPhone, (value) => updateSectionField('directorInfo', 'applicantPhone', value, 'phone'), 'tel', '0977123456', { maxLength: 10 }, true, 'directorInfo.applicantPhone')}
+              {renderField('Applicant phone', businessData.directorInfo.applicantPhone, (value) => updateSectionField('directorInfo', 'applicantPhone', value, 'phone'), 'tel', '961234567', { maxLength: 9 }, true, 'directorInfo.applicantPhone')}
               {renderField('Applicant email', businessData.directorInfo.applicantEmail, (value) => updateSectionField('directorInfo', 'applicantEmail', value, 'email'), 'email', 'you@example.com', {}, true, 'directorInfo.applicantEmail')}
               {renderField('Applicant NRC', businessData.directorInfo.applicantNrc, (value) => updateSectionField('directorInfo', 'applicantNrc', value, 'nrc'), 'text', '123456/78/9', { maxLength: 12 }, true, 'directorInfo.applicantNrc')}
               {renderBirthDateField('Birth date', businessData.directorInfo.applicantBirthDate, (value) => updateSectionField('directorInfo', 'applicantBirthDate', value), true, 'directorInfo.applicantBirthDate')}
@@ -1571,7 +1599,7 @@ function DashboardPage() {
                         name={`documents.directorUploads[${index}].nrc`}
                         label={`Director ${index + 1} NRC`}
                         file={upload.nrc}
-                        accept="image/*,.pdf,.doc,.docx"
+                        accept="application/pdf,.pdf"
                         required
                         error={validationErrors[`documents.directorUploads[${index}].nrc`]}
                         status={getUploadStatus(`director.${index}.nrc`)}
@@ -1668,6 +1696,13 @@ function DashboardPage() {
                   Resume
                 </Button>
               </div>
+            </div>
+          ) : null}
+
+          {prefilledApplication && currentStep < stepTitles.length - 1 ? (
+            <div className="mt-6 rounded-lg border border-primary/25 bg-accent/60 p-4 text-sm text-accent-foreground print:hidden">
+              Your application has been auto-filled from your existing application. Kindly edit where necessary and
+              upload all the required fresh documents.
             </div>
           ) : null}
 

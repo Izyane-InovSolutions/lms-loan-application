@@ -19,6 +19,8 @@ const BUSINESS_DOCUMENT_LABELS = {
   boardResolution: 'Board Resolution',
 }
 
+const toInternationalPhone = (value) => (value ? `+260${value}` : value)
+
 export const buildPersonalPayload = (personalData, uploadedFiles, loanDetails) => {
   const { personalInfo, employmentInfo } = personalData
 
@@ -42,7 +44,7 @@ export const buildPersonalPayload = (personalData, uploadedFiles, loanDetails) =
     documents,
     first_name: personalInfo.firstName,
     last_name: personalInfo.surname,
-    phone: personalInfo.phone,
+    phone: toInternationalPhone(personalInfo.phone),
     email: personalInfo.email,
     national_registration_card: personalInfo.nrc,
     birth_date: personalInfo.birthDate,
@@ -53,7 +55,7 @@ export const buildPersonalPayload = (personalData, uploadedFiles, loanDetails) =
     next_of_kin_name: employmentInfo.nextOfKinName,
     next_of_kin_email: employmentInfo.nextOfKinEmail,
     loan_purpose: employmentInfo.principalObjectiveOfLoan,
-    next_of_kin_phone: employmentInfo.nextOfKinPhone,
+    next_of_kin_phone: toInternationalPhone(employmentInfo.nextOfKinPhone),
   }
 }
 
@@ -92,7 +94,7 @@ export const buildBusinessPayload = (businessData, uploadedFiles, directorUpload
     next_of_kin_relationship: directorInfo.nextOfKinRelationship,
     directors: (directorInfo.directors || []).map((director) => ({
       director_name: director.name,
-      director_phone: director.phone,
+      director_phone: toInternationalPhone(director.phone),
       director_email: director.email,
       national_registration_card: director.nrc,
     })),
@@ -109,7 +111,7 @@ export const buildBusinessPayload = (businessData, uploadedFiles, directorUpload
     purpose_of_loan: businessInfo.purposeOfLoan,
     applicant_first_name: directorInfo.applicantFirstName,
     applicant_last_name: directorInfo.applicantLastName,
-    applicant_phone: directorInfo.applicantPhone,
+    applicant_phone: toInternationalPhone(directorInfo.applicantPhone),
     applicant_national_registration_card: directorInfo.applicantNrc,
     applicant_email: directorInfo.applicantEmail,
     applicant_birth_date: directorInfo.applicantBirthDate,
