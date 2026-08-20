@@ -162,6 +162,33 @@ export const getLoanApplications = async () => {
   return response.data?.message ?? response.data?.data ?? response.data
 }
 
+export const getLoanApplicationsByEmail = async (email) => {
+  const sid = await ensureLogin()
+  try {
+    const response = await withRetry(() =>
+      lmsApi.get(
+        '/api/method/rolaface_lms_app.modules.loan.custom_api.loanApplication.api.get_custom_loan_application_by_email',
+        { params: { email, sid } }
+      )
+    )
+    return response.data?.message?.data ?? response.data?.data ?? []
+  } catch (error) {
+    const serverMessage = error?.response?.data?.message?.message || error?.response?.data?.message
+    if (error?.response?.status === 404 && typeof serverMessage === 'string' && serverMessage.includes('No Custom Loan Application found')) {
+      return []
+    }
+    throw error
+  }
+}
+
+export const downloadLoanApplicationFile = async (filePath) => {
+  const sid = await ensureLogin()
+  const response = await withRetry(() =>
+    lmsApi.get(filePath.replace(/^\/+/, ''), { params: { sid }, responseType: 'blob' })
+  )
+  return response.data
+}
+
 export const extractErrorMessage = (error) => {
   // No confirmation came back — whether the connection dropped or the server simply
   // took too long, the outcome is genuinely unknown. Say so rather than inviting a
