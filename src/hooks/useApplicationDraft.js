@@ -192,6 +192,9 @@ export function useApplicationDraft({
     const { files } = extractFiles(activeData, scope)
 
     files.forEach((file, path) => {
+      // Existing LMS documents are already stored remotely. They remain available
+      // for final submission but must not be re-uploaded as draft attachments.
+      if (file.__source === 'lms') return
       const signature = fileSignature(file)
       if (uploadedSignaturesRef.current.get(path) === signature) return
       uploadedSignaturesRef.current.set(path, signature)
