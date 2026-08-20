@@ -10,7 +10,7 @@ export function useObjectUrl(file) {
   const [url, setUrl] = useState(null)
 
   useEffect(() => {
-    if (!file) {
+    if (!file || (typeof Blob !== 'undefined' && !(file instanceof Blob))) {
       setUrl(null)
       return undefined
     }
