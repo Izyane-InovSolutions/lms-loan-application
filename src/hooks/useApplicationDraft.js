@@ -247,5 +247,7 @@ export function useApplicationDraft({
     canSyncRemotely,
     remoteSyncError,
     documentSyncError,
+    // Also authorises the AI document checks and prescreen (api/ai/*).
+    draftToken,
   }
 }

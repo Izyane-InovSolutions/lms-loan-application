@@ -1,5 +1,5 @@
 import React from 'react'
-import { AlertCircle, Camera, CheckCircle2, FileText, Loader2, Trash2, UploadCloud } from 'lucide-react'
+import { AlertCircle, AlertTriangle, Camera, CheckCircle2, FileText, Loader2, Sparkles, Trash2, UploadCloud } from 'lucide-react'
 
 import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
@@ -29,6 +29,10 @@ const acceptHint = (accept) =>
  * `cameraFirst` puts the camera button on the left as the primary action (for
  * fields like the passport photo, once a camera has been detected) while still
  * leaving file upload available as a de-emphasized fallback link.
+ *
+ * `analysis` is the optional AI check for the attached file:
+ * { status: 'analyzing' | 'done' | 'skipped' | 'error', notes: string[] }. It is advisory —
+ * shown as a warning, never as a validation error, so it cannot stop the applicant.
  */
 export function FileUploadField({
   name,
@@ -41,6 +45,7 @@ export function FileUploadField({
   onChange,
   cameraFirst = false,
   onUseCamera,
+  analysis,
   className,
 }) {
   const id = fieldId(name)
@@ -188,12 +193,66 @@ export function FileUploadField({
         </div>
       </div>
 
+      {isAttached ? <DocumentAnalysisNote analysis={analysis} /> : null}
+
       {error ? (
         <p id={errorId} role="alert" className="flex items-start gap-1.5 text-sm font-medium text-destructive">
           <AlertCircle className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
           <span>{error}</span>
         </p>
       ) : null}
+    </div>
+  )
+}
+
+function DocumentAnalysisNote({ analysis }) {
+  if (!analysis) return null
+
+  if (analysis.status === 'analyzing') {
+    return (
+      <p role="status" className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Loader2 className="size-3.5 animate-spin" aria-hidden="true" />
+        Checking this document…
+      </p>
+    )
+  }
+
+  // Said out loud rather than hidden: a silent failure looks exactly like "AI is off",
+  // which makes a billing or key problem on the provider side impossible to spot.
+  if (analysis.status === 'error') {
+    return (
+      <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <AlertCircle className="size-3.5" aria-hidden="true" />
+        We couldn’t check this document automatically. It will still be sent with your application.
+      </p>
+    )
+  }
+
+  if (analysis.status !== 'done') return null
+
+  if (!analysis.notes.length) {
+    return (
+      <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Sparkles className="size-3.5 text-success" aria-hidden="true" />
+        Checked — nothing to fix.
+      </p>
+    )
+  }
+
+  return (
+    <div role="status" className="rounded-md border border-warning/40 bg-warning/10 p-3 text-sm text-foreground">
+      <p className="flex items-center gap-1.5 font-medium text-warning">
+        <AlertTriangle className="size-3.5 shrink-0" aria-hidden="true" />
+        Please check this document
+      </p>
+      <ul className="mt-1.5 list-disc space-y-1 pl-5 text-muted-foreground">
+        {analysis.notes.map((note) => (
+          <li key={note}>{note}</li>
+        ))}
+      </ul>
+      <p className="mt-2 text-xs text-muted-foreground">
+        This is an automated check and can be wrong. You can still continue.
+      </p>
     </div>
   )
 }

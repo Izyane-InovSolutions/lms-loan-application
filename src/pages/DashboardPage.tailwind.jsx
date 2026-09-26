@@ -31,6 +31,9 @@ import footerLogo from '../assets/izyane-black.svg'
 import { createLoanApplication, extractErrorMessage, uploadFile } from '../services/lmsApi'
 import { buildPersonalPayload, buildBusinessPayload } from '../utils/loanPayloadMapper'
 import { useApplicationDraft } from '../hooks/useApplicationDraft'
+import { useDocumentAnalysis } from '../hooks/useDocumentAnalysis'
+import { prescreenApplication, isAiUnavailable } from '../services/aiApi'
+import { documentNotes, findFormMismatches } from '../utils/documentChecks'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -50,6 +53,7 @@ import {
   SummarySection,
 } from '@/components/application/ApplicationSummary'
 import { DocumentPreviewDialog } from '@/components/application/DocumentPreviewDialog'
+import { PrescreenGuidance } from '@/components/application/PrescreenGuidance'
 import { STEP_TITLES, applyPath, isLoanType, isValidStepSlug, stepIndex } from '@/config/applicationSteps'
 
 const GENDER_OPTIONS = ['Male', 'Female']
@@ -168,6 +172,13 @@ const businessInitial = {
   },
 }
 
+// The prescreen result is sent to the LMS only once the Frappe doctype has a field for
+// it; until then it still drives the applicant guidance on the Overview step.
+const SEND_PRESCREEN_TO_LMS = import.meta.env.VITE_AI_PRESCREEN_TO_LMS === 'true'
+// Submission waits this long at most for a prescreen that is not ready yet, then goes
+// ahead without it. A slow model must never hold up an application.
+const PRESCREEN_SUBMIT_WAIT_MS = 25000
+
 const initialLoanState = {
   amount: 4000,
   tenure: 6,
@@ -257,6 +268,7 @@ function DashboardPage() {
     canSyncRemotely,
     remoteSyncError,
     documentSyncError,
+    draftToken,
   } = useApplicationDraft({
     selectedLoanType,
     currentStep,
@@ -451,6 +463,66 @@ function DashboardPage() {
   }
 
   const getUploadStatus = (field) => uploadStatuses[field] || 'idle'
+
+  // Every upload slot the AI checks, with what its document should agree with on the
+  // form. `slot` is the label staff see in the prescreen; fieldKey matches the keys the
+  // upload fields already use for status.
+  const analysisSlots = (() => {
+    if (selectedLoanType === 'personal') {
+      const { firstName, middleName, surname, nrc } = personalData.personalInfo
+      const applicant = { name: [firstName, middleName, surname].filter(Boolean).join(' '), nrc }
+      const docs = personalData.documents
+      return [
+        { fieldKey: 'payslips', docType: 'payslips', slot: 'Latest three payslips', required: true, file: docs.payslips, expected: applicant },
+        { fieldKey: 'bankStatements', docType: 'bankStatements', slot: 'Bank statements', required: true, file: docs.bankStatements, expected: { name: applicant.name } },
+        { fieldKey: 'nrcCopy', docType: 'nrcCopy', slot: 'NRC copy', required: true, file: docs.nrcCopy, expected: applicant },
+        { fieldKey: 'tpin', docType: 'tpin', slot: 'TPIN certificate', required: true, file: docs.tpin, expected: { name: applicant.name } },
+        { fieldKey: 'passportPhoto', docType: 'passportPhoto', slot: 'Passport photo', required: true, file: docs.passportPhoto, expected: {} },
+      ]
+    }
+
+    const company = { companyName: businessData.businessInfo.companyName, holderIsCompany: true }
+    const docs = businessData.documents
+    const directors = businessData.directorInfo.directors || []
+    return [
+      { fieldKey: 'pacraCertificate', docType: 'pacraCertificate', slot: 'PACRA certificate', required: true, file: docs.pacraCertificate, expected: company },
+      { fieldKey: 'form2', docType: 'form2', slot: 'Form 2', required: true, file: docs.form2, expected: company },
+      { fieldKey: 'taxClearance', docType: 'taxClearance', slot: 'Tax clearance certificate / TPIN', required: true, file: docs.taxClearance, expected: company },
+      { fieldKey: 'latestTaxComplianceReturn', docType: 'latestTaxComplianceReturn', slot: 'Latest tax compliance return', required: true, file: docs.latestTaxComplianceReturn, expected: company },
+      { fieldKey: 'orderOrInvoice', docType: 'orderOrInvoice', slot: 'Order / Invoice', required: false, file: docs.orderOrInvoice, expected: {} },
+      { fieldKey: 'bankStatements', docType: 'bankStatements', slot: 'Bank statements', required: true, file: docs.bankStatements, expected: company },
+      { fieldKey: 'boardResolution', docType: 'boardResolution', slot: 'Board resolution', required: true, file: docs.boardResolution, expected: company },
+      { fieldKey: 'passportPhoto', docType: 'passportPhoto', slot: 'Applicant passport photo', required: true, file: docs.passportPhoto, expected: {} },
+      ...(docs.directorUploads || []).flatMap((upload, index) => [
+        {
+          fieldKey: `director.${index}.nrc`,
+          docType: 'directorNrc',
+          slot: `Director ${index + 1} NRC`,
+          required: true,
+          file: upload.nrc,
+          expected: { name: directors[index]?.name, nrc: directors[index]?.nrc },
+        },
+        {
+          fieldKey: `director.${index}.passportPhoto`,
+          docType: 'directorPassportPhoto',
+          slot: `Director ${index + 1} passport photo`,
+          required: true,
+          file: upload.passportPhoto,
+          expected: {},
+        },
+      ]),
+    ]
+  })()
+
+  const documentAnalyses = useDocumentAnalysis({ token: draftToken, slots: analysisSlots })
+
+  /** What FileUploadField shows for a slot, with form mismatches computed against current answers. */
+  const analysisFor = (fieldKey) => {
+    const entry = documentAnalyses[fieldKey]
+    if (!entry) return undefined
+    const slot = analysisSlots.find((candidate) => candidate.fieldKey === fieldKey)
+    return { status: entry.status, notes: documentNotes(entry.analysis, slot?.expected) }
+  }
 
   const handleDocumentInputChange = (field, event) => {
     const file = event.target.files?.[0] ?? null
@@ -954,6 +1026,84 @@ function DashboardPage() {
 
   const isFinalStep = currentStep === stepTitles.length - 1
 
+  // ---------------------------------------------------------------------------
+  // AI prescreen
+  // ---------------------------------------------------------------------------
+
+  // Runs on reaching Overview (for the applicant guidance) and is reused at submit when
+  // nothing has changed since. Only non-sensitive sections are sent; the server picks the
+  // exact fields again rather than trusting this list.
+  const buildPrescreenRequest = () => ({
+    loanType: selectedLoanType,
+    applicant:
+      selectedLoanType === 'personal'
+        ? { employmentInfo: personalData.employmentInfo }
+        : {
+            businessInfo: businessData.businessInfo,
+            directorInfo: {
+              applicantPosition: businessData.directorInfo.applicantPosition,
+              directors: (businessData.directorInfo.directors || []).map(() => ({})),
+            },
+          },
+    loan: loanData,
+    documents: analysisSlots.map(({ fieldKey, docType, slot, required, file, expected }) => {
+      const entry = documentAnalyses[fieldKey]
+      const analysis = entry?.status === 'done' ? entry.analysis : null
+      return {
+        docType,
+        slot,
+        required,
+        attached: Boolean(file),
+        analysis,
+        formMismatches: analysis ? findFormMismatches(analysis, expected) : [],
+      }
+    }),
+  })
+
+  const [prescreen, setPrescreen] = useState({ status: 'idle', result: null })
+  const prescreenRunRef = useRef({ key: null, promise: null })
+  const aiUnavailableRef = useRef(false)
+
+  /** Starts a prescreen for `request`. The promise resolves to the result or null, never rejects. */
+  const runPrescreen = (request, key) => {
+    setPrescreen({ status: 'loading', result: null })
+    const promise = prescreenApplication(draftToken, request)
+      .then((result) => {
+        if (prescreenRunRef.current.key === key) setPrescreen({ status: 'done', result })
+        return result
+      })
+      .catch((error) => {
+        if (isAiUnavailable(error)) aiUnavailableRef.current = true
+        else console.warn('Prescreen failed', error)
+        if (prescreenRunRef.current.key === key) setPrescreen({ status: 'error', result: null })
+        prescreenRunRef.current = { key: null, promise: null }
+        return null
+      })
+    prescreenRunRef.current = { key, promise }
+    return promise
+  }
+
+  // Waits for document checks still in flight, so the prescreen sees their findings.
+  const documentChecksPending = Object.values(documentAnalyses).some((entry) => entry.status === 'analyzing')
+  const prescreenKey =
+    isFinalStep && draftToken && !documentChecksPending ? JSON.stringify(buildPrescreenRequest()) : null
+
+  useEffect(() => {
+    if (!prescreenKey || aiUnavailableRef.current || prescreenRunRef.current.key === prescreenKey) return
+    runPrescreen(JSON.parse(prescreenKey), prescreenKey)
+    // runPrescreen reads draftToken, which is already part of prescreenKey's inputs.
+  }, [prescreenKey])
+
+  /** The prescreen for the application as it stands, reusing the Overview run if unchanged. */
+  const resolvePrescreenForSubmit = () => {
+    if (!SEND_PRESCREEN_TO_LMS || !draftToken || aiUnavailableRef.current) return Promise.resolve(null)
+    const request = buildPrescreenRequest()
+    const key = JSON.stringify(request)
+    const pending = prescreenRunRef.current.key === key ? prescreenRunRef.current.promise : runPrescreen(request, key)
+    const timeout = new Promise((resolve) => setTimeout(() => resolve(null), PRESCREEN_SUBMIT_WAIT_MS))
+    return Promise.race([pending, timeout])
+  }
+
   const handleFormSubmit = (event) => {
     event.preventDefault()
     if (isFinalStep) {
@@ -1019,14 +1169,22 @@ function DashboardPage() {
         totalAmount: Number(totalRepayable.toFixed(2)),
       }
 
+      // Started before the uploads so the two overlap; never rejects, and yields null
+      // when disabled, unavailable or too slow — the application is filed either way.
+      const prescreenPromise = resolvePrescreenForSubmit()
+      const withPrescreen = async (payload) => {
+        const result = await prescreenPromise
+        return result ? { ...payload, ai_prescreening: JSON.stringify(result) } : payload
+      }
+
       if (selectedLoanType === 'personal') {
         const uploadedFiles = await uploadPersonalDocuments()
         const payload = buildPersonalPayload(personalData, uploadedFiles, loanDetails)
-        await createLoanApplication(payload)
+        await createLoanApplication(await withPrescreen(payload))
       } else {
         const { uploaded, directorUploaded } = await uploadBusinessDocuments()
         const payload = buildBusinessPayload(businessData, uploaded, directorUploaded, loanDetails)
-        await createLoanApplication(payload)
+        await createLoanApplication(await withPrescreen(payload))
       }
       setShowSuccess(true)
       clearDraft()
@@ -1148,6 +1306,7 @@ function DashboardPage() {
       onChange={(event) => handleDocumentInputChange(field, event)}
       cameraFirst={cameraCapable && hasCamera}
       onUseCamera={() => setShowCameraCapture(true)}
+      analysis={analysisFor(field)}
     />
   )
 
@@ -1280,16 +1439,19 @@ function DashboardPage() {
   )
 
   const overviewIntro = (
-    <div className="flex flex-wrap items-center justify-between gap-3 print:hidden">
-      <p className="text-sm text-muted-foreground">
-        Please review your details below before submitting. Use Edit to change a section, or Preview to check an
-        attachment.
-      </p>
-      <Button type="button" variant="outline" size="sm" onClick={() => window.print()}>
-        <Printer />
-        Print / Save as PDF
-      </Button>
-    </div>
+    <>
+      <div className="flex flex-wrap items-center justify-between gap-3 print:hidden">
+        <p className="text-sm text-muted-foreground">
+          Please review your details below before submitting. Use Edit to change a section, or Preview to check an
+          attachment.
+        </p>
+        <Button type="button" variant="outline" size="sm" onClick={() => window.print()}>
+          <Printer />
+          Print / Save as PDF
+        </Button>
+      </div>
+      <PrescreenGuidance status={prescreen.status} guidance={prescreen.result?.applicantGuidance} />
+    </>
   )
 
   const generatedOn = dayjs().format('D MMMM YYYY')
@@ -1600,6 +1762,7 @@ function DashboardPage() {
                         error={validationErrors[`documents.directorUploads[${index}].nrc`]}
                         status={getUploadStatus(`director.${index}.nrc`)}
                         onChange={(event) => handleDirectorDocumentInputChange(index, 'nrc', event)}
+                        analysis={analysisFor(`director.${index}.nrc`)}
                       />
                       <FileUploadField
                         name={`documents.directorUploads[${index}].passportPhoto`}
@@ -1610,6 +1773,7 @@ function DashboardPage() {
                         error={validationErrors[`documents.directorUploads[${index}].passportPhoto`]}
                         status={getUploadStatus(`director.${index}.passportPhoto`)}
                         onChange={(event) => handleDirectorDocumentInputChange(index, 'passportPhoto', event)}
+                        analysis={analysisFor(`director.${index}.passportPhoto`)}
                       />
                     </div>
                   </div>

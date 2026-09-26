@@ -138,6 +138,34 @@ Keep `VITE_LMS_API_URL=/erp-api`: the `/erp-api` rewrite in `vercel.json` proxie
 the LMS host, standing in for the dev proxy in `vite.config.js`, so the browser stays
 same-origin. The rewrite must stay ahead of the SPA fallback rewrite.
 
+### 4. (Optional) AI document checks and prescreening
+
+`api/ai/*` adds two advisory features. Both are hidden if no model is configured.
+
+- **Document checks**: each upload is sent to the model. The model says what the file
+  actually is, how legible it is, and whether it is current, and it extracts names, ID
+  numbers, dates and amounts. The wizard compares the extracted values with the form
+  (`src/utils/documentChecks.js`) and shows a warning under the field. It never blocks
+  the applicant.
+- **Prescreen**: runs when the applicant reaches Overview. Affordability ratios are
+  computed in code (`api/_lib/ai/prescreen.js`) and the model writes the review. Staff
+  get a recommendation, a risk level and flags. The applicant only sees non-verdict
+  "Before you submit" suggestions. Gender, marital status, nationality, date of birth,
+  names and addresses are never sent to the model.
+
+Set `GEMINI_API_KEY`, using a key from a **billed** Google Cloud project, because on the
+free tier Google may use the content. To self-host Gemma instead, set
+`AI_PROVIDER=openai-compatible` plus `AI_BASE_URL` and `AI_MODEL` pointing at Ollama,
+vLLM or llama.cpp. No code change is needed. Gemma cannot read PDFs, so PDF uploads are
+skipped on that provider until a PDF-to-image step is added in
+`api/_lib/ai/providers/openaiCompatible.js`. Photo checks and the prescreen still work.
+
+To pass the staff result to the LMS, first add a long-text field `ai_prescreening` to
+the Frappe Custom Loan Application doctype and have `create_custom_loan_application`
+save it. Then set `VITE_AI_PRESCREEN_TO_LMS=true`. The field holds a JSON string.
+`AFFORDABILITY_GUIDE_RATIO` in `prescreen.js` is a placeholder (0.4). Replace it with
+the lender's policy figure.
+
 ### Limits worth knowing
 
 - A function request body caps at 4.5 MB on Vercel, so document uploads are validated at

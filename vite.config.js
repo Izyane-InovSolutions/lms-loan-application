@@ -14,6 +14,8 @@ function localApiDevPlugin() {
     '/api/otp/verify-email': '/api/otp/verify-email.js',
     '/api/draft': '/api/draft/index.js',
     '/api/draft/documents': '/api/draft/documents.js',
+    '/api/ai/analyze-document': '/api/ai/analyze-document.js',
+    '/api/ai/prescreen': '/api/ai/prescreen.js',
   }
 
   return {
