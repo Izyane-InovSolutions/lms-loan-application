@@ -20,11 +20,20 @@
   "rules": {
     "react/react-in-jsx-scope": "off",
     "react/prop-types": "warn",
-    "no-unused-vars": ["warn", { "argsIgnorePattern": "^_" }]
+    "no-unused-vars": [
+      "warn",
+      {
+        "argsIgnorePattern": "^_"
+      }
+    ]
   },
   "overrides": [
     {
-      "files": ["src/components/**/*.jsx"],
+      "files": [
+        "src/components/**/*.jsx",
+        "src/admin/**/*.jsx",
+        "src/pages/MyApplicationsPage.jsx"
+      ],
       "rules": {
         "react/prop-types": "off"
       }

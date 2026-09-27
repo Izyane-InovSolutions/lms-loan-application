@@ -1,64 +1,110 @@
 import React, { useEffect, useState } from 'react'
+import { Loader2, X } from 'lucide-react'
+
+import { Button } from '@/components/ui/button'
+import { SimpleText } from '@/lib/simpleText'
+
+/*
+ * The terms and privacy notice the applicant accepts on submit. The text is what
+ * administrators publish in Settings → Terms and privacy; the server records which
+ * versions were in force when the application was filed.
+ */
+
+const fetchDocument = (kind) =>
+  fetch(`/api/v1/legal/${kind}`).then((response) => (response.ok ? response.json() : Promise.reject(new Error(String(response.status)))))
 
 function TermsModal({ open, onClose, onAccept }) {
   const [accepted, setAccepted] = useState(false)
+  const [documents, setDocuments] = useState({ status: 'loading' })
+  const [tab, setTab] = useState('terms')
 
   useEffect(() => {
     if (!open) {
       setAccepted(false)
+      return undefined
+    }
+    let cancelled = false
+    setDocuments({ status: 'loading' })
+    Promise.all([fetchDocument('terms'), fetchDocument('privacy')])
+      .then(([terms, privacy]) => !cancelled && setDocuments({ status: 'ready', terms, privacy }))
+      .catch(() => !cancelled && setDocuments({ status: 'error' }))
+    return () => {
+      cancelled = true
     }
   }, [open])
 
-  if (!open) {
-    return null
-  }
+  useEffect(() => {
+    if (!open) return undefined
+    const onKey = (event) => event.key === 'Escape' && onClose()
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [open, onClose])
+
+  if (!open) return null
+
+  const current = documents.status === 'ready' ? documents[tab] : null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 px-4">
-      <div className="w-full max-w-2xl rounded-[2rem] border border-slate-200 bg-white p-6 shadow-2xl">
-        <div className="flex items-start justify-between gap-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 px-4" role="dialog" aria-modal="true" aria-labelledby="terms-title">
+      <div className="flex max-h-[90vh] w-full max-w-2xl flex-col rounded-2xl border bg-card text-card-foreground shadow-lift">
+        <div className="flex items-start justify-between gap-4 border-b px-6 pb-4 pt-5">
           <div>
-            <p className="text-sm font-semibold uppercase tracking-[0.24em] text-sky-600">Salary Advance Facility Agreement</p>
-            <h2 className="mt-2 text-2xl font-semibold text-slate-900">Terms and conditions</h2>
+            <h2 id="terms-title" className="text-xl font-semibold tracking-tight">
+              Before you submit
+            </h2>
+            <p className="mt-1 text-sm text-muted-foreground">Read the terms and how we use your information, then accept to send your application.</p>
           </div>
-          <button className="text-3xl text-slate-400" onClick={onClose} aria-label="Close modal">
-            ×
+          <button type="button" className="rounded p-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={onClose} aria-label="Close">
+            <X className="size-5" aria-hidden="true" />
           </button>
         </div>
 
-        <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-5 text-sm text-slate-700">
-          <p>
-            This facility is offered to you as a pre-qualified existing customer of Absa Bank Zambia Plc. By accepting, you authorize the Bank to recover the total repayable amount from your salary credited to your nominated account.
-          </p>
-          <ul className="mt-4 list-disc space-y-2 pl-5">
-            <li>Loan amount, facility fee, tenure and monthly repayment are as disclosed.</li>
-            <li>Repayment is collected via standing order on your salary date.</li>
-            <li>Facility fee will be deducted together with the agreed advance amount.</li>
-            <li>By accepting, you confirm that you understand and agree to the salary deduction authority.</li>
-          </ul>
+        <div className="flex gap-1 px-6 pt-3" role="tablist">
+          {[
+            ['terms', documents.terms?.title || 'Terms and conditions'],
+            ['privacy', documents.privacy?.title || 'Privacy notice'],
+          ].map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              role="tab"
+              aria-selected={tab === key}
+              onClick={() => setTab(key)}
+              className={`rounded-md px-3 py-1.5 text-sm font-medium ${tab === key ? 'bg-secondary text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
 
-          <label className="mt-5 flex items-start gap-3 rounded-2xl border border-slate-200 bg-white p-3">
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4 text-sm leading-relaxed text-muted-foreground">
+          {documents.status === 'loading' ? (
+            <p className="flex items-center gap-2">
+              <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+              Loading…
+            </p>
+          ) : documents.status === 'error' ? (
+            <p className="text-destructive">We couldn’t load the terms. Check your connection and try again.</p>
+          ) : (
+            <SimpleText text={current.body} />
+          )}
+        </div>
+
+        <div className="border-t px-6 py-4">
+          <label className="flex cursor-pointer items-start gap-3 text-sm">
             <input
               type="checkbox"
               checked={accepted}
+              disabled={documents.status !== 'ready'}
               onChange={(event) => setAccepted(event.target.checked)}
+              className="mt-0.5 size-4 accent-[hsl(var(--primary))]"
             />
-            <span>
-              I have read and accept the Salary Advance Facility Agreement, including the facility fee and salary deduction authority.
-            </span>
+            <span>I have read and accept the terms and conditions, and I understand how my information will be used.</span>
           </label>
+          <Button type="button" className="mt-4 w-full" disabled={!accepted || documents.status !== 'ready'} onClick={() => onAccept()}>
+            Accept and submit
+          </Button>
         </div>
-
-        <button
-          className="mt-6 w-full rounded-lg bg-sky-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:bg-slate-300"
-          type="button"
-          disabled={!accepted}
-          onClick={() => {
-            onAccept()
-          }}
-        >
-          Accept & continue
-        </button>
       </div>
     </div>
   )

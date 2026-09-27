@@ -49,16 +49,12 @@ export default async function handler(req, res) {
     const token = generateToken()
     await kv.set(`draftToken:${token}`, email, { ex: DRAFT_TTL_SECONDS })
 
-    // TEMPORARY diagnostic — pairs with the miss log in otp/verify.js so the key the
-    // draft is stored under can be compared against the key resume looks up.
-    console.log('[resume] draft stored', { key: `draft:${email}` })
-
     return res.status(200).json({ draftToken: token, draft })
   }
 
   const tokenAuth = await resolveTokenAuth(req)
   if (!tokenAuth) {
-    return res.status(401).json({ message: 'Missing or invalid draft token.' })
+    return res.status(401).json({ code: 'invalid_token', message: 'Missing or invalid draft token.' })
   }
 
   if (req.method === 'PUT') {
@@ -84,9 +80,6 @@ export default async function handler(req, res) {
     await Promise.all(keys.map((key) => kv.set(`draft:${key}`, draft, { ex: DRAFT_TTL_SECONDS })))
     await kv.set(`draftToken:${tokenAuth.token}`, nextEmail, { ex: DRAFT_TTL_SECONDS })
 
-    if (nextEmail !== tokenAuth.email) {
-      console.log('[resume] draft re-keyed', { from: `draft:${tokenAuth.email}`, to: `draft:${nextEmail}` })
-    }
     return res.status(200).json({ draft })
   }
 

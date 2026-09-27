@@ -7,6 +7,8 @@ export const normalizeEmail = (email) => {
   return EMAIL_PATTERN.test(trimmed) ? trimmed : null
 }
 
-export const generateOtpCode = () => String(Math.floor(100000 + Math.random() * 900000))
+// crypto.randomInt, not Math.random: the code is the only thing standing between an email
+// address and its draft, so it must not be predictable.
+export const generateOtpCode = () => String(crypto.randomInt(100000, 1000000))
 
 export const generateToken = () => crypto.randomBytes(24).toString('hex')

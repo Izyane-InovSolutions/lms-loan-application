@@ -10,7 +10,8 @@ import path from 'node:path'
 // which made drafts vanish mid-test and surfaced as "No in-progress application found
 // for this email" at the OTP step. If the filesystem is not writable (e.g. a serverless
 // runtime), it silently degrades to memory-only.
-const STORE_FILE = path.resolve(process.cwd(), '.local-kv.json')
+// LOS_LOCAL_KV_FILE lets end-to-end tests use a throwaway file.
+const STORE_FILE = process.env.LOS_LOCAL_KV_FILE ? path.resolve(process.env.LOS_LOCAL_KV_FILE) : path.resolve(process.cwd(), '.local-kv.json')
 
 let store = null
 
@@ -40,6 +41,13 @@ const isExpired = (entry) => entry.expiresAt !== null && Date.now() > entry.expi
 
 export function createMemoryKv() {
   return {
+    async incr(key) {
+      const existing = load().get(key)
+      const value = existing && !isExpired(existing) ? Number(existing.value) + 1 : 1
+      load().set(key, { value, expiresAt: existing?.expiresAt ?? null })
+      persist()
+      return value
+    },
     async get(key) {
       const entries = load()
       const entry = entries.get(key)

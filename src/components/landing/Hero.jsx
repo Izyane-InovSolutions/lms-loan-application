@@ -4,14 +4,8 @@ import { ArrowRight, ScanFace, Search, ShieldCheck, Save } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
-import {
-  DRAFT_RETENTION_DAYS,
-  DEFAULT_TENURE_MONTHS,
-  formatKwacha,
-  getProduct,
-  monthlyInstalment,
-  totalRepayable,
-} from '@/config/loanProducts'
+import { DRAFT_RETENTION_DAYS, formatKwacha, priceLoan } from '@/config/loanProducts'
+import { useProduct } from '@/hooks/useProducts'
 import heroImage from '@/assets/hero1.png'
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -23,9 +17,10 @@ const ASSURANCES = [
 ]
 
 export function Hero({ onApply, onCheckStatus }) {
-  const personal = getProduct('personal')
-  const business = getProduct('business')
+  const personal = useProduct('personal')
+  const business = useProduct('business')
   const example = personal.exampleAmount
+  const examplePrice = priceLoan(example, personal.defaultTenure, personal)
 
   const [statusEmail, setStatusEmail] = useState('')
   const [statusError, setStatusError] = useState('')
@@ -127,14 +122,14 @@ export function Hero({ onApply, onCheckStatus }) {
           <div className="absolute -bottom-6 left-1/2 w-[min(22rem,90%)] -translate-x-1/2 rounded-lg border bg-card p-5 shadow-lift lg:-left-6 lg:translate-x-0">
             <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Worked example</p>
             <p className="mt-2 text-sm text-muted-foreground">
-              {formatKwacha(example)} over {DEFAULT_TENURE_MONTHS} months
+              {formatKwacha(example)} over {personal.defaultTenure} months
             </p>
             <p className="mt-3 text-3xl font-bold tracking-tight text-foreground">
-              {formatKwacha(Math.round(monthlyInstalment(example, DEFAULT_TENURE_MONTHS)))}
+              {formatKwacha(Math.round(examplePrice.monthly))}
               <span className="ml-1.5 text-sm font-medium text-muted-foreground">/ month</span>
             </p>
             <p className="mt-2 text-xs text-muted-foreground">
-              {formatKwacha(Math.round(totalRepayable(example)))} total repayable, including the facility fee.
+              {formatKwacha(Math.round(examplePrice.total))} total repayable, including the facility fee.
             </p>
           </div>
         </div>

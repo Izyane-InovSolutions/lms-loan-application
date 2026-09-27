@@ -2,7 +2,7 @@ import { createGeminiProvider } from './providers/gemini.js'
 import { createOpenAiCompatibleProvider } from './providers/openaiCompatible.js'
 import { AiProviderError, AiUnavailableError } from './errors.js'
 
-export { AiProviderError, AiUnavailableError, AiUnsupportedInputError } from './errors.js'
+export { AiProviderError, AiUnavailableError, AiUnsupportedInputError, classifyAiFailure } from './errors.js'
 
 const DEFAULT_GEMINI_MODEL = 'gemini-3.8-flash'
 const DEFAULT_TIMEOUT_MS = 60000

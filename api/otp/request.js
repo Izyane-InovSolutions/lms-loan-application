@@ -25,9 +25,18 @@ export default async function handler(req, res) {
   const code = generateOtpCode()
   await kv.set(otpKey, { code, attempts: 0, createdAt: Date.now() }, { ex: OTP_TTL_SECONDS })
 
+  // "consent": an agent is filling in an application with this customer, who reads the
+  // code back to confirm they agree. The wording has to say so, not "resume".
+  const purpose = ['consent', 'offer'].includes(req.body?.purpose) ? req.body.purpose : 'resume'
   try {
-    await sendOtpEmail(email, code)
+    await sendOtpEmail(email, code, { purpose, agentName: String(req.body?.agentName || '').slice(0, 80) })
   } catch (error) {
+    // Local testing without a mail server: LOS_DEV_LOG_CODES=true prints the code to the
+    // server console instead. Never honoured on Vercel.
+    if (process.env.LOS_DEV_LOG_CODES === 'true' && !process.env.VERCEL) {
+      console.warn(`[dev] could not email ${email}; their code is ${code}`)
+      return res.status(200).json({ message: 'OTP sent.' })
+    }
     await kv.del(otpKey)
     return res.status(502).json({ message: 'Could not send the verification email. Please try again.' })
   }

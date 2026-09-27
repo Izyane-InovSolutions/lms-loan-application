@@ -78,7 +78,7 @@ export function ResumeApplicationDialog({ open, onOpenChange, onResumed }) {
     try {
       const normalizedEmail = email.trim().toLowerCase()
       const { draftToken, draft } = await verifyOtp(normalizedEmail, otpCode.trim())
-      const hydratedDraft = await hydrateDraftFiles(draft)
+      const hydratedDraft = await hydrateDraftFiles(draft, draftToken)
 
       onResumed({ ...hydratedDraft, draftToken })
       reset()

@@ -3,9 +3,10 @@ import { FileText } from 'lucide-react'
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { SectionHeading } from '@/components/landing/SectionHeading'
-import { LOAN_PRODUCTS } from '@/config/loanProducts'
+import { useProducts } from '@/hooks/useProducts'
 
 export function Requirements() {
+  const products = useProducts()
   return (
     <section id="requirements" className="border-b border-border py-20 lg:py-24">
       <div className="container">
@@ -16,7 +17,7 @@ export function Requirements() {
         />
 
         <div className="mt-12 grid gap-6 lg:grid-cols-2">
-          {LOAN_PRODUCTS.map((product) => (
+          {products.map((product) => (
             <Card key={product.id}>
               <CardHeader>
                 <CardTitle>{product.name}</CardTitle>

@@ -8,6 +8,7 @@ import {
   uploadDraftDocument,
   extractDraftErrorMessage,
 } from '../services/draftApi'
+import { describeRequestError, isInvalidTokenError } from '../lib/requestError'
 
 const LOCAL_SAVE_DEBOUNCE_MS = 800
 const REMOTE_SAVE_DEBOUNCE_MS = 5000
@@ -69,6 +70,11 @@ export function useApplicationDraft({
   const [remoteSyncError, setRemoteSyncError] = useState(null)
   const [documentSyncError, setDocumentSyncError] = useState(null)
   const uploadedSignaturesRef = useRef(new Map())
+  // Uploads still in flight, by draft path, so submit can wait for them.
+  const inflightUploadsRef = useRef(new Map())
+  // Set when the server no longer recognises draftToken; the next render re-saves the
+  // draft to obtain a new one (see the recovery effect below).
+  const tokenRecoveryRef = useRef(false)
   const localSaveTimer = useRef(null)
   const remoteSaveTimer = useRef(null)
   const checkedLocalRef = useRef(false)
@@ -157,14 +163,27 @@ export function useApplicationDraft({
 
     try {
       const token = await withRetry(async () => {
-        if (!draftToken) {
-          const result = await createDraft({ email: syncEmail, ...payload })
-          return result.draftToken
+        if (draftToken) {
+          try {
+            await updateDraft(draftToken, payload)
+            return draftToken
+          } catch (error) {
+            // The server has forgotten this token (expired, or a store that lost it).
+            // POST /draft merges into the record stored under the email, so creating
+            // again keeps what was already saved and hands back a token that works.
+            if (!isInvalidTokenError(error)) throw error
+          }
         }
-        await updateDraft(draftToken, payload)
-        return draftToken
+        const result = await createDraft({ email: syncEmail, ...payload })
+        return result.draftToken
       })
-      if (token !== draftToken) setDraftToken(token)
+      if (token !== draftToken) {
+        // Documents sent under the old token may never have been stored, and the
+        // analysis hook re-checks on a token change, so re-send every attachment.
+        uploadedSignaturesRef.current.clear()
+        setDraftToken(token)
+      }
+      tokenRecoveryRef.current = false
       setRemoteSyncError(null)
       return token
     } catch (error) {
@@ -172,7 +191,7 @@ export function useApplicationDraft({
       // copy alone, so a write that never lands is reported to the applicant as "no
       // in-progress application found" even though their own device still shows it.
       // Swallowing this silently is what made that look like Redis dropping records.
-      console.error('Draft sync failed', error)
+      console.error(`Draft sync failed: ${describeRequestError(error)}`)
       setRemoteSyncError(extractDraftErrorMessage(error))
       return null
     }
@@ -184,6 +203,29 @@ export function useApplicationDraft({
     remoteSaveTimer.current = setTimeout(flushRemoteDraft, REMOTE_SAVE_DEBOUNCE_MS)
     return () => clearTimeout(remoteSaveTimer.current)
   }, [canSyncRemotely, flushRemoteDraft])
+
+  /**
+   * Called when any request carrying draftToken gets a 401 — a document upload, an AI
+   * check or the prescreen. Without this the browser kept sending a token the server
+   * had forgotten, and every upload and check failed until the page was reloaded.
+   */
+  const invalidateDraftToken = useCallback(() => {
+    tokenRecoveryRef.current = true
+    setDraftToken(null)
+  }, [])
+
+  // Re-save straight away rather than after the debounce, so a stale token never holds
+  // up uploads for five seconds. Runs once the null token has reached flushRemoteDraft.
+  // flushRemoteDraft changes identity on every keystroke, so without the in-flight guard
+  // typing during recovery would mint a fresh token per character.
+  const recoveryInFlightRef = useRef(false)
+  useEffect(() => {
+    if (!tokenRecoveryRef.current || draftToken || !canSyncRemotely || recoveryInFlightRef.current) return
+    recoveryInFlightRef.current = true
+    flushRemoteDraft().finally(() => {
+      recoveryInFlightRef.current = false
+    })
+  }, [draftToken, canSyncRemotely, flushRemoteDraft])
 
   useEffect(() => {
     if (!draftToken) return
@@ -198,15 +240,57 @@ export function useApplicationDraft({
       const signature = fileSignature(file)
       if (uploadedSignaturesRef.current.get(path) === signature) return
       uploadedSignaturesRef.current.set(path, signature)
-      withRetry(() => uploadDraftDocument(draftToken, path, file))
+      const upload = withRetry(() => uploadDraftDocument(draftToken, path, file))
+      inflightUploadsRef.current.set(path, upload)
+      upload
         .then(() => setDocumentSyncError(null))
+        .finally(() => {
+          if (inflightUploadsRef.current.get(path) === upload) inflightUploadsRef.current.delete(path)
+        })
         .catch((error) => {
-          console.error(`Draft document upload failed for ${path}`, error)
           uploadedSignaturesRef.current.delete(path)
+          if (isInvalidTokenError(error)) {
+            // Re-sent automatically once the draft has a new token.
+            invalidateDraftToken()
+            return
+          }
+          console.error(`Draft document upload failed (${path}): ${describeRequestError(error)}`)
           setDocumentSyncError(extractDraftErrorMessage(error))
         })
     })
-  }, [draftToken, selectedLoanType, personalData, businessData])
+  }, [draftToken, selectedLoanType, personalData, businessData, invalidateDraftToken])
+
+  /**
+   * Before submitting: makes sure every attached file is in draft storage under `token`,
+   * waiting for uploads in flight and sending any that never went (or failed). Throws the
+   * first upload error, so the applicant sees why submitting cannot go ahead yet.
+   */
+  const ensureDocumentsUploaded = useCallback(
+    async (token) => {
+      const scope = selectedLoanType === 'personal' ? 'personal' : 'business'
+      const activeData = selectedLoanType === 'personal' ? personalData : businessData
+      const { files } = extractFiles(activeData, scope)
+      const pending = []
+      files.forEach((file, path) => {
+        if (file.__source === 'lms') return
+        const signature = fileSignature(file)
+        const inflight = inflightUploadsRef.current.get(path)
+        if (uploadedSignaturesRef.current.get(path) === signature && token === draftToken) {
+          if (inflight) pending.push(inflight)
+          return
+        }
+        uploadedSignaturesRef.current.set(path, signature)
+        pending.push(
+          withRetry(() => uploadDraftDocument(token, path, file)).catch((error) => {
+            uploadedSignaturesRef.current.delete(path)
+            throw error
+          })
+        )
+      })
+      await Promise.all(pending)
+    },
+    [selectedLoanType, personalData, businessData, draftToken]
+  )
 
   // Writes the local cache immediately instead of waiting out the debounce.
   // Used by "Save & exit" so the label is literally true — without this, keystrokes
@@ -224,8 +308,9 @@ export function useApplicationDraft({
     [selectedLoanType, currentStep, personalData, businessData, loanData, draftToken]
   )
 
-  const clearDraft = useCallback(async () => {
-    const token = draftToken
+  // `remote: false` after a successful submit: the server has already removed the draft.
+  const clearDraft = useCallback(async ({ remote = true } = {}) => {
+    const token = remote ? draftToken : null
     setDraftToken(null)
     setRemoteSyncError(null)
     setDocumentSyncError(null)
@@ -242,6 +327,8 @@ export function useApplicationDraft({
     startFresh,
     hydrateFrom,
     clearDraft,
+    invalidateDraftToken,
+    ensureDocumentsUploaded,
     flushLocalDraft,
     flushRemoteDraft,
     canSyncRemotely,

@@ -1,44 +1,51 @@
 import React from 'react'
+import { CheckCircle2 } from 'lucide-react'
 
-function SuccessModal({ open, onClose, loanType, amount, tenure, monthlyRepayment, totalRepayable }) {
+import { Button } from '@/components/ui/button'
+
+/** Confirmation after submit, carrying the reference the applicant quotes from now on. */
+function SuccessModal({ open, onClose, loanType, amount, tenure, monthlyRepayment, totalRepayable, reference, assisted }) {
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 px-4">
-      <div className="w-full max-w-lg rounded-[2rem] border border-slate-200 bg-white p-6 shadow-2xl">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/70 px-4" role="dialog" aria-modal="true" aria-labelledby="success-title">
+      <div className="w-full max-w-lg rounded-2xl border bg-card p-6 text-card-foreground shadow-lift">
         <div className="text-center">
-          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100 text-3xl font-semibold text-emerald-600">✓</div>
-          <h2 className="mt-4 text-2xl font-semibold text-slate-900">Application submitted</h2>
-          <p className="mt-2 text-sm text-slate-600">Your {loanType} loan request has been received successfully.</p>
+          <CheckCircle2 className="mx-auto size-12 text-success" aria-hidden="true" />
+          <h2 id="success-title" className="mt-3 text-2xl font-semibold tracking-tight">
+            Application submitted
+          </h2>
+          {reference ? (
+            <p className="mt-2 text-sm text-muted-foreground">
+              Reference <span className="font-semibold tracking-wide text-foreground">{reference}</span>
+            </p>
+          ) : null}
+          <p className="mt-2 text-sm text-muted-foreground">
+            {assisted
+              ? 'The customer will get updates by email. It’s now in the loan officers’ queue.'
+              : 'We’ll email you when there’s news. You can follow it any time from “My applications”.'}
+          </p>
         </div>
 
-        <div className="mt-6 rounded-2xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
-          <div className="flex items-center justify-between py-2">
-            <span>Loan type</span>
-            <strong>{loanType === 'personal' ? 'Personal Loan' : 'Business Loan'}</strong>
-          </div>
-          <div className="flex items-center justify-between py-2">
-            <span>Loan amount</span>
-            <strong>K{amount.toLocaleString()}</strong>
-          </div>
-          <div className="flex items-center justify-between py-2">
-            <span>Tenure</span>
-            <strong>{tenure} months</strong>
-          </div>
-          <div className="flex items-center justify-between py-2">
-            <span>Estimated monthly repayment</span>
-            <strong>K{monthlyRepayment.toFixed(2)}</strong>
-          </div>
-          <div className="flex items-center justify-between py-2">
-            <span>Total repayable</span>
-            <strong>K{totalRepayable.toFixed(2)}</strong>
-          </div>
-        </div>
+        <dl className="mt-6 divide-y rounded-xl border bg-muted/30 px-4 text-sm">
+          {[
+            ['Loan', loanType === 'personal' ? 'Personal loan' : 'Business loan'],
+            ['Amount', `K${amount.toLocaleString()}`],
+            ['Tenure', `${tenure} months`],
+            ['Estimated monthly repayment', `K${monthlyRepayment.toFixed(2)}`],
+            ['Total repayable', `K${totalRepayable.toFixed(2)}`],
+          ].map(([label, value]) => (
+            <div key={label} className="flex items-center justify-between py-2.5">
+              <dt className="text-muted-foreground">{label}</dt>
+              <dd className="font-semibold tabular-nums">{value}</dd>
+            </div>
+          ))}
+        </dl>
 
         <div className="mt-6 flex justify-center">
-          <button className="rounded-lg bg-sky-600 px-6 py-3 text-sm font-semibold text-white transition hover:bg-sky-700" type="button" onClick={onClose}>
-            Back to home
-          </button>
+          <Button type="button" onClick={onClose}>
+            {assisted ? 'Open the case' : 'Follow my application'}
+          </Button>
         </div>
       </div>
     </div>

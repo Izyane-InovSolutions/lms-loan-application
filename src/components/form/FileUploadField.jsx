@@ -1,5 +1,5 @@
 import React from 'react'
-import { AlertCircle, AlertTriangle, Camera, CheckCircle2, FileText, Loader2, Sparkles, Trash2, UploadCloud } from 'lucide-react'
+import { AlertCircle, AlertTriangle, Camera, CheckCircle2, FileText, Loader2, RotateCw, Sparkles, Trash2, UploadCloud } from 'lucide-react'
 
 import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
@@ -31,7 +31,8 @@ const acceptHint = (accept) =>
  * leaving file upload available as a de-emphasized fallback link.
  *
  * `analysis` is the optional AI check for the attached file:
- * { status: 'analyzing' | 'done' | 'skipped' | 'error', notes: string[] }. It is advisory —
+ * { status: 'analyzing' | 'done' | 'skipped' | 'error', notes: string[], message?, onRetry? }.
+ * `message` says why a check failed; `onRetry` is set when trying again could help. It is advisory —
  * shown as a warning, never as a validation error, so it cannot stop the applicant.
  */
 export function FileUploadField({
@@ -221,10 +222,25 @@ function DocumentAnalysisNote({ analysis }) {
   // which makes a billing or key problem on the provider side impossible to spot.
   if (analysis.status === 'error') {
     return (
-      <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-        <AlertCircle className="size-3.5" aria-hidden="true" />
-        We couldn’t check this document automatically. It will still be sent with your application.
-      </p>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+        <p className="flex items-start gap-1.5">
+          <AlertCircle className="mt-px size-3.5 shrink-0" aria-hidden="true" />
+          <span>
+            {analysis.message || 'We couldn’t check this document automatically.'} It will still be sent with your
+            application.
+          </span>
+        </p>
+        {analysis.onRetry ? (
+          <button
+            type="button"
+            onClick={analysis.onRetry}
+            className="inline-flex items-center gap-1 rounded font-medium text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <RotateCw className="size-3" aria-hidden="true" />
+            Try again
+          </button>
+        ) : null}
+      </div>
     )
   }
 
