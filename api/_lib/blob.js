@@ -1,4 +1,4 @@
-import { put as vercelPut, del as vercelDel } from '@vercel/blob'
+import { put as vercelPut, del as vercelDel, get as vercelGet, copy as vercelCopy } from '@vercel/blob'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -11,7 +11,12 @@ import path from 'node:path'
 // here and then fails deep inside the SDK as an opaque auth error instead.
 const blobToken = () => (process.env.BLOB_READ_WRITE_TOKEN || '').trim()
 const hasVercelBlob = () => blobToken().length > 0
-const LOCAL_BLOB_DIR = path.resolve(process.cwd(), '.local-blob')
+// A store is created public or private and cannot change. Set BLOB_ACCESS=private when
+// the linked store is private (recommended: these are NRCs and bank statements). Reads
+// then always go through our own authenticated routes; the URL alone opens nothing.
+const blobAccess = () => ((process.env.BLOB_ACCESS || '').trim() === 'private' ? 'private' : 'public')
+// LOS_LOCAL_BLOB_DIR lets tests write somewhere disposable.
+const LOCAL_BLOB_DIR = process.env.LOS_LOCAL_BLOB_DIR || path.resolve(process.cwd(), '.local-blob')
 const LOCAL_BLOB_URL_PREFIX = '/local-blob/'
 
 /*
@@ -50,12 +55,12 @@ export const sanitizePathname = (pathname) => {
   return segments.map((segment, index) => sanitizeSegment(segment, index === segments.length - 1)).join('/')
 }
 
-// Vercel Blob only supports public-access objects today; URLs are unguessable
-// (random suffix) rather than access-controlled, so treat the URL itself as the secret.
-// Token passed explicitly rather than left to the SDK's own env lookup, so the value
-// validated above is the one actually used.
+// On a public store the random suffix makes URLs unguessable rather than
+// access-controlled, so the URL itself is the secret — it is never sent to a browser that
+// is not allowed the file. Token passed explicitly rather than left to the SDK's own env
+// lookup, so the value validated above is the one actually used.
 const putVercel = (pathname, data, options) =>
-  vercelPut(pathname, data, { access: 'public', addRandomSuffix: true, token: blobToken(), ...options })
+  vercelPut(pathname, data, { access: blobAccess(), addRandomSuffix: true, token: blobToken(), ...options })
 
 // Same trap as the KV fallback in kv.js: on Vercel the bundle directory is read-only,
 // so putLocal fails every upload with `ENOENT ... mkdir '/var/task/.local-blob'` — a
@@ -98,6 +103,65 @@ export const putBlob = (pathname, data, options = {}) => {
   if (hasVercelBlob()) return putVercel(safePathname, data, options)
   if (process.env.VERCEL) return throwUnconfigured()
   return putLocal(safePathname, data)
+}
+
+/** The store pathname of a stored file, from its record (older draft records only kept the URL). */
+export const blobPathname = (ref) => {
+  if (ref?.pathname) return ref.pathname
+  const url = String(ref?.url || '')
+  if (url.startsWith(LOCAL_BLOB_URL_PREFIX)) return url.slice(LOCAL_BLOB_URL_PREFIX.length)
+  try {
+    return decodeURIComponent(new URL(url).pathname.slice(1))
+  } catch {
+    return url
+  }
+}
+
+/** Reads a stored file into memory, or null if it is gone. Files are capped at 4.5 MB, so buffering is fine. */
+export const readBlob = async (ref) => {
+  if (hasVercelBlob()) {
+    const result = await vercelGet(ref.url || blobPathname(ref), { access: blobAccess(), token: blobToken() })
+    if (!result || result.statusCode !== 200) return null
+    const data = Buffer.from(await new Response(result.stream).arrayBuffer())
+    return { data, contentType: result.blob.contentType }
+  }
+  if (process.env.VERCEL) return throwUnconfigured()
+  try {
+    const data = await fs.readFile(path.join(LOCAL_BLOB_DIR, blobPathname(ref)))
+    return { data, contentType: ref.contentType || null }
+  } catch (error) {
+    if (error.code === 'ENOENT') return null
+    throw error
+  }
+}
+
+/** Copies a stored file to a new pathname (server-side on Vercel — nothing is downloaded). */
+export const copyBlob = async (ref, toPathname) => {
+  const safePathname = sanitizePathname(toPathname)
+  if (hasVercelBlob()) {
+    const result = await vercelCopy(ref.url || blobPathname(ref), safePathname, {
+      access: blobAccess(),
+      addRandomSuffix: true,
+      token: blobToken(),
+      ...(ref.contentType ? { contentType: ref.contentType } : {}),
+    })
+    return { url: result.url, pathname: result.pathname }
+  }
+  if (process.env.VERCEL) return throwUnconfigured()
+  const target = path.join(LOCAL_BLOB_DIR, safePathname)
+  await fs.mkdir(path.dirname(target), { recursive: true })
+  await fs.copyFile(path.join(LOCAL_BLOB_DIR, blobPathname(ref)), target)
+  return { url: `${LOCAL_BLOB_URL_PREFIX}${safePathname}`, pathname: safePathname }
+}
+
+export const deleteBlobs = async (refs) => {
+  const urls = refs.map((ref) => ref?.url).filter(Boolean)
+  if (!urls.length) return
+  if (hasVercelBlob()) {
+    await vercelDel(urls, { token: blobToken() })
+  } else if (!process.env.VERCEL) {
+    await delLocal(urls)
+  }
 }
 
 export const deleteBlobsForDraft = async (draft) => {

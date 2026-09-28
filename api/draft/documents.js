@@ -2,6 +2,7 @@ import formidable from 'formidable'
 import fs from 'node:fs/promises'
 import kv from '../_lib/kv.js'
 import { putBlob } from '../_lib/blob.js'
+import { checkUpload } from '../_lib/fileChecks.js'
 
 const DRAFT_TTL_SECONDS = 7 * 24 * 60 * 60
 // Vercel caps a function's request body at 4.5 MB and rejects anything larger before
@@ -24,7 +25,7 @@ export default async function handler(req, res) {
 
   const email = await resolveEmailFromToken(req)
   if (!email) {
-    return res.status(401).json({ message: 'Missing or invalid draft token.' })
+    return res.status(401).json({ code: 'invalid_token', message: 'Missing or invalid draft token.' })
   }
 
   const form = formidable({ maxFileSize: MAX_FILE_SIZE })
@@ -53,15 +54,23 @@ export default async function handler(req, res) {
   }
 
   const buffer = await fs.readFile(file.filepath)
-  const blob = await putBlob(`drafts/${email}/${fieldKey}-${file.originalFilename}`, buffer, {
-    contentType: file.mimetype,
-  })
   await fs.unlink(file.filepath).catch(() => {})
+
+  // The contents decide what the file is: photos are allowed only in photo slots.
+  let contentType
+  try {
+    contentType = await checkUpload(buffer, { allowed: /passportPhoto$/.test(fieldKey) ? undefined : ['application/pdf'] })
+  } catch (error) {
+    return res.status(error.status || 400).json({ code: error.code, message: error.message })
+  }
+
+  const blob = await putBlob(`drafts/${email}/${fieldKey}-${file.originalFilename}`, buffer, { contentType })
 
   const documentRef = {
     url: blob.url,
+    pathname: blob.pathname,
     filename: file.originalFilename,
-    contentType: file.mimetype,
+    contentType,
     size: file.size,
     uploadedAt: Date.now(),
   }

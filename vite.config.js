@@ -17,13 +17,16 @@ function localApiDevPlugin() {
     '/api/ai/analyze-document': '/api/ai/analyze-document.js',
     '/api/ai/prescreen': '/api/ai/prescreen.js',
   }
+  // Everything under /api/v1 is one catch-all function, as on Vercel.
+  const V1_PREFIX = '/api/v1/'
+  const V1_MODULE = '/api/v1/[...path].js'
 
   return {
     name: 'local-api-dev',
     configureServer(server) {
       server.middlewares.use(async (req, res, next) => {
         const [pathname] = req.url.split('?')
-        const modulePath = routes[pathname]
+        const modulePath = routes[pathname] || (pathname.startsWith(V1_PREFIX) ? V1_MODULE : null)
         if (!modulePath) return next()
 
         res.status = (code) => {
@@ -36,7 +39,7 @@ function localApiDevPlugin() {
         }
 
         const isMultipart = (req.headers['content-type'] || '').includes('multipart/form-data')
-        if (!isMultipart && ['POST', 'PUT', 'DELETE'].includes(req.method)) {
+        if (!isMultipart && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
           const chunks = []
           for await (const chunk of req) chunks.push(chunk)
           const raw = Buffer.concat(chunks).toString('utf8')
@@ -97,19 +100,6 @@ export default defineConfig(({ mode }) => {
   },
   server: {
     port: 3000,
-    proxy: {
-      '/api': {
-        target: 'http://localhost:8000',
-        changeOrigin: true,
-        rewrite: (path) => path.replace(/^\/api/, '/api')
-      },
-      '/erp-api': {
-        target: 'https://api.erp.lms.rolaface.com',
-        changeOrigin: true,
-        secure: true,
-        rewrite: (path) => path.replace(/^\/erp-api/, '')
-      }
-    }
-  }
+  },
   }
 })

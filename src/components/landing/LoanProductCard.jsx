@@ -5,7 +5,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
-import { FACILITY_FEE, INTEREST_RATE, formatKwacha } from '@/config/loanProducts'
+import { describeFee, describeInterest, formatKwacha } from '@/config/loanProducts'
 
 function Fact({ label, value }) {
   return (
@@ -35,9 +35,9 @@ export function LoanProductCard({ product, onApply, featured = false }) {
         </p>
 
         <dl className="mt-5">
-          <Fact label="Interest" value={`${INTEREST_RATE * 100}% flat`} />
-          <Fact label="Facility fee" value={formatKwacha(FACILITY_FEE)} />
-          <Fact label="Tenure" value="You choose, in months" />
+          <Fact label="Interest" value={describeInterest(product)} />
+          <Fact label="Facility fee" value={describeFee(product)} />
+          <Fact label="Tenure" value={`${product.minTenure} to ${product.maxTenure} months`} />
           <Fact label="Documents needed" value={`${product.documents.length}`} />
         </dl>
 

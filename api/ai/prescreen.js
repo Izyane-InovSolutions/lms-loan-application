@@ -1,6 +1,6 @@
 import kv from '../_lib/kv.js'
 import { consumeAiQuota } from '../_lib/aiQuota.js'
-import { getAiProvider, AiUnavailableError } from '../_lib/ai/index.js'
+import { getAiProvider, AiUnavailableError, classifyAiFailure } from '../_lib/ai/index.js'
 import { prescreenApplication } from '../_lib/ai/prescreen.js'
 
 const resolveEmailFromToken = async (req) => {
@@ -30,7 +30,7 @@ export default async function handler(req, res) {
 
   const email = await resolveEmailFromToken(req)
   if (!email) {
-    return res.status(401).json({ message: 'Missing or invalid draft token.' })
+    return res.status(401).json({ code: 'invalid_token', message: 'Missing or invalid draft token.' })
   }
 
   if (!getAiProvider()) {
@@ -43,14 +43,15 @@ export default async function handler(req, res) {
   }
 
   if (!(await consumeAiQuota(email))) {
-    return res.status(429).json({ message: 'Daily prescreen limit reached.' })
+    return res.status(429).json({ code: 'quota_exceeded', message: 'Daily prescreen limit reached.' })
   }
 
   try {
     const prescreen = await prescreenApplication({ loanType, applicant, loan, documents })
     return res.status(200).json({ prescreen })
   } catch (error) {
-    console.error('[ai] prescreen failed', { loanType, error: String(error?.message || error) })
-    return res.status(502).json({ message: 'Prescreen failed.' })
+    const failure = classifyAiFailure(error)
+    console.error('[ai] prescreen failed', { loanType, code: failure.code, error: String(error?.message || error) })
+    return res.status(failure.status).json({ code: failure.code, message: failure.message })
   }
 }

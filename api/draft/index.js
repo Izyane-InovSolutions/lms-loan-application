@@ -49,23 +49,20 @@ export default async function handler(req, res) {
     const token = generateToken()
     await kv.set(`draftToken:${token}`, email, { ex: DRAFT_TTL_SECONDS })
 
-    // TEMPORARY diagnostic — pairs with the miss log in otp/verify.js so the key the
-    // draft is stored under can be compared against the key resume looks up.
-    console.log('[resume] draft stored', { key: `draft:${email}` })
-
     return res.status(200).json({ draftToken: token, draft })
   }
 
   const tokenAuth = await resolveTokenAuth(req)
   if (!tokenAuth) {
-    return res.status(401).json({ message: 'Missing or invalid draft token.' })
+    return res.status(401).json({ code: 'invalid_token', message: 'Missing or invalid draft token.' })
   }
 
   if (req.method === 'PUT') {
-    const existing = await kv.get(`draft:${tokenAuth.email}`)
-    if (!existing) {
-      return res.status(404).json({ message: 'Draft not found.' })
-    }
+    // The token outlived its draft: the application was submitted (which deletes the
+    // draft), or the draft was replaced from another tab or device. The token still
+    // proves whose email this is, so start the draft again rather than refusing the save
+    // — refusing left the applicant unable to submit at all.
+    const existing = (await kv.get(`draft:${tokenAuth.email}`)) || { documents: {} }
     const draft = {
       ...existing,
       ...pickDraftFields(req.body),
@@ -84,9 +81,6 @@ export default async function handler(req, res) {
     await Promise.all(keys.map((key) => kv.set(`draft:${key}`, draft, { ex: DRAFT_TTL_SECONDS })))
     await kv.set(`draftToken:${tokenAuth.token}`, nextEmail, { ex: DRAFT_TTL_SECONDS })
 
-    if (nextEmail !== tokenAuth.email) {
-      console.log('[resume] draft re-keyed', { from: `draft:${tokenAuth.email}`, to: `draft:${nextEmail}` })
-    }
     return res.status(200).json({ draft })
   }
 

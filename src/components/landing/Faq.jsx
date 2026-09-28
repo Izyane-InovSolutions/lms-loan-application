@@ -2,31 +2,23 @@ import React from 'react'
 
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from '@/components/ui/accordion'
 import { SectionHeading } from '@/components/landing/SectionHeading'
-import {
-  DEFAULT_TENURE_MONTHS,
-  DRAFT_RETENTION_DAYS,
-  FACILITY_FEE,
-  INTEREST_RATE,
-  OTP_EXPIRY_MINUTES,
-  formatKwacha,
-  getProduct,
-  monthlyInstalment,
-  totalRepayable,
-} from '@/config/loanProducts'
+import { DRAFT_RETENTION_DAYS, OTP_EXPIRY_MINUTES, describeFee, describeInterest, formatKwacha, priceLoan } from '@/config/loanProducts'
+import { useProduct } from '@/hooks/useProducts'
 
-const example = getProduct('personal').exampleAmount
+/** The pricing answer, worked from the configured personal-loan pricing. */
+const pricingFaq = (personal) => {
+  const price = priceLoan(personal.exampleAmount, personal.defaultTenure, personal)
+  return {
+    question: 'How is my repayment worked out?',
+    answer: `Interest is ${describeInterest(personal)} on the amount you borrow, plus a one-off facility fee of ${describeFee(
+      personal
+    )}. Borrow ${formatKwacha(personal.exampleAmount)} over ${personal.defaultTenure} months and you repay ${formatKwacha(
+      Math.round(price.total)
+    )} in total, or about ${formatKwacha(Math.round(price.monthly))} a month. Nothing compounds, and the full breakdown appears on screen before you submit.`,
+  }
+}
 
 const FAQS = [
-  {
-    question: 'How is my repayment worked out?',
-    answer: `Interest is a flat ${INTEREST_RATE * 100}% on the amount you borrow, plus a one-off facility fee of ${formatKwacha(
-      FACILITY_FEE
-    )}. Borrow ${formatKwacha(example)} over ${DEFAULT_TENURE_MONTHS} months and you repay ${formatKwacha(
-      Math.round(totalRepayable(example))
-    )} in total, or about ${formatKwacha(
-      Math.round(monthlyInstalment(example, DEFAULT_TENURE_MONTHS))
-    )} a month. Nothing compounds, and the full breakdown appears on screen before you submit.`,
-  },
   {
     question: 'Can I start on my phone and finish on my laptop?',
     answer: `Yes. Enter your email address early in the form and your progress syncs in the background. On the other device, choose "Resume application", enter the same email, and we send a six-digit code that is valid for ${OTP_EXPIRY_MINUTES} minutes. Your documents come back attached.`,
@@ -53,6 +45,8 @@ const FAQS = [
 ]
 
 export function Faq() {
+  const personal = useProduct('personal')
+  const faqs = [pricingFaq(personal), ...FAQS]
   return (
     <section id="faq" className="border-b border-border py-20 lg:py-24">
       <div className="container">
@@ -60,7 +54,7 @@ export function Faq() {
 
         <div className="mx-auto mt-12 max-w-3xl">
           <Accordion type="single" collapsible className="w-full">
-            {FAQS.map((faq, index) => (
+            {faqs.map((faq, index) => (
               <AccordionItem key={faq.question} value={`item-${index}`}>
                 <AccordionTrigger>{faq.question}</AccordionTrigger>
                 <AccordionContent>{faq.answer}</AccordionContent>

@@ -2,8 +2,7 @@ import axios from 'axios'
 import { injectFiles } from '../utils/fileTree'
 
 // The draft mini-backend is this project's own api/* functions, served at /api in dev
-// (localApiDevPlugin in vite.config.js) and on Vercel alike — never /erp-api, which
-// rewrites to the external LMS host and has no draft/otp routes.
+// (localApiDevPlugin in vite.config.js) and on Vercel alike.
 const draftApiBaseUrl = import.meta.env.VITE_DRAFT_API_URL || '/api'
 const draftApiClient = axios.create({ baseURL: draftApiBaseUrl })
 
@@ -34,16 +33,21 @@ export const uploadDraftDocument = (token, fieldKey, file) => {
     .then((r) => r.data)
 }
 
-// Downloads each stored document from Blob storage and rebuilds it as a real File,
-// so the restored draft slots straight into the same personalData/businessData shape
-// the rest of DashboardPage already expects (uploads, previews, validation unchanged).
-export const hydrateDraftFiles = async (draft) => {
+// Downloads each stored document through /api/v1/drafts/file (authorised by the draft
+// token, so it works with a private Blob store) and rebuilds it as a real File, so the
+// restored draft slots straight into the same personalData/businessData shape the rest of
+// DashboardPage already expects (uploads, previews, validation unchanged).
+export const hydrateDraftFiles = async (draft, token) => {
   const entries = Object.entries(draft.documents || {})
   const filesByPath = new Map()
 
   await Promise.all(
     entries.map(async ([path, ref]) => {
-      const response = await fetch(ref.url)
+      const response = await fetch(`/api/v1/drafts/file?path=${encodeURIComponent(path)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      // A file that has gone from storage is simply not restored; the applicant re-attaches it.
+      if (!response.ok) return
       const blob = await response.blob()
       filesByPath.set(path, new File([blob], ref.filename, { type: ref.contentType }))
     })
