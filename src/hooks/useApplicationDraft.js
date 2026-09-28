@@ -168,10 +168,11 @@ export function useApplicationDraft({
             await updateDraft(draftToken, payload)
             return draftToken
           } catch (error) {
-            // The server has forgotten this token (expired, or a store that lost it).
-            // POST /draft merges into the record stored under the email, so creating
-            // again keeps what was already saved and hands back a token that works.
-            if (!isInvalidTokenError(error)) throw error
+            // The server has forgotten this token (expired, or a store that lost it), or
+            // the draft behind it is gone. POST /draft merges into the record stored under
+            // the email, so creating again keeps what was already saved and hands back a
+            // token that works.
+            if (!isInvalidTokenError(error) && error?.response?.status !== 404) throw error
           }
         }
         const result = await createDraft({ email: syncEmail, ...payload })

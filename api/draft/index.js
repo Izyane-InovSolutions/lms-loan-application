@@ -58,10 +58,11 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'PUT') {
-    const existing = await kv.get(`draft:${tokenAuth.email}`)
-    if (!existing) {
-      return res.status(404).json({ message: 'Draft not found.' })
-    }
+    // The token outlived its draft: the application was submitted (which deletes the
+    // draft), or the draft was replaced from another tab or device. The token still
+    // proves whose email this is, so start the draft again rather than refusing the save
+    // — refusing left the applicant unable to submit at all.
+    const existing = (await kv.get(`draft:${tokenAuth.email}`)) || { documents: {} }
     const draft = {
       ...existing,
       ...pickDraftFields(req.body),
