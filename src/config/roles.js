@@ -9,7 +9,7 @@
 export const ROLES = {
   admin: {
     label: 'Administrator',
-    description: 'Manages users, credit rules and settings. Sees everything.',
+    description: 'Manages users, policy rules and settings. Sees everything.',
   },
   loan_officer: {
     label: 'Loan officer',
