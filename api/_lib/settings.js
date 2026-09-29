@@ -46,10 +46,10 @@ export const SETTING_DEFAULTS = {
   workflow: {
     // A second person must approve what an officer recommends (four-eyes).
     requireSecondApproval: true,
-    // Loan officers may give final approval up to this amount; above it, an administrator.
-    officerApprovalLimit: 100000,
     // Days an open case may sit before it is flagged as overdue in the queue.
     slaDays: 3,
+    // Note: how much each person may finally approve is now a per-user limit band on their
+    // team profile (users.approvalMin / approvalMax), not a workflow-wide setting.
   },
   offers: {
     // The customer confirms an approved offer before it is paid out or sent to the LMS.
