@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils'
 import { SimpleText } from '@/lib/simpleText'
 import { STAFF_ROLES, roleLabel } from '@/config/roles'
 import { describeFee, describeInterest, formatKwacha, priceLoan } from '@/config/loanProducts'
+import { AI_CONNECTIONS, AI_FIELDS, AI_MODEL_PROVIDERS, OCR_ENGINES, isServiceReady } from '@/config/aiProviders'
 import { api } from '../api'
 import { useAuth } from '../auth'
 import { Field, FormError, PageHeader, Panel, dateTime, useToast } from '../components'
@@ -18,6 +19,7 @@ const TABS = [
   { id: 'products', label: 'Loan products' },
   { id: 'lms', label: 'LMS connection' },
   { id: 'notifications', label: 'Notifications and SMS' },
+  { id: 'ai', label: 'AI document checks' },
   { id: 'retention', label: 'Data retention' },
   { id: 'security', label: 'Security' },
   { id: 'legal', label: 'Terms and privacy' },
@@ -136,6 +138,7 @@ export function SettingsPage() {
           {tab === 'products' ? <ProductsTab initial={state.settings.products} notify={notify} /> : null}
           {tab === 'lms' ? <LmsTab settings={state.settings} integrations={state.integrations} notify={notify} onSaved={load} /> : null}
           {tab === 'notifications' ? <NotificationsTab settings={state.settings} integrations={state.integrations} notify={notify} /> : null}
+          {tab === 'ai' ? <AiTab settings={state.settings} integrations={state.integrations} notify={notify} onSaved={load} /> : null}
           {tab === 'retention' ? <RetentionTab initial={state.settings.retention} notify={notify} /> : null}
           {tab === 'security' ? <SecurityTab initial={state.settings.security} notify={notify} /> : null}
           {tab === 'legal' ? <LegalTab notify={notify} onPublished={load} /> : null}
@@ -449,9 +452,9 @@ function LmsTab({ settings, integrations, notify, onSaved }) {
 }
 
 /** A credential input: never shows the stored value; blank keeps it. */
-function SecretField({ id, label, isSet, value, onChange }) {
+function SecretField({ id, label, isSet, value, onChange, unsetHint = 'Stored encrypted.' }) {
   return (
-    <Field id={id} label={label} hint={isSet ? 'Saved. Leave blank to keep it, or type a new one.' : 'Stored encrypted.'}>
+    <Field id={id} label={label} hint={isSet ? 'Saved. Leave blank to keep it, or type a new one.' : unsetHint}>
       <Input id={id} type="password" autoComplete="new-password" placeholder={isSet ? '••••••••' : ''} value={value || ''} onChange={(event) => onChange(event.target.value)} />
     </Field>
   )
@@ -528,6 +531,214 @@ function NotificationsTab({ settings, integrations, notify }) {
         </div>
         <FormError message={sms.error} />
         <SaveBar dirty={sms.dirty} saving={sms.saving} onSave={() => sms.save()} />
+      </Panel>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+
+const AI_SERVICES = [...AI_MODEL_PROVIDERS, ...OCR_ENGINES]
+const connectionLabel = (service) => AI_CONNECTIONS.find((connection) => connection.id === service.connection).label
+
+function TestResult({ result }) {
+  return (
+    <p role="status" className={cn('flex items-start gap-2 rounded-md p-3 text-sm', result.ok ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive')}>
+      {result.ok ? <Check className="mt-0.5 size-4 shrink-0" aria-hidden="true" /> : <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />}
+      <span className="break-words">{result.message}</span>
+    </p>
+  )
+}
+
+/** One connection field from src/config/aiProviders.js. */
+function AiFieldInput({ field, value, fromEnv, onChange }) {
+  const id = `ai-${field.key}`
+  const envHint = fromEnv ? `Using ${field.env} from the environment. Type a value to replace it here.` : null
+  if (field.kind === 'json') {
+    return (
+      <div className="sm:col-span-2">
+        <Field id={id} label={field.label} hint={value[`${field.key}Set`] ? 'Saved. Leave blank to keep it, or paste a new one.' : envHint || 'Paste the whole JSON key file. Stored encrypted.'}>
+          <textarea
+            id={id}
+            rows={4}
+            spellCheck={false}
+            autoComplete="off"
+            placeholder={value[`${field.key}Set`] ? '••••••••' : '{ "type": "service_account", … }'}
+            value={value[field.key] || ''}
+            onChange={(event) => onChange(event.target.value)}
+            className="w-full rounded-md border border-input bg-background px-3 py-2 font-mono text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          />
+        </Field>
+      </div>
+    )
+  }
+  if (field.secret) {
+    return <SecretField id={id} label={field.label} isSet={value[`${field.key}Set`]} value={value[field.key]} onChange={onChange} unsetHint={envHint || 'Stored encrypted.'} />
+  }
+  const hint = [field.hint, fromEnv ? `Blank uses ${field.env} from the environment.` : field.default ? `Blank uses ${field.default}.` : null].filter(Boolean).join(' ')
+  return (
+    <Field id={id} label={field.label} hint={hint || undefined}>
+      <Input id={id} value={value[field.key] || ''} placeholder={field.placeholder || field.default || ''} onChange={(event) => onChange(event.target.value)} />
+    </Field>
+  )
+}
+
+function AiTab({ settings, integrations, notify, onSaved }) {
+  const ai = useSettingGroup('ai', settings.ai, notify)
+  const [tests, setTests] = useState({})
+  const { active, fallbacks, ocr, environment } = integrations.ai
+  const value = ai.value
+  const envSet = useMemo(() => new Set(environment.set), [environment.set])
+  const has = (key) => Boolean(value[key] || value[`${key}Set`] || envSet.has(key) || AI_FIELDS.find((field) => field.key === key)?.default)
+  const ready = (service) => isServiceReady(service, has)
+  const chosenId = value.provider === 'environment' ? environment.provider : value.provider
+  const chosen = AI_MODEL_PROVIDERS.find((entry) => entry.id === chosenId)
+  const ocrEngine = OCR_ENGINES.find((entry) => entry.id === value.ocr)
+
+  // Connections in use when the page loaded start open; the rest stay folded.
+  const inUse = useMemo(() => {
+    const saved = settings.ai
+    const savedChoice = saved.provider === 'environment' ? environment.provider : saved.provider
+    const ids = [savedChoice, ...(saved.fallback ? saved.fallbacks : []), saved.ocr]
+    return new Set(AI_SERVICES.filter((service) => ids.includes(service.id)).map((service) => service.connection))
+  }, [settings.ai, environment.provider])
+
+  const runTest = async (service) => {
+    setTests((prev) => ({ ...prev, [service.id]: { pending: true } }))
+    const connection = AI_CONNECTIONS.find((entry) => entry.id === service.connection)
+    const values = Object.fromEntries(connection.fields.filter((field) => value[field.key]).map((field) => [field.key, value[field.key]]))
+    let result
+    try {
+      result = await api('/settings/ai/test', { method: 'POST', body: { service: service.id, values } })
+    } catch (error) {
+      result = { ok: false, message: error.message }
+    }
+    setTests((prev) => ({ ...prev, [service.id]: result }))
+  }
+
+  // Fallbacks run in the order they are listed here.
+  const toggleFallback = (id, on) =>
+    ai.set({ fallbacks: AI_MODEL_PROVIDERS.map((entry) => entry.id).filter((entryId) => (entryId === id ? on : value.fallbacks.includes(entryId))) })
+
+  const save = async () => (await ai.save()) && onSaved()
+
+  const status = active
+    ? `In use: ${active.label} (${active.model})${fallbacks.length ? `, then ${fallbacks.map((entry) => `${entry.label} (${entry.model})`).join(', then ')} when it’s busy` : ''}.${
+        ocr ? ` ${ocr.label} ${ocr.mode === 'always' ? 'reads every file first' : 'reads files the model can’t open'}.` : ''
+      }`
+    : 'Off. Applicants and staff see no AI notes; everything else works as usual.'
+
+  return (
+    <div className="space-y-6">
+      <Panel title="How documents are read" description={status}>
+        <div className="space-y-5">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field id="ai-provider" label="Model">
+              <Select id="ai-provider" value={value.provider} onChange={(event) => ai.set({ provider: event.target.value })}>
+                <option value="environment">As set in the environment (AI_PROVIDER={environment.provider})</option>
+                {AI_MODEL_PROVIDERS.map((entry) => (
+                  <option key={entry.id} value={entry.id}>
+                    {entry.label}
+                    {ready(entry) ? '' : ' (not set up)'}
+                  </option>
+                ))}
+                <option value="off">Off</option>
+              </Select>
+            </Field>
+          </div>
+          {chosen && !ready(chosen) ? (
+            <p className="flex items-start gap-2 text-sm text-warning">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+              Fill in the {connectionLabel(chosen)} connection below, or AI checks stay off.
+            </p>
+          ) : null}
+          <Toggle
+            id="ai-fallback"
+            label="Fall back when the model is busy"
+            description="When the chosen model is overloaded, rate-limited or doesn’t answer in time, the same check goes to these, in this order. Ones not set up are skipped."
+            checked={value.fallback}
+            onChange={(fallback) => ai.set({ fallback })}
+          />
+          {value.fallback ? (
+            <fieldset className="grid gap-2 sm:grid-cols-2">
+              <legend className="sr-only">Fallback models</legend>
+              {AI_MODEL_PROVIDERS.filter((entry) => entry.id !== chosenId).map((entry) => (
+                <label key={entry.id} className="flex cursor-pointer items-center gap-2 text-sm text-foreground">
+                  <input type="checkbox" checked={value.fallbacks.includes(entry.id)} onChange={(event) => toggleFallback(entry.id, event.target.checked)} className="accent-[hsl(var(--primary))]" />
+                  {entry.label}
+                  {ready(entry) ? null : <span className="text-muted-foreground">(not set up)</span>}
+                </label>
+              ))}
+            </fieldset>
+          ) : null}
+          <div className="grid gap-4 border-t pt-5 sm:grid-cols-2">
+            <Field id="ai-ocr" label="OCR step" hint="Reads the text out of each file before the model sees it. Lets a model that can’t open PDFs check them.">
+              <Select id="ai-ocr" value={value.ocr} onChange={(event) => ai.set({ ocr: event.target.value })}>
+                <option value="off">None</option>
+                {OCR_ENGINES.map((entry) => (
+                  <option key={entry.id} value={entry.id}>
+                    {entry.label}
+                    {ready(entry) ? '' : ' (not set up)'}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            {ocrEngine ? (
+              <Field id="ai-ocr-mode" label="Run it">
+                <Select id="ai-ocr-mode" value={value.ocrMode} onChange={(event) => ai.set({ ocrMode: event.target.value })}>
+                  <option value="when_needed">Only for files the model can’t open</option>
+                  <option value="always">For every file, alongside the file</option>
+                </Select>
+              </Field>
+            ) : null}
+          </div>
+          {ocrEngine && !ready(ocrEngine) ? (
+            <p className="flex items-start gap-2 text-sm text-warning">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+              Fill in the {connectionLabel(ocrEngine)} connection below, or the OCR step is skipped.
+            </p>
+          ) : ocrEngine?.hint ? (
+            <p className="text-xs text-muted-foreground">{ocrEngine.hint}</p>
+          ) : null}
+        </div>
+        <FormError message={ai.error} />
+        <SaveBar dirty={ai.dirty} saving={ai.saving} onSave={save} />
+      </Panel>
+
+      <Panel title="Connections" description="Keys are stored encrypted and never shown again. A field left blank uses its environment variable, if one is set. Test buttons use what is typed here, before saving.">
+        <div className="space-y-3">
+          {AI_CONNECTIONS.map((connection) => {
+            const services = AI_SERVICES.filter((service) => service.connection === connection.id)
+            const setUp = connection.fields.filter((field) => field.required).every((field) => has(field.key))
+            return (
+              <details key={connection.id} open={inUse.has(connection.id)} className="rounded-lg border p-4">
+                <summary className="cursor-pointer text-sm font-medium text-foreground">
+                  {connection.label}
+                  <span className={cn('ml-2 text-xs font-normal', setUp ? 'text-success' : 'text-muted-foreground')}>{setUp ? 'Set up' : 'Not set up'}</span>
+                </summary>
+                {connection.hint ? <p className="mt-2 text-xs text-muted-foreground">{connection.hint}</p> : null}
+                <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                  {connection.fields.map((field) => (
+                    <AiFieldInput key={field.key} field={field} value={value} fromEnv={envSet.has(field.key)} onChange={(fieldValue) => ai.set({ [field.key]: fieldValue })} />
+                  ))}
+                </div>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  {services.map((service) => (
+                    <Button key={service.id} variant="outline" size="sm" onClick={() => runTest(service)} disabled={tests[service.id]?.pending || !ready(service)}>
+                      {tests[service.id]?.pending ? <Loader2 className="animate-spin" /> : <PlugZap />}
+                      Test {service.label}
+                    </Button>
+                  ))}
+                </div>
+                <div className="mt-3 space-y-2 empty:hidden">
+                  {services.map((service) => (tests[service.id] && !tests[service.id].pending ? <TestResult key={service.id} result={tests[service.id]} /> : null))}
+                </div>
+              </details>
+            )
+          })}
+        </div>
+        <FormError message={ai.error} />
+        <SaveBar dirty={ai.dirty} saving={ai.saving} onSave={save} />
       </Panel>
     </div>
   )

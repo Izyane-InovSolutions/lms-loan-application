@@ -62,6 +62,7 @@ const ACTION_LABELS = {
   'privacy.erased': 'Erased a person’s data',
   'retention.purged': 'Removed applications past their retention period',
   'settings.lms_tested': 'Tested the LMS connection',
+  'settings.ai_tested': 'Tested an AI provider',
   'system.maintenance_run': 'Ran the daily maintenance',
   'demo.seeded': 'Added sample applications',
   'demo.cleared': 'Removed sample applications',

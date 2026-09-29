@@ -45,7 +45,7 @@ export const runPrescreen = async (applicationId, { actor = null } = {}) => {
 
   let aiReview = null
   let aiError = null
-  if (getAiProvider()) {
+  if (await getAiProvider()) {
     try {
       aiReview = await prescreenApplication({
         loanType: application.loanType,

@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm'
 import { getDb, schema } from './db/client.js'
 import { decryptSecret, encryptSecret, isEncrypted } from './secrets.js'
 import { DEFAULT_PRICING } from '../../src/config/loanProducts.js'
+import { AI_FIELDS, AI_SECRET_FIELDS } from '../../src/config/aiProviders.js'
 
 /*
  * Admin-editable configuration. Each key has a default here, so a fresh database
@@ -88,11 +89,27 @@ export const SETTING_DEFAULTS = {
     // Roles that must use two-step sign-in. Members without it are asked to set it up.
     requireTwoFactorRoles: [],
   },
+  /*
+   * Which model reads uploads and reviews applications (api/_lib/ai), and the connection
+   * details for each backend (src/config/aiProviders.js). "environment" keeps following
+   * AI_PROVIDER; any field left blank falls back to its environment variable.
+   */
+  ai: {
+    provider: 'environment',
+    // When the chosen model is overloaded, rate-limited or times out, try these in order.
+    fallback: true,
+    fallbacks: ['gemini', 'mistral'],
+    // Optional OCR before the model: only for files the model can't read, or always.
+    ocr: 'off',
+    ocrMode: 'when_needed',
+    ...Object.fromEntries(AI_FIELDS.map((field) => [field.key, ''])),
+  },
 }
 
 const SECRET_FIELDS = {
   lmsConnection: ['apiSecret', 'password'],
   sms: ['apiKey'],
+  ai: AI_SECRET_FIELDS,
 }
 
 const mergeDeep = (base, override) => {

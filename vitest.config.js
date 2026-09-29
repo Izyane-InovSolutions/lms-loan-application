@@ -26,7 +26,9 @@ export default defineConfig({
       EMAIL_HOST: 'invalid.invalid',
       EMAIL_PORT: '2525',
       LOS_DEMO_ENABLED: 'true',
+      AI_PROVIDER: '',
       GEMINI_API_KEY: '',
+      MISTRAL_API_KEY: '',
     },
     // PGlite takes a moment to boot and migrate on first use.
     testTimeout: 30000,

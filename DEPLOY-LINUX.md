@@ -320,7 +320,7 @@ sudo -u postgres pg_dump los_db | gzip > /backups/los_db_$(date +%F).sql.gz
 sudo tar czf /backups/los_files_$(date +%F).tgz /var/lib/los /etc/los.env
 ```
 
-Losing `LOS_SECRETS_KEY` means re-entering the LMS and SMS credentials in Settings.
+Losing `LOS_SECRETS_KEY` means re-entering the LMS, SMS and AI credentials in Settings.
 
 ## Things to know
 

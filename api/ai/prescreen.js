@@ -33,7 +33,7 @@ export default async function handler(req, res) {
     return res.status(401).json({ code: 'invalid_token', message: 'Missing or invalid draft token.' })
   }
 
-  if (!getAiProvider()) {
+  if (!(await getAiProvider())) {
     return res.status(503).json({ code: 'ai_unavailable', message: new AiUnavailableError().message })
   }
 

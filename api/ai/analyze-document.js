@@ -2,7 +2,7 @@ import formidable from 'formidable'
 import fs from 'node:fs/promises'
 import kv from '../_lib/kv.js'
 import { consumeAiQuota } from '../_lib/aiQuota.js'
-import { getAiProvider, AiUnavailableError, AiUnsupportedInputError, classifyAiFailure } from '../_lib/ai/index.js'
+import { canReadMimeType, getAiProviders, AiUnavailableError, AiUnsupportedInputError, classifyAiFailure } from '../_lib/ai/index.js'
 import { DOCUMENT_SPECS, analyzeDocument } from '../_lib/ai/documents.js'
 import { sniffType } from '../_lib/fileChecks.js'
 
@@ -51,8 +51,8 @@ export default async function handler(req, res) {
     return res.status(401).json({ code: 'invalid_token', message: 'Missing or invalid draft token.' })
   }
 
-  const provider = getAiProvider()
-  if (!provider) {
+  const providers = await getAiProviders()
+  if (!providers.length) {
     return res.status(503).json({ code: 'ai_unavailable', message: new AiUnavailableError().message })
   }
 
@@ -87,8 +87,8 @@ export default async function handler(req, res) {
     if (!sniffType(head)) {
       return res.status(200).json({ status: 'skipped', reason: 'This file is not a PDF or a photo.' })
     }
-    if (!provider.acceptsMimeType(mimeType)) {
-      return res.status(200).json({ status: 'skipped', reason: `${provider.model} cannot read ${mimeType || 'this file type'}.` })
+    if (!(await canReadMimeType(mimeType))) {
+      return res.status(200).json({ status: 'skipped', reason: `${providers[0].model} cannot read ${mimeType || 'this file type'}.` })
     }
 
     if (!(await consumeAiQuota(email))) {
