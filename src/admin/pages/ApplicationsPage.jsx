@@ -7,10 +7,12 @@ import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import { APPLICATION_STATUSES, CHANNELS, LOAN_TYPE_LABELS, OPEN_STATUSES, statusLabel } from '@/config/applications'
+import { applyPath } from '@/config/applicationSteps'
 import { setAssistedFlag } from '@/lib/assisted'
 import { api, toQuery } from '../api'
 import { useAuth } from '../auth'
 import { EmptyState, FormError, OutcomeMark, PageHeader, StatusBadge, daysSince, downloadCsv, money, timeAgo, useToast } from '../components'
+import { AssistedApplicationTypeDialog } from '../AssistedApplicationTypeDialog'
 
 const TABS = [
   { value: 'open', label: 'Open' },
@@ -46,6 +48,7 @@ export function ApplicationsPage() {
   const [search, setSearch] = useState(params.get('q') || '')
   const [result, setResult] = useState({ status: 'loading', applications: [], total: 0, statusCounts: {} })
   const [exporting, setExporting] = useState(false)
+  const [chooseType, setChooseType] = useState(false)
 
   const filters = {
     status: params.get('status') || 'open',
@@ -97,9 +100,14 @@ export function ApplicationsPage() {
     return counts[value] || 0
   }
 
-  const startAssisted = () => {
+  const startAssisted = (loanType = 'personal') => {
     setAssistedFlag()
-    navigate('/apply/personal/personal-information')
+    navigate(applyPath(loanType, 0))
+  }
+
+  const beginAssisted = () => {
+    if (user.role === 'rm') setChooseType(true)
+    else startAssisted()
   }
 
   const exportCsv = async () => {
@@ -151,7 +159,7 @@ export function ApplicationsPage() {
               Export CSV
             </Button>
             {canStart ? (
-              <Button onClick={startAssisted}>
+              <Button onClick={beginAssisted}>
                 <FilePlus2 />
                 New application
               </Button>
@@ -250,7 +258,7 @@ export function ApplicationsPage() {
             title={hasFilters ? 'Nothing matches these filters' : filters.status === 'open' ? 'No open applications' : `No ${statusLabel(filters.status).toLowerCase()} applications`}
             action={
               canStart ? (
-                <Button size="sm" onClick={startAssisted}>
+                <Button size="sm" onClick={beginAssisted}>
                   <FilePlus2 />
                   New application
                 </Button>
@@ -353,6 +361,13 @@ export function ApplicationsPage() {
             </Button>
           </div>
         </div>
+      ) : null}
+      {user.role === 'rm' ? (
+        <AssistedApplicationTypeDialog
+          open={chooseType}
+          onOpenChange={setChooseType}
+          onChoose={startAssisted}
+        />
       ) : null}
     </div>
   )
