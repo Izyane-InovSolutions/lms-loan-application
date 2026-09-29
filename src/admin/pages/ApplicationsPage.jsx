@@ -290,7 +290,7 @@ export function ApplicationsPage() {
                     <th scope="col" className="px-5 py-3 font-medium">Applicant</th>
                     <th scope="col" className="px-4 py-3 text-right font-medium">Amount</th>
                     <th scope="col" className="px-4 py-3 font-medium">Brought in by</th>
-                    <th scope="col" className="px-4 py-3 font-medium">Credit rules</th>
+                    <th scope="col" className="px-4 py-3 font-medium">Policy rules</th>
                     <th scope="col" className="px-4 py-3 font-medium">Status</th>
                     <th scope="col" className="px-4 py-3 font-medium">Officer</th>
                     <th scope="col" className="px-5 py-3 font-medium">Submitted</th>
