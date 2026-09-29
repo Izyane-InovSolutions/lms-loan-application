@@ -43,6 +43,8 @@ export const publicUser = (user) => ({
   status: user.status,
   managerId: user.managerId,
   referralCode: user.referralCode,
+  approvalMin: user.approvalMin ?? 0,
+  approvalMax: user.approvalMax ?? null,
   isDemo: user.isDemo,
   lastLoginAt: user.lastLoginAt,
   createdAt: user.createdAt,
