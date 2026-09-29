@@ -1,0 +1,17 @@
+[Unit]
+Description=iZyane LOS API
+After=network.target postgresql.service
+
+[Service]
+User=los
+WorkingDirectory=/opt/los/app
+EnvironmentFile=/etc/los.env
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/los
+
+[Install]
+WantedBy=multi-user.target

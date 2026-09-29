@@ -24,6 +24,7 @@ It has three parts, all served from one Vite app plus Vercel functions:
 - [Roles and what they see](#roles-and-what-they-see)
 - [Project structure](#project-structure)
 - [Deploying to Vercel](#deploying-to-vercel)
+- [Deploying to Linux](#deploying-to-linux)
 - [Limits worth knowing](#limits-worth-knowing)
 - [Troubleshooting](#troubleshooting)
 
@@ -281,6 +282,11 @@ changing one needs a redeploy.
 
 **Never set `LOS_DEMO_ENABLED=true` on a deployment with real customer data.** It lets
 anyone sign in as any role.
+
+## Deploying to Linux
+
+To run on your own Linux server (nginx, local Postgres, systemd) instead of Vercel, see
+[DEPLOY-LINUX.md](DEPLOY-LINUX.md). It includes a one-command setup script.
 
 ## Limits worth knowing
 
