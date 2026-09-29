@@ -43,6 +43,13 @@
       "when": 1790504104699,
       "tag": "0005_offers_security_ops",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790607716294,
+      "tag": "0006_glossy_warbird",
+      "breakpoints": true
     }
   ]
 }
