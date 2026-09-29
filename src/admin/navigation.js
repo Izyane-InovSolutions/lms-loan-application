@@ -15,8 +15,8 @@ export const NAV_SECTIONS = [
     ],
   },
   {
-    label: 'Credit',
-    items: [{ to: '/admin/rules', label: 'Credit rules', icon: Scale, allow: (role) => ['admin', 'loan_officer', 'sales_manager'].includes(role) }],
+    label: 'Policy',
+    items: [{ to: '/admin/rules', label: 'Policy rules', icon: Scale, allow: (role) => ['admin', 'loan_officer', 'sales_manager'].includes(role) }],
   },
   {
     label: 'People',
