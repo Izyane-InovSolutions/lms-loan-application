@@ -1,8 +1,14 @@
 import { desc, eq, sql } from 'drizzle-orm'
 import { getDb, schema } from '../db/client.js'
-import { DEFAULT_RULES } from '../../../src/config/creditRules.js'
+import { DEFAULT_POLICIES, countPolicyRules, flattenPolicies, rulesToPolicies } from '../../../src/config/creditRules.js'
 
 const { rulesets } = schema
+
+/** A stored ruleset's policies (adapts legacy flat-rule rows to the policies shape). */
+export const rulesetPolicies = (ruleset) => rulesToPolicies(ruleset?.rules)
+
+/** A stored ruleset flattened to the plain rule list the engine evaluates. */
+export const rulesetFlatRules = (ruleset) => flattenPolicies(rulesetPolicies(ruleset))
 
 /**
  * The rules in force. A new database starts with the default policy as version 1, so
@@ -14,7 +20,7 @@ export const getPublishedRuleset = async () => {
   if (published) return published
   const [created] = await db
     .insert(rulesets)
-    .values({ version: 1, status: 'published', rules: DEFAULT_RULES, note: 'Default policy — replace the placeholder thresholds with your own.', publishedAt: new Date() })
+    .values({ version: 1, status: 'published', rules: { policies: DEFAULT_POLICIES }, note: 'Default policy — replace the placeholder thresholds with your own.', publishedAt: new Date() })
     .onConflictDoNothing()
     .returning()
   // Lost a race with a parallel first run: read what the other one wrote.
@@ -57,10 +63,14 @@ export const publishDraftRuleset = async (actor, note) => {
 
 export const listRulesetHistory = async () => {
   const db = await getDb()
-  return db
-    .select({ version: rulesets.version, status: rulesets.status, note: rulesets.note, publishedAt: rulesets.publishedAt, publishedBy: rulesets.publishedBy, ruleCount: sql`jsonb_array_length(${rulesets.rules})::int` })
+  const rows = await db
+    .select({ version: rulesets.version, status: rulesets.status, note: rulesets.note, publishedAt: rulesets.publishedAt, publishedBy: rulesets.publishedBy, rules: rulesets.rules })
     .from(rulesets)
     .where(sql`${rulesets.status} <> 'draft'`)
     .orderBy(desc(rulesets.version))
     .limit(30)
+  return rows.map(({ rules, ...row }) => {
+    const policies = rulesToPolicies(rules)
+    return { ...row, policyCount: policies.length, ruleCount: countPolicyRules(policies) }
+  })
 }
