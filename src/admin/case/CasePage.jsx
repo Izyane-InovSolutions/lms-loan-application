@@ -39,6 +39,8 @@ import {
 import { sectionsFor } from './fields'
 
 const CREDIT_ROLES = ['admin', 'loan_officer']
+const withinAssignmentRange = (person, amount) =>
+  Number(amount) >= (person.approvalMin ?? 0) && (person.approvalMax == null || Number(amount) <= person.approvalMax)
 
 export function CasePage() {
   const { id } = useParams()
@@ -117,6 +119,8 @@ export function CasePage() {
   }
 
   const { application, documents, events, prescreen, appraisals, consents, locations, crbReports, lmsConfigured, crbProvider, offersRequireAcceptance } = state
+  const eligibleOfficers = officers.filter((officer) => withinAssignmentRange(officer, application.amount))
+  const canTake = withinAssignmentRange(user, application.amount)
   const lastRecommendation = appraisals.find((appraisal) => appraisal.kind === 'recommendation')
   const recommendedByMe = lastRecommendation?.officerId === user.id
   const hasCrbConsent = consents.some((consent) => consent.type === 'crb' && consent.granted)
@@ -152,6 +156,8 @@ export function CasePage() {
           application={application}
           offersRequireAcceptance={offersRequireAcceptance}
           isCredit={isCredit}
+          canTake={canTake}
+          hasEligibleOfficers={eligibleOfficers.length > 0}
           recommendedByMe={recommendedByMe}
           onOpen={setDialog}
           onStart={() => act('start_review', {}, 'Review started')}
@@ -201,7 +207,7 @@ export function CasePage() {
         </div>
 
         <aside className="space-y-4">
-          <RulesPanel prescreen={prescreen} canRerun={isCredit} onRerun={() => post('/prescreen', {}, 'Credit rules run again')} />
+          <RulesPanel prescreen={prescreen} canRerun={isCredit} onRerun={() => post('/prescreen', {}, 'Policy rules run again')} />
           <AffordabilityPanel application={application} prescreen={prescreen} />
           {isCredit ? <AiReviewPanel prescreen={prescreen} /> : null}
           <ChecklistPanel
@@ -230,7 +236,7 @@ export function CasePage() {
         onClose={() => setDialog(null)}
         application={application}
         lastRecommendation={lastRecommendation}
-        officers={officers}
+        officers={eligibleOfficers}
         user={user}
         act={act}
         post={post}
@@ -342,7 +348,7 @@ function Fact({ label, value }) {
 }
 
 /** The actions that make sense for this case, this person and this moment. */
-function CaseActions({ application, offersRequireAcceptance, isCredit, recommendedByMe, onOpen, onStart, onTake }) {
+function CaseActions({ application, offersRequireAcceptance, isCredit, canTake, hasEligibleOfficers, recommendedByMe, onOpen, onStart, onTake }) {
   const [busy, setBusy] = useState(null)
   const notify = useToast()
   const run = (key, fn) => async () => {
@@ -382,15 +388,23 @@ function CaseActions({ application, offersRequireAcceptance, isCredit, recommend
         </Button>
       ) : null}
       {['submitted', 'in_review', 'info_requested', 'pending_approval'].includes(status) && unassigned ? (
-        <Button variant="outline" onClick={run('take', onTake)} disabled={Boolean(busy)}>
-          {busy === 'take' ? <Loader2 className="animate-spin" /> : <UserPlus />}
-          Take the case
-        </Button>
+        canTake ? (
+          <Button variant="outline" onClick={run('take', onTake)} disabled={Boolean(busy)}>
+            {busy === 'take' ? <Loader2 className="animate-spin" /> : <UserPlus />}
+            Take the case
+          </Button>
+        ) : (
+          <p className="self-center text-sm text-muted-foreground">This amount is outside your assignment range.</p>
+        )
       ) : null}
       {['submitted', 'in_review', 'info_requested', 'pending_approval'].includes(status) && !unassigned ? (
-        <Button variant="ghost" onClick={() => onOpen({ type: 'assign' })}>
-          Reassign
-        </Button>
+        hasEligibleOfficers ? (
+          <Button variant="ghost" onClick={() => onOpen({ type: 'assign' })}>
+            Reassign
+          </Button>
+        ) : (
+          <p className="self-center text-sm text-muted-foreground">No active loan officers match this amount.</p>
+        )
       ) : null}
       {['submitted', 'in_review'].includes(status) ? (
         <Button variant="outline" onClick={() => onOpen({ type: 'request_info' })}>
