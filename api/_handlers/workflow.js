@@ -20,7 +20,7 @@ import { consumeOtp } from '../_lib/otp.js'
 import { creditStaffIds, followerIds, notifyUsers } from '../_lib/notify.js'
 import { textCustomer } from '../_lib/sms.js'
 import { WITHDRAWABLE_STATUSES } from '../../src/config/applications.js'
-import { FACTS, evaluateRules, validateRules } from '../../src/config/creditRules.js'
+import { FACTS, evaluateRules, flattenPolicies, rulesToPolicies, validatePolicies } from '../../src/config/creditRules.js'
 
 const { applications, applicationDocuments, prescreens, users, locations, crbReports, consents } = schema
 
@@ -85,7 +85,7 @@ const listOfficers = async (req) => {
   await requireUser(req, { staff: true })
   const db = await getDb()
   const officers = await db
-    .select({ id: users.id, name: users.name, role: users.role })
+    .select({ id: users.id, name: users.name, role: users.role, approvalMin: users.approvalMin, approvalMax: users.approvalMax })
     .from(users)
     .where(and(inArray(users.role, CREDIT_ROLES), eq(users.status, 'active')))
     .orderBy(asc(users.name))
@@ -340,20 +340,25 @@ export const expireOffers = async (origin) => {
 const getRules = async (req) => {
   await requireUser(req, { roles: ['admin', 'loan_officer', 'sales_manager'] })
   const [published, draft, history] = await Promise.all([getPublishedRuleset(), getDraftRuleset(), listRulesetHistory()])
-  return { published, draft, history, facts: FACTS }
+  return {
+    published: { version: published.version, policies: rulesToPolicies(published.rules), publishedAt: published.publishedAt, note: published.note },
+    draft: draft ? { policies: rulesToPolicies(draft.rules), note: draft.note } : null,
+    history,
+    facts: FACTS,
+  }
 }
 
 const saveDraft = async (req) => {
   const actor = await requireUser(req, { roles: ['admin'] })
-  let rules
+  let policies
   try {
-    rules = validateRules(req.body?.rules)
+    policies = validatePolicies(req.body?.policies)
   } catch (error) {
     fail(400, error.message, 'invalid_rules')
   }
-  const draft = await saveDraftRuleset(rules, text(req.body?.note, 300) || null, actor)
-  await recordAudit({ req, actor, action: 'rules.draft_saved', entityType: 'ruleset', entityId: draft.id, detail: { rules: rules.length } })
-  return { draft }
+  const draft = await saveDraftRuleset({ policies }, text(req.body?.note, 300) || null, actor)
+  await recordAudit({ req, actor, action: 'rules.draft_saved', entityType: 'ruleset', entityId: draft.id, detail: { policies: policies.length } })
+  return { draft: { policies, note: draft.note } }
 }
 
 const discardDraft = async (req) => {
@@ -377,7 +382,7 @@ const simulate = async (req) => {
   await requireUser(req, { roles: ['admin'] })
   let rules
   try {
-    rules = validateRules(req.body?.rules)
+    rules = flattenPolicies(validatePolicies(req.body?.policies))
   } catch (error) {
     fail(400, error.message, 'invalid_rules')
   }
