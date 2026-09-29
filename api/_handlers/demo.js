@@ -7,7 +7,7 @@ import { recordAudit } from '../_lib/audit.js'
 import { putBlob } from '../_lib/blob.js'
 import { nextReference } from '../_lib/applications.js'
 import { computeFacts } from '../_lib/prescreen/facts.js'
-import { getPublishedRuleset } from '../_lib/prescreen/rulesets.js'
+import { getPublishedRuleset, rulesetFlatRules } from '../_lib/prescreen/rulesets.js'
 import { demoEnabled } from './auth.js'
 import { DOCUMENT_SLOTS } from '../../src/config/applications.js'
 import { evaluateRules } from '../../src/config/creditRules.js'
@@ -98,6 +98,7 @@ const seed = async (req) => {
   }
 
   const ruleset = await getPublishedRuleset()
+  const rulesetRules = rulesetFlatRules(ruleset)
   const count = Math.min(120, Math.max(10, Number(req.body?.count) || 60))
   let created = 0
 
@@ -229,7 +230,7 @@ const seed = async (req) => {
 
       const application = { loanType, data, amount, tenure, monthlyInstalment: priceLoan(amount, tenure).monthly }
       const facts = computeFacts(application, documentRows, { locations: hasLocation ? [{}] : [] })
-      const { outcome, results } = evaluateRules(ruleset.rules, facts, loanType)
+      const { outcome, results } = evaluateRules(rulesetRules, facts, loanType)
       await tx.insert(prescreens).values({
         applicationId: id,
         rulesetVersion: ruleset.version,
@@ -254,7 +255,7 @@ const seed = async (req) => {
 
       const event = (values) => tx.insert(applicationEvents).values({ applicationId: id, detail: {}, ...values })
       await event({ at: submittedAt, actorId: sourcedBy?.id ?? null, actorLabel: sourcedBy?.name || 'Applicant', type: 'status', toStatus: 'submitted', message: sourcedBy ? `Submitted by ${sourcedBy.name} on the customer’s behalf` : 'Application submitted', visibleToCustomer: true })
-      await event({ at: new Date(submittedAt.getTime() + 60000), actorLabel: 'System', type: 'prescreen', message: `Credit rules v${ruleset.version}: ${outcome === 'pass' ? 'passed' : outcome === 'refer' ? 'refer to an officer' : 'decline recommended'}` })
+      await event({ at: new Date(submittedAt.getTime() + 60000), actorLabel: 'System', type: 'prescreen', message: `Policy rules v${ruleset.version}: ${outcome === 'pass' ? 'passed' : outcome === 'refer' ? 'refer to an officer' : 'decline recommended'}` })
       if (status !== 'submitted') {
         await event({ at: new Date(submittedAt.getTime() + 3 * 3600000), actorId: officer.id, actorLabel: officer.name, type: 'status', fromStatus: 'submitted', toStatus: 'in_review', message: 'Review started', visibleToCustomer: true })
       }
