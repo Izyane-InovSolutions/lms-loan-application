@@ -98,7 +98,7 @@ function RoleDashboard({ user, dashboard, overview }) {
     </Panel>
   )
   const rules = (
-    <Panel title="Credit rules" description="How prescreening went">
+    <Panel title="Policy rules" description="How prescreening went">
       <RuleOutcomes outcomes={dashboard.prescreenOutcomes} />
     </Panel>
   )
