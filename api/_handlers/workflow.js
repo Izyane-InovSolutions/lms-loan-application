@@ -9,9 +9,9 @@ import { readSingleUpload } from '../_lib/upload.js'
 import { afterResponse } from '../_lib/after.js'
 import { sendApplicationUpdateEmail } from '../_lib/email.js'
 import { addEvent, findVisibleApplication } from '../_lib/applications.js'
-import { applyAction } from '../_lib/workflow.js'
+import { applyAction, caseWorkflow, systemTransition } from '../_lib/workflow.js'
 import { rolesWith } from '../_lib/roles.js'
-import { queueLmsSyncIfDue, syncApplicationToLms } from '../_lib/lms/sync.js'
+import { queueLmsSync, syncApplicationToLms } from '../_lib/lms/sync.js'
 import { runPrescreen, loadFactInputs } from '../_lib/prescreen/run.js'
 import { computeFacts } from '../_lib/prescreen/facts.js'
 import { getDraftRuleset, getPublishedRuleset, listRulesetHistory, publishDraftRuleset, saveDraftRuleset } from '../_lib/prescreen/rulesets.js'
@@ -22,7 +22,6 @@ import { checkOtp, consumeOtp } from '../_lib/otp.js'
 import { creditStaffIds, followerIds, notifyUsers } from '../_lib/notify.js'
 import { textCustomer } from '../_lib/sms.js'
 import { WITHDRAWABLE_STATUSES } from '../../src/config/applications.js'
-import { pendingStages } from '../../src/config/stages.js'
 import { ensureOfferDocuments } from '../_lib/offerDocuments.js'
 import { FACTS, evaluateRules, flattenPolicies, rulesToPolicies, validatePolicies } from '../../src/config/creditRules.js'
 
@@ -32,8 +31,10 @@ const { applications, applicationDocuments, prescreens, users, locations, crbRep
 // Case actions
 // ---------------------------------------------------------------------------
 
-/** Whether stages before payout still stand between this case and the LMS. */
-const closingStagesPending = async (application) => pendingStages(await getSetting('stages'), 'closing', application).length > 0
+/** Hands a case to the LMS in the background, once it has entered a state marked for it. */
+const handToLms = async (application, actor = null) => {
+  if (await queueLmsSync(application)) afterResponse('LMS hand-off', () => syncApplicationToLms(application.id, actor ? { actor } : undefined))
+}
 
 const notifyCustomer = (req, application, notify) =>
   afterResponse('customer email', async () => {
@@ -47,8 +48,8 @@ const notifyCustomer = (req, application, notify) =>
     await textCustomer(application.applicantPhone, `${notify.headline} (${application.reference}). Details: ${appOrigin(req)}/my-applications`)
   })
 
-/** Tells the right staff what an action means for them. */
-const notifyStaffAbout = (req, viewer, action, input, application) =>
+/** Tells the right staff what an action means for them, by what it did rather than what it was called. */
+const notifyStaffAbout = (req, viewer, action, result, application) =>
   afterResponse('staff notifications', async () => {
     const origin = appOrigin(req)
     const base = { applicationId: application.id }
@@ -56,14 +57,13 @@ const notifyStaffAbout = (req, viewer, action, input, application) =>
     if (action === 'assign' && application.assignedOfficer && application.assignedOfficer !== viewer.id) {
       await notifyUsers([application.assignedOfficer], { ...base, type: 'assigned', title: `${application.reference} was assigned to you`, body: `${who}, by ${viewer.name}` }, { origin })
     }
-    if (action === 'recommend' && application.status === 'pending_approval') {
+    if (result.recommended && application.status === 'pending_approval') {
       await notifyUsers(await creditStaffIds({ except: viewer.id, permission: 'cases.decide' }), { ...base, type: 'awaiting_decision', title: `${application.reference} is waiting for a decision`, body: `${viewer.name} recommended it. ${who}` }, { origin })
     }
-    if ((action === 'decide' || action === 'recommend') && ['approved', 'declined'].includes(application.status)) {
-      const outcome = application.status === 'approved' ? 'approved' : 'declined'
-      await notifyUsers(followerIds(application).filter((id) => id !== viewer.id), { ...base, type: 'decided', title: `${application.reference} was ${outcome}`, body: who }, { origin })
+    if (result.decided) {
+      await notifyUsers(followerIds(application).filter((id) => id !== viewer.id), { ...base, type: 'decided', title: `${application.reference} was ${result.decided}`, body: who }, { origin })
     }
-    if (action === 'record_acceptance') {
+    if (result.accepted) {
       await notifyUsers(followerIds(application).filter((id) => id !== viewer.id), { ...base, type: 'offer_accepted', title: `${application.reference}: offer accepted`, body: `${who}. Ready for payout.` }, { origin })
     }
   })
@@ -75,7 +75,7 @@ const notifyStaffAbout = (req, viewer, action, input, application) =>
  */
 const signInPerson = async (req, viewer, application, input) => {
   requirePermission(viewer, 'offers.record', 'Your role can’t record acceptances.')
-  if (application.status !== 'approved') fail(409, 'There is no offer waiting to be accepted.', 'invalid_state')
+  if ((await caseWorkflow(application)).state.type !== 'offer') fail(409, 'There is no offer waiting to be accepted.', 'invalid_state')
   if (application.offerExpiresAt && new Date(application.offerExpiresAt) < new Date()) fail(409, 'This offer has expired.', 'offer_expired')
   return signOfferDocuments({ application, signature: parseSignature(input.signature), req, capturedBy: viewer })
 }
@@ -113,16 +113,10 @@ const act = async (req, res, { params }) => {
   if (result.consumeOtpFor) await consumeOtp('offer', result.consumeOtpFor)
   // The offer letter and agreement are made from the published templates straight away.
   if (result.approved) afterResponse('offer documents', () => ensureOfferDocuments(updated.id))
-  notifyStaffAbout(req, viewer, input.action, input, updated)
+  notifyStaffAbout(req, viewer, input.action, result, updated)
   if (result.notify) notifyCustomer(req, updated, result.notify)
-  // An approval reaches the LMS straight away unless the customer must accept it first,
-  // and never while stages before payout (Settings → Stages) are still open.
-  const { requireAcceptance } = await getSetting('offers')
-  const ready = (result.accepted || (result.approved && !requireAcceptance)) && !(await closingStagesPending(updated))
-  const handOff = ready || result.closingDone
-  if (handOff && (await queueLmsSyncIfDue(updated, 'approval'))) {
-    afterResponse('LMS hand-off', () => syncApplicationToLms(updated.id, { actor: viewer }))
-  }
+  // Whichever state the workflow marks for it (Workflow editor) hands the loan to the LMS.
+  if (result.handToLms) await handToLms(updated, viewer)
   return loadCase(application.id)
 }
 
@@ -276,7 +270,9 @@ const respondToRequest = async (req, res, { params }) => {
     .limit(1)
   if (!message && !responses) fail(400, 'Write a reply or attach a document.', 'invalid_input')
 
-  const nextStatus = application.assignedOfficer ? 'in_review' : 'submitted'
+  // Back to where the case was: its state's category (the state itself never changed).
+  const { flow, state } = await caseWorkflow(application)
+  const nextStatus = flow.analysis.categories[state.id]
   await db.transaction(async (tx) => {
     // Only from the state the customer saw: staff may have moved the case on meanwhile.
     const [updated] = await tx
@@ -315,7 +311,8 @@ const offerTerms = (application) => `offer:K${application.approvedAmount ?? appl
 const acceptOffer = async (req, res, { params }) => {
   const viewer = await requireUser(req, { roles: ['customer'] })
   const application = await findVisibleApplication(viewer, params.id)
-  if (application.status !== 'approved') fail(409, 'There is no offer waiting for you on this application.', 'invalid_state')
+  const { state } = await caseWorkflow(application)
+  if (state.type !== 'offer' || application.status !== 'approved') fail(409, 'There is no offer waiting for you on this application.', 'invalid_state')
   if (application.offerExpiresAt && new Date(application.offerExpiresAt) < new Date()) fail(409, 'This offer has expired. You are welcome to apply again.', 'offer_expired')
 
   // With signing on: they have read the documents, signed, and entered the code we emailed.
@@ -332,14 +329,16 @@ const acceptOffer = async (req, res, { params }) => {
   }
 
   const db = await getDb()
+  let accepted
   try {
-    await db.transaction(async (tx) => {
-      const [updated] = await tx
-        .update(applications)
-        .set({ status: 'accepted', acceptedAt: new Date(), version: application.version + 1, updatedAt: new Date() })
-        .where(and(eq(applications.id, application.id), eq(applications.status, 'approved')))
-        .returning()
-      if (!updated) fail(409, 'This offer changed. Refresh the page.', 'stale')
+    accepted = await db.transaction(async (tx) => {
+      const moved = await systemTransition(tx, application, state.offer.onAccept, {
+        expectState: state.id,
+        actor: viewer,
+        changes: { acceptedAt: new Date() },
+        event: { type: 'status', message: signed ? `Offer accepted and signed by ${signed.signerName}` : 'Offer accepted', visibleToCustomer: true },
+      })
+      if (!moved) fail(409, 'This offer changed. Refresh the page.', 'stale')
       await tx.insert(consents).values({
         applicationId: application.id,
         type: 'offer',
@@ -349,7 +348,7 @@ const acceptOffer = async (req, res, { params }) => {
         capturedBy: viewer.id,
         ip: clientIpOf(req),
       })
-      await addEvent(tx, { applicationId: application.id, actor: viewer, type: 'status', fromStatus: 'approved', toStatus: 'accepted', message: signed ? `Offer accepted and signed by ${signed.signerName}` : 'Offer accepted', visibleToCustomer: true })
+      return moved
     })
   } catch (error) {
     await discardSignature(signed)
@@ -360,8 +359,7 @@ const acceptOffer = async (req, res, { params }) => {
   afterResponse('staff notifications', async () =>
     notifyUsers(followerIds(application).length ? followerIds(application) : await creditStaffIds(), { type: 'offer_accepted', title: `${application.reference}: offer accepted`, body: 'Ready for payout.', applicationId: application.id }, { origin: appOrigin(req) })
   )
-  const [fresh] = await db.select().from(applications).where(eq(applications.id, application.id))
-  if (!(await closingStagesPending(fresh)) && (await queueLmsSyncIfDue(fresh, 'approval'))) afterResponse('LMS hand-off', () => syncApplicationToLms(fresh.id))
+  if (accepted.target.handToLms) await handToLms(accepted.application)
   return { ok: true }
 }
 
@@ -372,24 +370,13 @@ const withdrawApplication = async (req, res, { params }) => {
   if (!WITHDRAWABLE_STATUSES.includes(application.status)) fail(409, 'This application can no longer be withdrawn.', 'invalid_state')
   const why = text(req.body?.reason, 500) || (application.status === 'approved' ? 'Turned down the offer' : 'Withdrawn by the applicant')
   const db = await getDb()
-  await db.transaction(async (tx) => {
-    // A payout or acceptance landing at the same moment must win, not be overwritten.
-    const [updated] = await tx
-      .update(applications)
-      .set({ status: 'withdrawn', withdrawnAt: new Date(), closedReason: why, version: application.version + 1, updatedAt: new Date() })
-      .where(and(eq(applications.id, application.id), eq(applications.status, application.status), eq(applications.version, application.version)))
-      .returning({ id: applications.id })
-    if (!updated) fail(409, 'This application changed a moment ago. Refresh the page to see where it stands.', 'stale')
-    await addEvent(tx, {
-      applicationId: application.id,
-      actor: viewer,
-      type: 'status',
-      fromStatus: application.status,
-      toStatus: 'withdrawn',
-      message: application.status === 'approved' ? `Offer turned down: ${why}` : `Withdrawn: ${why}`,
-      visibleToCustomer: true,
-    })
+  // A payout or acceptance landing at the same moment must win, not be overwritten.
+  const moved = await systemTransition(db, application, 'withdrawn', {
+    actor: viewer,
+    changes: { withdrawnAt: new Date(), closedReason: why },
+    event: { type: 'status', message: application.status === 'approved' ? `Offer turned down: ${why}` : `Withdrawn: ${why}`, visibleToCustomer: true },
   })
+  if (!moved) fail(409, 'This application changed a moment ago. Refresh the page to see where it stands.', 'stale')
   await recordAudit({ req, actor: viewer, action: 'application.withdrawn', entityType: 'application', entityId: application.id, detail: { reference: application.reference } })
   return { ok: true }
 }
@@ -397,13 +384,21 @@ const withdrawApplication = async (req, res, { params }) => {
 /** Cron: offers not accepted in time lapse, and the customer is told. */
 export const expireOffers = async (origin) => {
   const db = await getDb()
-  const lapsed = await db
-    .update(applications)
-    .set({ status: 'expired', closedReason: 'Offer not accepted in time', updatedAt: new Date() })
+  // Only offers get a deadline (on entering the offer state), so these are all offers.
+  const due = await db
+    .select()
+    .from(applications)
     .where(and(eq(applications.status, 'approved'), lt(applications.offerExpiresAt, new Date())))
-    .returning()
+  const lapsed = []
+  for (const candidate of due) {
+    const moved = await systemTransition(db, candidate, 'expired', {
+      expectState: candidate.state,
+      changes: { closedReason: 'Offer not accepted in time' },
+      event: { type: 'status', message: 'The offer expired before it was accepted', visibleToCustomer: true },
+    })
+    if (moved) lapsed.push(moved.application)
+  }
   for (const application of lapsed) {
-    await addEvent(db, { applicationId: application.id, actor: null, type: 'status', fromStatus: 'approved', toStatus: 'expired', message: 'The offer expired before it was accepted', visibleToCustomer: true })
     await sendApplicationUpdateEmail(application.applicantEmail, {
       reference: application.reference,
       headline: 'Your loan offer has expired',

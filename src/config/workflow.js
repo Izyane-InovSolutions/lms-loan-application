@@ -451,3 +451,20 @@ export const legacyStateOf = (definition, application, { fromStatus } = {}) => {
   const ready = candidates.find((state) => !state.trackProgress)
   return ready?.id || definition.start
 }
+
+/**
+ * A state for a case known only by its status (sample data, imports): its v1 state on
+ * a workflow made from the old settings, else the first state in the flow with that
+ * category — or, waiting on the applicant, the first state that may ask them.
+ */
+export const stateForStatus = (definition, analysis, application) => {
+  if (definition.legacy) return legacyStateOf(definition, application)
+  const finals = { disbursed: 'paid_out', declined: 'declined', withdrawn: 'withdrawn', expired: 'expired' }
+  if (finals[application.status]) return finals[application.status]
+  const candidates = analysis.order.map((id) => stateById(definition, id)).filter((state) => state && appliesTo(state, application.loanType))
+  const match =
+    application.status === 'info_requested'
+      ? candidates.find((state) => state.askApplicant)
+      : candidates.find((state) => analysis.categories[state.id] === application.status)
+  return match?.id || definition.start
+}

@@ -14,6 +14,9 @@ import { listRoles } from '../_lib/roles.js'
 import { validateStagesConfig } from '../_lib/stages.js'
 import { clearTwoFactorCache } from '../_lib/auth/twoFactor.js'
 import { brandName } from '../_lib/branding.js'
+import { regenerateLegacyWorkflow } from '../_lib/workflowVersions.js'
+
+const LEGACY_WORKFLOW_KEYS = ['workflow', 'offers', 'stages', 'lms']
 import { BRAND_NAME_MAX } from '../../src/config/branding.js'
 
 /*
@@ -216,6 +219,8 @@ const saveSetting = async (req, res, { params }) => {
     fail(400, error.message, 'cannot_save')
   }
   if (params.key === 'security') clearTwoFactorCache()
+  // These still describe the workflow until someone publishes one from the editor.
+  if (LEGACY_WORKFLOW_KEYS.includes(params.key)) await regenerateLegacyWorkflow(actor)
   await recordAudit({ req, actor, action: 'settings.updated', entityType: 'setting', entityId: params.key, detail: { before, after: saved } })
   return { [params.key]: saved }
 }

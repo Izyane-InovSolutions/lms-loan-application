@@ -210,6 +210,13 @@ export const applications = pgTable(
     checks: jsonb('checks').notNull().default(sql`'{}'::jsonb`),
     // Configurable stages done so far (Settings → Stages): { [stageId]: { done, note, by, byName, at } }
     stageProgress: jsonb('stage_progress').notNull().default(sql`'{}'::jsonb`),
+    // Where the case is in its workflow (workflow_versions): the state's id, and the
+    // version it follows. `status` is that state's reporting category (src/config/workflow.js).
+    state: text('state'),
+    workflowVersion: integer('workflow_version'),
+    // Who has taken the case in its current state (its role queue), and since when it is there.
+    stateAssignee: uuid('state_assignee').references(() => users.id, { onDelete: 'set null' }),
+    stateEnteredAt: timestamp('state_entered_at', { withTimezone: true }),
     // What was approved, when it differs from what was asked for.
     approvedAmount: money('approved_amount'),
     approvedTenure: integer('approved_tenure'),
@@ -235,6 +242,7 @@ export const applications = pgTable(
     uniqueIndex('applications_reference_key').on(table.reference),
     uniqueIndex('applications_submission_key').on(table.submissionKey),
     index('applications_status_idx').on(table.status),
+    index('applications_state_idx').on(table.workflowVersion, table.state),
     index('applications_email_idx').on(table.applicantEmail),
     index('applications_sourced_by_idx').on(table.sourcedBy),
     index('applications_assigned_rm_idx').on(table.assignedRm),
@@ -364,6 +372,30 @@ export const rulesets = pgTable(
     ...timestamps,
   },
   (table) => [index('rulesets_status_idx').on(table.status), uniqueIndex('rulesets_version_key').on(table.version)]
+)
+
+/**
+ * The workflow's versions (src/config/workflow.js): one draft being edited, the published
+ * one new applications follow, and earlier ones that open cases may still be on. A
+ * published definition never changes. `legacy` marks versions generated from the old
+ * settings (Settings → Stages and co.) rather than published from the editor.
+ */
+export const workflowVersions = pgTable(
+  'workflow_versions',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    version: integer('version'),
+    // draft | published | retired
+    status: text('status').notNull(),
+    definition: jsonb('definition').notNull(),
+    legacy: boolean('legacy').notNull().default(false),
+    note: text('note'),
+    createdBy: uuid('created_by'),
+    publishedBy: uuid('published_by'),
+    publishedAt: timestamp('published_at', { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [index('workflow_versions_status_idx').on(table.status), uniqueIndex('workflow_versions_version_key').on(table.version)]
 )
 
 /** The latest prescreen of an application: computed facts, rule results, and the AI's explanation. */

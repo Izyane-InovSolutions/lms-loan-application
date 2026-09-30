@@ -15,7 +15,9 @@ import { copyBlob, deleteBlobsForDraft, readBlob } from '../_lib/blob.js'
 import { afterResponse } from '../_lib/after.js'
 import { addEvent, applicantFromData, findVisibleApplication, nextReference, scopeApplications } from '../_lib/applications.js'
 import { getLms } from '../_lib/lms/index.js'
-import { queueLmsSyncIfDue, syncApplicationToLms } from '../_lib/lms/sync.js'
+import { queueLmsSync, syncApplicationToLms } from '../_lib/lms/sync.js'
+import { getPublishedWorkflow } from '../_lib/workflowVersions.js'
+import { resolveState } from '../../src/config/workflow.js'
 import { runPrescreen } from '../_lib/prescreen/run.js'
 import { priceLoan } from '../../src/config/loanProducts.js'
 import { getProductConfig, getProducts } from '../_lib/products.js'
@@ -211,6 +213,10 @@ const submitApplication = async (req) => {
     .limit(1)
 
   const lmsConfigured = Boolean(await getLms())
+  // New applications follow the published workflow, from its start (a start state for
+  // other products is passed through).
+  const flow = await getPublishedWorkflow()
+  const startState = resolveState(flow.definition, flow.definition.start, loanType)
   // The terms and privacy notice versions in force right now are what the applicant saw.
   const dataProcessingVersion = await currentConsentVersion()
   const application = await db.transaction(async (tx) => {
@@ -233,6 +239,10 @@ const submitApplication = async (req) => {
         monthlyInstalment: price.monthly,
         data,
         ...attribution,
+        status: flow.analysis.categories[startState.id],
+        state: startState.id,
+        workflowVersion: flow.version,
+        stateEnteredAt: new Date(),
         lmsSyncStatus: lmsConfigured ? 'waiting' : 'not_configured',
       })
       .returning()
@@ -289,7 +299,7 @@ const submitApplication = async (req) => {
     if (application.assignedRm && application.assignedRm !== application.sourcedBy) {
       await notifyUsers([application.assignedRm], { type: 'team_application', title: `${staff?.name || 'Your agent'} brought in ${application.reference}`, body: who, applicationId: application.id }, { origin })
     }
-    if (await queueLmsSyncIfDue(application, 'submit')) await syncApplicationToLms(application.id)
+    if (startState.handToLms && (await queueLmsSync(application))) await syncApplicationToLms(application.id)
   })
 
   return { id: application.id, reference: application.reference }

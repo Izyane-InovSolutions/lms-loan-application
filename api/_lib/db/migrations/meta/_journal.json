@@ -85,6 +85,13 @@
       "when": 1790800116406,
       "tag": "0011_signature_seal",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1790804732301,
+      "tag": "0012_workflow_versions",
+      "breakpoints": true
     }
   ]
 }
