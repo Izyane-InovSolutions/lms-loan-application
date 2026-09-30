@@ -52,9 +52,10 @@ const validatePricing = (id, value) => {
   return pricing
 }
 
+// A single leading slash: "//host/…" is a protocol-relative URL and would leave the LMS host.
 const path = (value, label) => {
   const cleaned = text(value, 300)
-  if (!cleaned.startsWith('/')) throw new Error(`${label} must be a path starting with /.`)
+  if (!cleaned.startsWith('/') || cleaned.startsWith('//') || cleaned.includes('\\')) throw new Error(`${label} must be a path starting with /.`)
   return cleaned
 }
 
@@ -211,8 +212,9 @@ const saveSetting = async (req, res, { params }) => {
 }
 
 /**
- * Tries the LMS connection — the saved one, or the values in the form before saving
- * (secrets left blank fall back to the saved ones).
+ * Tries the LMS connection — the saved one, or the values in the form before saving.
+ * Secrets left blank fall back to the saved ones only for the saved address: a test
+ * pointed at another host must bring its own, or it would hand that host our credentials.
  */
 const testLms = async (req) => {
   const actor = await requireUser(req, { permission: 'settings.manage' })
@@ -225,7 +227,11 @@ const testLms = async (req) => {
       fail(400, error.message, 'invalid_input')
     }
     const saved = await getSetting('lmsConnection')
-    client = createFrappeLms({ ...form, apiSecret: form.apiSecret || saved.apiSecret, password: form.password || saved.password })
+    const sameHost = Boolean(saved.baseUrl) && form.baseUrl === saved.baseUrl
+    if (!sameHost && ((form.authMethod === 'token' && !form.apiSecret) || (form.authMethod !== 'token' && !form.password))) {
+      fail(400, 'Enter the secret or password again to test a new LMS address.', 'secret_required')
+    }
+    client = createFrappeLms({ ...form, apiSecret: form.apiSecret || (sameHost ? saved.apiSecret : ''), password: form.password || (sameHost ? saved.password : '') })
   } else {
     client = await getLms()
     if (!client) fail(400, 'No LMS connection is set up yet.', 'lms_not_configured')

@@ -7,7 +7,7 @@ import { createBedrockProvider } from './providers/bedrock.js'
 import { createAzureDocumentIntelligenceOcr, createGoogleDocumentAiOcr, createMistralOcr, createTextractOcr } from './ocr.js'
 import { AiProviderError, AiUnavailableError, AiUnsupportedInputError, classifyAiFailure } from './errors.js'
 import { getSetting, SETTING_DEFAULTS } from '../settings.js'
-import { AI_FIELDS, AI_MODEL_PROVIDERS, OCR_ENGINES, isServiceReady } from '../../../src/config/aiProviders.js'
+import { AI_CONNECTIONS, AI_FIELDS, AI_MODEL_PROVIDERS, OCR_ENGINES, isServiceReady } from '../../../src/config/aiProviders.js'
 
 export { AiProviderError, AiUnavailableError, AiUnsupportedInputError, classifyAiFailure } from './errors.js'
 
@@ -256,8 +256,27 @@ const describeTestFailure = (error) =>
  * Tries one model provider or OCR engine, for the Test buttons in Settings. Uses the
  * values typed in the form, falling back to what is saved, then the environment.
  */
+/*
+ * A test may try an address typed into the form before it is saved, but the saved keys
+ * only ever go to the saved address: pointing the test at another host must not send
+ * that host the stored secret. When a connection's address differs from the saved one,
+ * its secrets come from the form alone.
+ */
+const withoutSavedSecretsForNewAddress = (setting, formValues) => {
+  const saved = resolveValues(setting)
+  const values = resolveValues(setting, formValues)
+  AI_CONNECTIONS.forEach((connection) => {
+    const moved = connection.fields.some((field) => field.kind === 'url' && values[field.key] !== saved[field.key])
+    if (!moved) return
+    connection.fields.filter((field) => field.secret).forEach((field) => {
+      values[field.key] = String(formValues[field.key] || '').trim()
+    })
+  })
+  return values
+}
+
 export const testAiService = async (id, formValues = {}) => {
-  const values = resolveValues(await readSetting(), formValues)
+  const values = withoutSavedSecretsForNewAddress(await readSetting(), formValues)
   const modelService = AI_MODEL_PROVIDERS.find((entry) => entry.id === id)
   const ocrService = OCR_ENGINES.find((entry) => entry.id === id)
   if (!modelService && !ocrService) return { ok: false, message: 'Unknown service.' }

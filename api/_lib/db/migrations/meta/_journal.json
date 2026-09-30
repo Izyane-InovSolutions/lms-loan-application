@@ -78,6 +78,13 @@
       "when": 1790787352993,
       "tag": "0010_documents_signatures",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1790800116406,
+      "tag": "0011_signature_seal",
+      "breakpoints": true
     }
   ]
 }

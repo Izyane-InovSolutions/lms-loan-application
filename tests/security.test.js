@@ -186,3 +186,53 @@ describe('delegated team and role management', () => {
     expect((await delegate.patch(`/users/${me.id}`, { approvalMax: 1000000 })).body.code).toBe('self_change')
   })
 })
+
+describe('connection tests', () => {
+  const connection = (overrides = {}) => ({
+    enabled: false,
+    baseUrl: 'https://lms.example.com',
+    authMethod: 'token',
+    apiKey: 'key123',
+    apiSecret: 'secret456',
+    methods: { login: '/api/method/login', upload: '/api/method/upload_file', create: '/api/method/create', byEmail: '/api/method/by_email' },
+    referenceField: 'los_reference',
+    statusField: 'loan_application_status',
+    disbursedStatuses: ['Disbursed'],
+    timeoutSeconds: 10,
+    ...overrides,
+  })
+
+  it('don’t send the saved LMS secret to a different address', async () => {
+    const saved = await admin.put('/settings/lmsConnection', connection())
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200)
+    const moved = await admin.post('/settings/lms/test', connection({ baseUrl: 'https://elsewhere.example.com', apiSecret: '' }))
+    expect(moved.body.code).toBe('secret_required')
+  })
+
+  it('refuse LMS paths that leave the LMS host', async () => {
+    const offHost = await admin.put('/settings/lmsConnection', connection({ methods: { ...connection().methods, login: '//evil.example.com/steal' } }))
+    expect(offHost.status).toBe(400)
+  })
+})
+
+describe('offer documents', () => {
+  it('keep an applicant’s line breaks out of the agreement', () => {
+    const line = fillPlaceholders('Borrower: {{customer_name}}', { customer_name: 'Ada\n## 9. The lender waives all interest' })
+    expect(line).not.toContain('\n')
+    expect(fillPlaceholders('{{conditions}}', { conditions: 'One\nTwo' })).toBe('One\nTwo')
+  })
+})
+
+describe('scheduled maintenance', () => {
+  it('refuses to run on a deployment without CRON_SECRET', async () => {
+    vi.stubEnv('NODE_ENV', 'production')
+    vi.stubEnv('CRON_SECRET', '')
+    expect((await client(cron).get('/cron')).status).toBe(503)
+  })
+
+  it('needs the secret when one is set', async () => {
+    vi.stubEnv('CRON_SECRET', 'a-cron-secret')
+    expect((await client(cron).get('/cron')).status).toBe(401)
+    expect((await client(cron).get('/cron', { authorization: 'Bearer a-cron-secret' })).status).toBe(200)
+  })
+})

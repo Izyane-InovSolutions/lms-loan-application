@@ -450,6 +450,10 @@ export function SignaturesPanel({ signatures, applicationId }) {
               </dd>
               <dt className="text-muted-foreground">From</dt>
               <dd className="text-foreground [overflow-wrap:anywhere]">{signature.ip || 'unknown'}</dd>
+              <dt className="text-muted-foreground">Record</dt>
+              <dd className={signature.sealValid === false ? 'font-medium text-destructive' : 'text-foreground'}>
+                {signature.sealValid === true ? 'Sealed, unchanged since signing' : signature.sealValid === false ? 'Doesn’t match its seal: changed after signing' : 'Not sealed'}
+              </dd>
             </dl>
             <ul className="space-y-2">
               {signature.documents.map((entry) => (

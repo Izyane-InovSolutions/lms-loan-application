@@ -6,6 +6,7 @@ import { deleteBlobs, putBlob, readBlob } from './blob.js'
 import { sha256, signPdf } from './pdf.js'
 import { ensureOfferDocuments } from './offerDocuments.js'
 import { TEMPLATE_KINDS, TEMPLATE_KIND_KEYS } from '../../src/config/templates.js'
+import { sealKey } from './secrets.js'
 
 const { applicationDocuments, signatures } = schema
 
@@ -30,6 +31,40 @@ export const parseSignature = (input) => {
   const png = Buffer.from(match[1], 'base64')
   if (png.length > MAX_IMAGE_BYTES || !png.subarray(0, 4).equals(PNG_MAGIC)) fail(400, 'That signature could not be read. Clear it and sign again.', 'invalid_signature')
   return { name, method, png, dataUrl: `data:image/png;base64,${match[1]}` }
+}
+
+/*
+ * The seal: an HMAC over what the record asserts — who signed what, when, how, and the
+ * fingerprint of every document before and after. The hashes alone only prove anything
+ * while the database is trusted; the seal's key lives in the environment instead.
+ */
+const sealedFields = (row) =>
+  JSON.stringify([
+    row.id,
+    row.applicationId,
+    row.signerName,
+    row.signerEmail,
+    row.method,
+    Boolean(row.codeVerified),
+    row.capturedBy ?? null,
+    row.ip ?? null,
+    new Date(row.signedAt).toISOString(),
+    crypto.createHash('sha256').update(String(row.image || '')).digest('hex'),
+    (row.documents || []).map((entry) => [entry.kind, entry.documentId, entry.sha256, entry.signedDocumentId, entry.signedSha256]),
+  ])
+
+const sealOf = (row) => {
+  const key = sealKey('signature')
+  return key ? crypto.createHmac('sha256', key).update(sealedFields(row)).digest('hex') : null
+}
+
+/** True when the record still matches its seal, false when it doesn't, null when it was never sealed. */
+export const verifySeal = (row) => {
+  if (!row?.seal) return null
+  const expected = sealOf(row)
+  if (!expected) return null
+  const given = Buffer.from(String(row.seal))
+  return given.length === expected.length && crypto.timingSafeEqual(Buffer.from(expected), given)
 }
 
 const lusakaTime = (date) =>
@@ -106,22 +141,23 @@ export const signOfferDocuments = async ({ application, signature, req, captured
     recorded.push({ kind, label, documentId: original.id, sha256: before, signedDocumentId: row.id, signedSha256: after, templateVersion: original.meta?.templateVersion ?? null })
   }
 
+  const record = {
+    id,
+    applicationId: application.id,
+    signerName: signature.name,
+    signerEmail: application.applicantEmail,
+    method: signature.method,
+    image: signature.dataUrl,
+    codeVerified,
+    capturedBy: capturedBy?.id ?? null,
+    ip,
+    userAgent,
+    documents: recorded,
+    signedAt,
+  }
   const [saved] = await db
     .insert(signatures)
-    .values({
-      id,
-      applicationId: application.id,
-      signerName: signature.name,
-      signerEmail: application.applicantEmail,
-      method: signature.method,
-      image: signature.dataUrl,
-      codeVerified,
-      capturedBy: capturedBy?.id ?? null,
-      ip,
-      userAgent,
-      documents: recorded,
-      signedAt,
-    })
+    .values({ ...record, seal: sealOf(record) })
     .returning()
   return saved
 }
@@ -149,7 +185,9 @@ export const signatureFor = async (db, applicationId, signatureId) => {
   return row || null
 }
 
+/** An application's signatures, each with `sealValid` (see verifySeal) instead of the raw seal. */
 export const signaturesOf = async (applicationId) => {
   const db = await getDb()
-  return db.select().from(signatures).where(eq(signatures.applicationId, applicationId))
+  const rows = await db.select().from(signatures).where(eq(signatures.applicationId, applicationId))
+  return rows.map(({ seal, ...row }) => ({ ...row, sealValid: verifySeal({ ...row, seal }) }))
 }

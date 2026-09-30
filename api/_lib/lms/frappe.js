@@ -51,11 +51,22 @@ export const createFrappeLms = (config) => {
   const defaultTimeout = Math.max(5, Number(config.timeoutSeconds) || 60) * 1000
   let sid = null
 
+  // Frappe resolves a path against the base like any URL, so a path that names another
+  // host ("//elsewhere/…") would take our credentials with it. Only the LMS host is used.
+  const lmsUrl = (path) => {
+    const url = new URL(path, baseUrl)
+    if (url.origin !== new URL(baseUrl).origin) throw new LmsError('The LMS method path must stay on the LMS address.')
+    return url
+  }
+
   const login = async () => {
-    const url = new URL(methods.login, baseUrl)
-    url.searchParams.set('usr', config.username)
-    url.searchParams.set('pwd', config.password)
-    const response = await fetch(url, { method: 'POST', signal: AbortSignal.timeout(defaultTimeout) })
+    // In the body, not the query string, where proxies and access logs would keep the password.
+    const response = await fetch(lmsUrl(methods.login), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ usr: config.username, pwd: config.password }),
+      signal: AbortSignal.timeout(defaultTimeout),
+    })
     const body = await response.json().catch(() => ({}))
     const nextSid = body?.message?.data?.sid || body?.message?.sid
     if (!response.ok || !nextSid) throw new LmsError(frappeMessage(body) || `LMS sign-in failed (${response.status}).`, { status: response.status })
@@ -71,11 +82,12 @@ export const createFrappeLms = (config) => {
     const attempts = retry ? 3 : 1
     let lastError
     for (let attempt = 1; attempt <= attempts; attempt += 1) {
-      const url = new URL(path, baseUrl)
+      const url = lmsUrl(path)
       Object.entries(params).forEach(([key, value]) => url.searchParams.set(key, value))
       const headers = typeof body === 'string' ? { 'Content-Type': 'application/json' } : {}
       if (config.authMethod === 'token') headers.Authorization = `token ${config.apiKey}:${config.apiSecret}`
-      else url.searchParams.set('sid', sid || (await login()))
+      // Frappe reads the session from its "sid" cookie; kept out of the URL for the same reason.
+      else headers.Cookie = `sid=${sid || (await login())}`
 
       let response
       try {

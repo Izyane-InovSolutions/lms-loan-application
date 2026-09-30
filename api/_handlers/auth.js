@@ -1,7 +1,7 @@
 import { and, desc, eq, gt, inArray, isNull, ne } from 'drizzle-orm'
 import kv from '../_lib/kv.js'
 import { getDb, schema } from '../_lib/db/client.js'
-import { fail, text, email as parseEmail, appOrigin, parseCookies } from '../_lib/http.js'
+import { fail, text, email as parseEmail, parseCookies, secretLinkOrigin } from '../_lib/http.js'
 import { countAttempt, ipOf, rateKey, underLimit } from '../_lib/rateLimit.js'
 import { requireUser } from '../_lib/rbac.js'
 import { decryptSecret, encryptSecret } from '../_lib/secrets.js'
@@ -262,6 +262,7 @@ const logout = async (req, res) => {
 
 /** Issues a one-time password link. Shared with users.js (invites and admin-triggered resets). */
 export const issuePasswordLink = async (req, { user, purpose, actor }) => {
+  const origin = secretLinkOrigin(req)
   const db = await getDb()
   const token = newToken()
   const ttl = purpose === 'invite' ? 7 * 24 * 60 * 60 * 1000 : RESET_TTL_MS
@@ -274,7 +275,7 @@ export const issuePasswordLink = async (req, { user, purpose, actor }) => {
     expiresAt: new Date(Date.now() + ttl),
     createdBy: actor?.id ?? null,
   })
-  const url = `${appOrigin(req)}/admin/set-password?token=${encodeURIComponent(token)}`
+  const url = `${origin}/admin/set-password?token=${encodeURIComponent(token)}`
   try {
     await sendPasswordLinkEmail(user.email, {
       name: user.name,

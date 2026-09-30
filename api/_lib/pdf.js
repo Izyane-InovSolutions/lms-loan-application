@@ -184,12 +184,14 @@ export const renderTextTemplate = async ({ title, body, values, footer }) => {
   }
   for (const templateLine of String(body || '').split(/\r?\n/)) {
     const line = fillPlaceholders(templateLine, values).trimEnd()
+    // Headings and bullets come from how the template is written, never from a filled-in
+    // value (an applicant naming themselves "## Clause 9").
     if (!templateLine.trim()) flush()
     else if (!line.trim()) continue
-    else if (line.startsWith('## ')) {
+    else if (templateLine.startsWith('## ')) {
       flush()
       writer.heading(line.slice(3))
-    } else if (/^\s*[-*] /.test(line)) {
+    } else if (/^\s*[-*] /.test(templateLine)) {
       flush()
       writer.bullet(line.replace(/^\s*[-*] /, ''))
     } else paragraph.push(line.trim())

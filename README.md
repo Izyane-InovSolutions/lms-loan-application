@@ -570,10 +570,12 @@ and Preview**, since Vercel scopes variables per environment.
    `BLOB_ACCESS=private`. Documents are NRCs and bank statements; with a private store a
    file opens only through the signed-in routes.
 4. **Secrets key.** Set `LOS_SECRETS_KEY` (for example `openssl rand -base64 32`).
-   Credentials can't be saved in Settings without it.
+   Credentials can't be saved in Settings without it, and signed offers are only sealed
+   against later tampering when it is set.
 5. **Email and links.** Set `EMAIL_HOST`, `EMAIL_PORT`, `EMAIL_USE_TLS`, `EMAIL_USE_SSL`,
    `EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD` and `DEFAULT_FROM_EMAIL`. Also set `APP_URL`
-   (the base of emailed links) and `CRON_SECRET` (protects the daily job).
+   (the base of emailed links; password links are refused in production without it) and
+   `CRON_SECRET` (the daily job refuses to run without it).
 6. **Then, in the workspace:** publish your real terms and privacy notice (Settings →
    Terms and privacy), set the loan products, replace the placeholder credit rule
    thresholds, and turn on two-step sign-in for admins and officers. Enter the LMS

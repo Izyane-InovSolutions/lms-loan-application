@@ -4,13 +4,12 @@ import { alias } from 'drizzle-orm/pg-core'
 import kv from '../_lib/kv.js'
 import { getDb, schema } from '../_lib/db/client.js'
 import { fail, text, email as parseEmail } from '../_lib/http.js'
-import { can, requireUser } from '../_lib/rbac.js'
+import { requireUser, staffWith } from '../_lib/rbac.js'
 import { activeUser, attributionFor, resolveReferral } from '../_lib/attribution.js'
 import { unindexDraft } from '../_lib/drafts.js'
 import { ensureOfferDocuments } from '../_lib/offerDocuments.js'
 import { signaturesOf } from '../_lib/signing.js'
 import { TEMPLATE_KIND_KEYS } from '../../src/config/templates.js'
-import { getSessionUser } from '../_lib/auth/sessions.js'
 import { recordAudit } from '../_lib/audit.js'
 import { copyBlob, deleteBlobsForDraft, readBlob } from '../_lib/blob.js'
 import { afterResponse } from '../_lib/after.js'
@@ -105,9 +104,9 @@ const submitApplication = async (req) => {
   const token = bearer(req)
   const tokenEmail = await draftEmailFor(token)
   if (!tokenEmail) fail(401, 'Your session has expired. Save your application again and resubmit.', 'invalid_token')
-  const session = body.assisted ? await getSessionUser(req) : null
-  if (body.assisted && !can(session, 'applications.assist')) {
-    fail(403, 'Your role can’t submit applications for customers. Sign in as an agent or relationship manager.', 'forbidden')
+  const session = body.assisted ? await staffWith(req, 'applications.assist') : null
+  if (body.assisted && !session) {
+    fail(403, 'Your role can’t submit applications for customers. Sign in as an agent or relationship manager (with two-step sign-in set up, if your role needs it).', 'forbidden')
   }
   // Only set for assisted submissions; everything else is the applicant acting for themselves.
   const staff = session
@@ -479,6 +478,10 @@ const getDocument = async (req, res, { params }) => {
     .where(and(eq(applicationDocuments.id, params.documentId), eq(applicationDocuments.applicationId, application.id)))
     .limit(1)
   if (!document) fail(404, 'Document not found.', 'not_found')
+  // Customers get what their own page lists (myApplication), not every file on the case.
+  if (!isStaffRole(viewer.role) && document.source === 'system' && !(await customerOfferDocuments(application)).some((offer) => offer.id === document.id)) {
+    fail(404, 'Document not found.', 'not_found')
+  }
   const stored = await readBlob(document)
   if (!stored) fail(410, 'This file is no longer in storage.', 'gone')
   if (isStaffRole(viewer.role)) {
@@ -598,6 +601,18 @@ const myApplications = async (req) => {
   return { applications: rows.map(customerSummary), earlier: await legacyLmsApplications(viewer.email, known) }
 }
 
+/**
+ * The offer letter and agreement the customer sees: offer letter first, then the
+ * agreement, each the signed copy once there is one. Made now if the approval didn't
+ * manage to. Other system files (earlier versions) stay staff-only.
+ */
+const customerOfferDocuments = async (application) => {
+  const offerDocs = APPROVED_STATUSES.includes(application.status) ? await ensureOfferDocuments(application.id) : {}
+  return TEMPLATE_KIND_KEYS.filter((kind) => offerDocs[kind]).map((kind) => [kind, offerDocs[kind]]).flatMap(([kind, versions]) =>
+    [versions.signed, versions.unsigned].filter(Boolean).slice(0, 1).map((row) => ({ id: row.id, kind, label: row.label, signed: Boolean(row.meta.signed) }))
+  )
+}
+
 const myApplication = async (req, res, { params }) => {
   const viewer = await requireUser(req, { roles: ['customer'] })
   const application = await findVisibleApplication(viewer, params.id)
@@ -616,12 +631,7 @@ const myApplication = async (req, res, { params }) => {
       .where(eq(applicationDocuments.applicationId, application.id))
       .orderBy(asc(applicationDocuments.createdAt)),
   ])
-  // An approved loan's offer letter and agreement: made now if the approval didn't manage to.
-  const offerDocs = APPROVED_STATUSES.includes(application.status) ? await ensureOfferDocuments(application.id) : {}
-  // Offer letter first, then the agreement; the signed copy once there is one.
-  const offerDocuments = TEMPLATE_KIND_KEYS.filter((kind) => offerDocs[kind]).map((kind) => [kind, offerDocs[kind]]).flatMap(([kind, versions]) =>
-    [versions.signed, versions.unsigned].filter(Boolean).slice(0, 1).map((row) => ({ id: row.id, kind, label: row.label, signed: Boolean(row.meta.signed) }))
-  )
+  const offerDocuments = await customerOfferDocuments(application)
   // Conditions the approver attached to the offer, shown with it.
   const [decision] = await db
     .select({ conditions: appraisals.conditions })

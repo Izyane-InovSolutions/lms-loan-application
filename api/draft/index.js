@@ -1,8 +1,7 @@
 import kv from '../_lib/kv.js'
 import { deleteBlobsForDraft } from '../_lib/blob.js'
 import { normalizeEmail, generateToken } from '../_lib/token.js'
-import { getSessionUser } from '../_lib/auth/sessions.js'
-import { can } from '../_lib/rbac.js'
+import { staffWith } from '../_lib/rbac.js'
 import { attributionFor, resolveReferral } from '../_lib/attribution.js'
 import { DRAFT_TTL_SECONDS, ensureDraftId, indexDraft, unindexDraft } from '../_lib/drafts.js'
 import { CONSENT_NOTICES } from '../../src/config/consent.js'
@@ -42,8 +41,8 @@ const emailFromBody = (body) =>
 const withAttribution = async (req, draft) => {
   if (draft.attribution) return draft
   if (req.body?.assisted) {
-    const session = await getSessionUser(req).catch(() => null)
-    if (can(session, 'applications.assist')) {
+    const session = await staffWith(req, 'applications.assist')
+    if (session) {
       return { ...draft, attribution: { ...(await attributionFor(session, session.referralCode)), startedByStaff: true } }
     }
   }

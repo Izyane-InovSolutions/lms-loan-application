@@ -63,10 +63,17 @@ export const fieldKeyFor = (name) =>
     .replace(/^_+|_+$/g, '')
 
 /** Replaces {{field}} placeholders. Unknown ones are left visible, so a typo shows in the preview. */
+// Fields staff write that may span lines. Everything else — names and addresses the
+// applicant typed — is kept to one line, so a line break in it can't start what reads as
+// a new clause of the agreement.
+const MULTILINE_FIELDS = new Set(['conditions'])
+
 export const fillPlaceholders = (text, values) =>
   String(text || '').replace(/\{\{\s*([a-zA-Z0-9_ ]+?)\s*\}\}/g, (match, name) => {
     const key = fieldKeyFor(name)
-    return Object.prototype.hasOwnProperty.call(values, key) ? String(values[key] ?? '') : match
+    if (!Object.prototype.hasOwnProperty.call(values, key)) return match
+    const value = String(values[key] ?? '')
+    return MULTILINE_FIELDS.has(key) ? value : value.replace(/[\p{Cc}\u2028\u2029]+/gu, ' ')
   })
 
 /** Placeholders a text template uses that are not merge fields. */

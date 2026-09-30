@@ -584,6 +584,9 @@ export const signatures = pgTable(
     // [{ kind, label, documentId, sha256, signedDocumentId, signedSha256, templateVersion }]
     documents: jsonb('documents').notNull().default(sql`'[]'::jsonb`),
     signedAt: timestamp('signed_at', { withTimezone: true }).notNull().defaultNow(),
+    // HMAC over the record and every document fingerprint (signing.js), keyed from the
+    // environment: whoever can edit the database and file store still can't forge one.
+    seal: text('seal'),
   },
   (table) => [index('signatures_application_idx').on(table.applicationId)]
 )

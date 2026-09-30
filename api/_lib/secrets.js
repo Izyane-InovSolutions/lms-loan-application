@@ -48,3 +48,14 @@ export const decryptSecret = (stored) => {
     return null
   }
 }
+
+/**
+ * A key for HMAC seals (signature records), derived from LOS_SECRETS_KEY so it never sits
+ * in the database next to what it protects. Null on Vercel without the variable: records
+ * are then left unsealed rather than refusing to sign.
+ */
+export const sealKey = (purpose) => {
+  const configured = (process.env.LOS_SECRETS_KEY || '').trim()
+  if (!configured && process.env.VERCEL) return null
+  return crypto.createHmac('sha256', configured || DEV_KEY).update(`los-seal:${purpose}`).digest()
+}

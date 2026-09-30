@@ -278,10 +278,13 @@ const respondToRequest = async (req, res, { params }) => {
 
   const nextStatus = application.assignedOfficer ? 'in_review' : 'submitted'
   await db.transaction(async (tx) => {
-    await tx
+    // Only from the state the customer saw: staff may have moved the case on meanwhile.
+    const [updated] = await tx
       .update(applications)
       .set({ status: nextStatus, infoRequest: null, version: application.version + 1, updatedAt: new Date() })
-      .where(eq(applications.id, application.id))
+      .where(and(eq(applications.id, application.id), eq(applications.status, application.status), eq(applications.version, application.version)))
+      .returning({ id: applications.id })
+    if (!updated) fail(409, 'This application changed while you were replying. Refresh the page.', 'stale')
     await addEvent(tx, {
       applicationId: application.id,
       actor: viewer,
@@ -370,10 +373,13 @@ const withdrawApplication = async (req, res, { params }) => {
   const why = text(req.body?.reason, 500) || (application.status === 'approved' ? 'Turned down the offer' : 'Withdrawn by the applicant')
   const db = await getDb()
   await db.transaction(async (tx) => {
-    await tx
+    // A payout or acceptance landing at the same moment must win, not be overwritten.
+    const [updated] = await tx
       .update(applications)
       .set({ status: 'withdrawn', withdrawnAt: new Date(), closedReason: why, version: application.version + 1, updatedAt: new Date() })
-      .where(eq(applications.id, application.id))
+      .where(and(eq(applications.id, application.id), eq(applications.status, application.status), eq(applications.version, application.version)))
+      .returning({ id: applications.id })
+    if (!updated) fail(409, 'This application changed a moment ago. Refresh the page to see where it stands.', 'stale')
     await addEvent(tx, {
       applicationId: application.id,
       actor: viewer,

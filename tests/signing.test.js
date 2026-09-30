@@ -104,6 +104,20 @@ describe('the customer signs their offer', () => {
     const { body } = await customer.get(`/me/applications/${id}`)
     expect(body.offerDocuments.every((document) => document.signed)).toBe(true)
     expect(body.offerDocuments.map((document) => document.label).sort()).toEqual(['Loan agreement (signed)', 'Offer letter (signed)'])
+    // The copies they were shown before signing are kept for staff, not handed out by id.
+    const [signature] = (await admin.get(`/applications/${id}`)).body.signatures
+    expect((await customer.get(`/applications/${id}/documents/${signature.documents[0].signedDocumentId}`)).status).toBe(200)
+    expect((await customer.get(`/applications/${id}/documents/${signature.documents[0].documentId}`)).status).toBe(404)
+  })
+
+  it('seals the signature record, so a later edit shows', async () => {
+    const [signature] = (await admin.get(`/applications/${id}`)).body.signatures
+    expect(signature.sealValid).toBe(true)
+    const { getDb, schema } = await import('../api/_lib/db/client.js')
+    const { eq } = await import('drizzle-orm')
+    const db = await getDb()
+    await db.update(schema.signatures).set({ signerName: 'Someone Else' }).where(eq(schema.signatures.id, signature.id))
+    expect((await admin.get(`/applications/${id}`)).body.signatures[0].sealValid).toBe(false)
   })
 })
 

@@ -36,3 +36,14 @@ export const requireUser = async (req, { staff = false, roles, permission, anyPe
   return user
 }
 
+/**
+ * The signed-in staff member if they hold `permission` and are cleared to act (their role's
+ * two-step sign-in is set up), else null. For endpoints that anyone may call but that do
+ * more for staff — the same gate as requireUser, without refusing everyone else.
+ */
+export const staffWith = async (req, permission) => {
+  const user = await getSessionUser(req).catch(() => null)
+  if (!user || !isStaffRole(user.role) || !can(user, permission)) return null
+  if (await needsTwoFactorSetup(user)) return null
+  return user
+}

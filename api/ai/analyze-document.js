@@ -91,7 +91,7 @@ export default async function handler(req, res) {
       return res.status(200).json({ status: 'skipped', reason: `${providers[0].model} cannot read ${mimeType || 'this file type'}.` })
     }
 
-    if (!(await consumeAiQuota(email))) {
+    if (!(await consumeAiQuota(email, req))) {
       return res.status(429).json({ code: 'quota_exceeded', message: 'Daily document check limit reached.' })
     }
 
