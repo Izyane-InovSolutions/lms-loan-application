@@ -350,7 +350,7 @@ const customerSignIn = async (req, res) => {
   const code = text(req.body?.code, 12)
   if (!email || !code) fail(400, 'Enter your email and the code we sent you.', 'invalid_input')
 
-  const otpError = await checkOtp(email, code)
+  const otpError = await checkOtp({ email, code, purpose: 'login', req })
   if (otpError) fail(otpError.status, otpError.message, 'invalid_code')
 
   const db = await getDb()
@@ -360,7 +360,7 @@ const customerSignIn = async (req, res) => {
   }
   if (user?.status === 'disabled') fail(403, 'This account has been disabled.', 'disabled')
 
-  await consumeOtp(email)
+  await consumeOtp('login', email)
   if (!user) {
     ;[user] = await db
       .insert(users)

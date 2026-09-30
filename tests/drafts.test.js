@@ -36,10 +36,18 @@ const personal = (email, { firstName = 'Mutale', amount = 8000 } = {}) => ({
   loanData: { amount, tenure: 6 },
 })
 
+// Each address's draft token, as the wizard keeps it: the first save starts the draft,
+// later ones continue it with the token (a draft can't be reopened by address alone).
+const tokens = new Map()
+
 /** Saves a draft as the wizard does; `as` is a staff client for an assisted save. */
 const saveDraft = async (body, { as } = {}) => {
-  const response = await drafts.post('/draft', as ? { ...body, assisted: true } : body, as ? { cookie: as.cookie } : {})
+  const payload = as ? { ...body, assisted: true } : body
+  const token = tokens.get(body.email)
+  const headers = { ...(as ? { cookie: as.cookie } : {}), ...(token ? { authorization: `Bearer ${token}` } : {}) }
+  const response = token ? await drafts.put('/draft', payload, headers) : await drafts.post('/draft', payload, headers)
   expect(response.status, JSON.stringify(response.body)).toBe(200)
+  if (response.body.draftToken) tokens.set(body.email, response.body.draftToken)
   return response.body
 }
 

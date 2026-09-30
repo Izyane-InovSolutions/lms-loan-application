@@ -69,7 +69,7 @@ test('an agent fills in an application with a customer, who confirms with a code
 
   await expect(page.getByText('The customer’s agreement')).toBeVisible()
   await page.getByRole('button', { name: 'Email the code' }).click()
-  await page.getByLabel('Customer’s code').fill(await emailedCode(customer))
+  await page.getByLabel('Customer’s code').fill(await emailedCode(customer, 'consent'))
   await page.getByRole('button', { name: /Submit application/ }).click()
   await page.getByLabel(/I have read and accept/).check()
   await page.getByRole('button', { name: 'Accept and submit' }).click()

@@ -131,7 +131,7 @@ test('a referred personal loan goes from application to payout', async ({ browse
   for (let step = 1; step <= 12; step += 1) await applicant.mouse.move(pad.x + 40 + step * 25, pad.y + pad.height * (0.6 - Math.sin(step / 2) * 0.25))
   await applicant.mouse.up()
   await applicant.getByRole('button', { name: 'Email me a code' }).click()
-  await applicant.locator('#sign-code').fill(await emailedCode(EMAIL))
+  await applicant.locator('#sign-code').fill(await emailedCode(EMAIL, 'sign'))
   await applicant.screenshot({ path: 'test-results/offer-signing.png', fullPage: true })
   await applicant.getByRole('button', { name: 'Sign and accept' }).click()
   await expect(applicant.getByText('Offer accepted').first()).toBeVisible()

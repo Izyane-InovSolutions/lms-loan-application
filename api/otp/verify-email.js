@@ -16,11 +16,11 @@ export default async function handler(req, res) {
     return res.status(400).json({ message: 'Email and code are required.' })
   }
 
-  const otpError = await checkOtp(email, code)
+  const otpError = await checkOtp({ email, code, purpose: 'resume', req })
   if (otpError) {
     return res.status(otpError.status).json({ message: otpError.message })
   }
 
-  await consumeOtp(email)
+  await consumeOtp('resume', email)
   return res.status(200).json({ verified: true })
 }

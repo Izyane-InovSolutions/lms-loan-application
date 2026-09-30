@@ -11,10 +11,17 @@ import { CONSENT_NOTICES } from '../../src/config/consent.js'
 // realistic case (a typo corrected once or twice) without unbounded writes.
 const MAX_DRAFT_ALIASES = 5
 
+// Only the fields the body actually carries, so a partial save can't blank the rest.
 const pickDraftFields = (body) => {
   const { loanType, currentStep, personalData, businessData, loanData } = body || {}
-  return { loanType, currentStep, personalData, businessData, loanData }
+  return Object.fromEntries(Object.entries({ loanType, currentStep, personalData, businessData, loanData }).filter(([, value]) => value !== undefined))
 }
+
+const draftExists = (res) =>
+  res.status(409).json({
+    code: 'draft_exists',
+    message: 'An application is already in progress for this email. Resume it with the code we email to that address.',
+  })
 
 // The draft is keyed by email so the OTP flow can find it, but the email lives in the
 // form and stays editable. Mirrors getEmail() in useApplicationDraft.js.
@@ -28,10 +35,12 @@ const emailFromBody = (body) =>
 /**
  * Who the draft is credited to, fixed on the first save that can tell: an agent filling it
  * in (`assisted`, with their staff session), else the referral link the applicant came
- * through. A customer's own save never takes a draft away from the agent who started it.
+ * through. Once set it never changes, so a later save — the customer's own, or another
+ * agent's — can't take a draft away from whoever it was credited to, or mark a customer's
+ * own draft as started by staff (which would show it to staff without their agreement).
  */
 const withAttribution = async (req, draft) => {
-  if (draft.attribution?.startedByStaff) return draft
+  if (draft.attribution) return draft
   if (req.body?.assisted) {
     const session = await getSessionUser(req).catch(() => null)
     if (can(session, 'applications.assist')) {
@@ -66,20 +75,34 @@ const resolveTokenAuth = async (req) => {
 }
 
 export default async function handler(req, res) {
+  const tokenAuth = await resolveTokenAuth(req)
+
   if (req.method === 'POST') {
     const email = normalizeEmail(req.body?.email)
     if (!email) {
       return res.status(400).json({ message: 'A valid email address is required.' })
     }
 
+    // Starting a draft proves nothing about who you are, so it may only claim an address
+    // with nothing in progress. An existing draft is continued with the emailed code
+    // (otp/verify.js) or by the token already held for it — never handed to whoever
+    // types the address, which would give them its answers and uploaded documents.
     const existing = await kv.get(`draft:${email}`)
+    if (existing) {
+      const held = tokenAuth ? await kv.get(`draft:${tokenAuth.email}`) : null
+      if (!held?.id || held.id !== existing.id) return draftExists(res)
+    }
     const draft = await prepare(req, {
-      ...(existing || {}),
+      ...(existing || { documents: {} }),
       ...pickDraftFields(req.body),
-      documents: existing?.documents || {},
       savedAt: Date.now(),
     })
-    await kv.set(`draft:${email}`, draft, { ex: DRAFT_TTL_SECONDS })
+    if (existing) {
+      await kv.set(`draft:${email}`, draft, { ex: DRAFT_TTL_SECONDS })
+    } else if (!(await kv.set(`draft:${email}`, draft, { ex: DRAFT_TTL_SECONDS, nx: true }))) {
+      // Another request claimed the address between the read and this write.
+      return draftExists(res)
+    }
     await indexDraft(draft, email)
 
     const token = generateToken()
@@ -88,7 +111,6 @@ export default async function handler(req, res) {
     return res.status(200).json({ draftToken: token, draft })
   }
 
-  const tokenAuth = await resolveTokenAuth(req)
   if (!tokenAuth) {
     return res.status(401).json({ code: 'invalid_token', message: 'Missing or invalid draft token.' })
   }
@@ -111,7 +133,18 @@ export default async function handler(req, res) {
     // and no key is ever deleted — an earlier version of this moved the record and
     // removed the old key, which silently destroyed drafts mid-session.
     const nextEmail = emailFromBody(req.body) || tokenAuth.email
-    const keys = [...new Set([...(existing.aliases || []), tokenAuth.email, nextEmail])].slice(-MAX_DRAFT_ALIASES)
+    const candidates = [...new Set([...(existing.aliases || []), tokenAuth.email, nextEmail])].slice(-MAX_DRAFT_ALIASES)
+    // Never write over another applicant's draft: an address that now holds a different
+    // record is not ours to alias, and moving onto one is refused outright.
+    const holders = await Promise.all(candidates.map((key) => kv.get(`draft:${key}`)))
+    const taken = new Set(candidates.filter((key, index) => holders[index]?.id && holders[index].id !== draft.id))
+    if (taken.has(nextEmail)) {
+      return res.status(409).json({
+        code: 'email_in_use',
+        message: 'Another application is already in progress for this email. Use a different email, or resume that application instead.',
+      })
+    }
+    const keys = candidates.filter((key) => !taken.has(key))
     draft.aliases = keys
 
     await Promise.all(keys.map((key) => kv.set(`draft:${key}`, draft, { ex: DRAFT_TTL_SECONDS })))

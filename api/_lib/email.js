@@ -56,6 +56,16 @@ export const sendOtpEmail = async (email, code, { purpose = 'resume', agentName 
     })
     return
   }
+  if (purpose === 'login') {
+    await getTransporter().sendMail({
+      from: FROM_EMAIL,
+      to: email,
+      subject: 'Your code to sign in to your applications',
+      text: `Your code to sign in to your loan applications is ${code}. It expires in 10 minutes. If you did not ask for it, do not share it with anyone.`,
+      html: `<p>Your code to sign in to your loan applications is <strong>${code}</strong>. It expires in 10 minutes.</p><p style="color:#64748b">If you did not ask for it, do not share it with anyone.</p>`,
+    })
+    return
+  }
   await getTransporter().sendMail({
     from: FROM_EMAIL,
     to: email,

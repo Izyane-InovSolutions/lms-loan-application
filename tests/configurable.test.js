@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import http from 'node:http'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { createMemoryKv, client, signedAcceptance } from './helpers.js'
+import { createMemoryKv, client, signedAcceptance, emailCode } from './helpers.js'
 
 const kv = createMemoryKv()
 vi.mock('../api/_lib/kv.js', () => ({ default: kv }))
@@ -147,7 +147,7 @@ describe('terms and privacy notice', () => {
 describe('offers', () => {
   const customerFor = async (email) => {
     const customer = client(handler)
-    await kv.set(`otp:${email}`, { code: '424242', attempts: 0, createdAt: Date.now() }, { ex: 600 })
+    await emailCode(kv, 'login', email, '424242')
     await customer.post('/auth/customer', { email, code: '424242' })
     return customer
   }
@@ -263,7 +263,7 @@ describe('LMS connection from settings (against a stand-in Frappe)', () => {
     const filed = await submit('lms.customer@example.com')
     await approve(filed.id)
     const customer = client(handler)
-    await kv.set('otp:lms.customer@example.com', { code: '515151', attempts: 0, createdAt: Date.now() }, { ex: 600 })
+    await emailCode(kv, 'login', 'lms.customer@example.com', '515151')
     await customer.post('/auth/customer', { email: 'lms.customer@example.com', code: '515151' })
     await customer.post(`/me/applications/${filed.id}/accept`, await signedAcceptance(kv, 'lms.customer@example.com'))
 

@@ -186,11 +186,15 @@ export const signaturePng = (width = 300, height = 100) => {
   return Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk('IHDR', header), chunk('IDAT', zlib.deflateSync(Buffer.concat(rows))), chunk('IEND', Buffer.alloc(0))])
 }
 
+/** Puts a code in `kv` as if it had been emailed to `email` for `purpose` (api/_lib/otp.js). */
+export const emailCode = (kv, purpose, email, code) => kv.set(`otp:${purpose}:${email}`, { id: crypto.randomUUID(), code, createdAt: Date.now() }, { ex: 600 })
+
 /**
  * What a customer (or staff, for an in-person acceptance) sends to accept a signed offer:
- * a drawn signature and the emailed code, which is put in `kv` as if it had been emailed.
+ * a drawn signature and the emailed code, which is put in `kv` as if it had been emailed —
+ * for signing it themselves ("sign") and in person ("offer") alike.
  */
 export const signedAcceptance = async (kv, email, { name = 'Ada Banda', code = '777888' } = {}) => {
-  await kv.set(`otp:${email}`, { code, attempts: 0, createdAt: Date.now() }, { ex: 600 })
+  await Promise.all(['sign', 'offer'].map((purpose) => emailCode(kv, purpose, email, code)))
   return { agreed: true, code, signature: { name, method: 'drawn', image: `data:image/png;base64,${signaturePng().toString('base64')}` } }
 }

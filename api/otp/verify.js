@@ -16,7 +16,7 @@ export default async function handler(req, res) {
     return res.status(400).json({ message: 'Email and code are required.' })
   }
 
-  const otpError = await checkOtp(email, code)
+  const otpError = await checkOtp({ email, code, purpose: 'resume', req })
   if (otpError) {
     return res.status(otpError.status).json({ message: otpError.message })
   }
@@ -30,7 +30,7 @@ export default async function handler(req, res) {
   // the draft lookup meant a miss returned "no in-progress application found", and the
   // retry of that same still-valid code then reported "that code has expired" — two
   // different errors for one problem, with a fresh code needed after every attempt.
-  await consumeOtp(email)
+  await consumeOtp('resume', email)
 
   const token = generateToken()
   await kv.set(`draftToken:${token}`, email, { ex: DRAFT_TTL_SECONDS })

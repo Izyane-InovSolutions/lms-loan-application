@@ -1,6 +1,6 @@
 import crypto from 'node:crypto'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
-import { createMemoryKv, client, draftPreparer } from './helpers.js'
+import { createMemoryKv, client, draftPreparer, emailCode } from './helpers.js'
 
 const kv = createMemoryKv()
 vi.mock('../api/_lib/kv.js', () => ({ default: kv }))
@@ -206,7 +206,7 @@ describe('application lifecycle', () => {
     await act({ action: 'request_info', message: 'Please send a clearer NRC copy.' })
 
     const customer = client(handler)
-    await kv.set('otp:bo@example.com', { code: '111222', attempts: 0, createdAt: Date.now() }, { ex: 600 })
+    await emailCode(kv, 'login', 'bo@example.com', '111222')
     await customer.post('/auth/customer', { email: 'bo@example.com', code: '111222' })
     const mine = await customer.get('/me/applications')
     expect(mine.body.applications.map((row) => row.reference)).toEqual([submitted.reference])

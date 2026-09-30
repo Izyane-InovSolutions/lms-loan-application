@@ -77,11 +77,17 @@ const signInPerson = async (req, viewer, application, input) => {
   requirePermission(viewer, 'offers.record', 'Your role can’t record acceptances.')
   if (application.status !== 'approved') fail(409, 'There is no offer waiting to be accepted.', 'invalid_state')
   if (application.offerExpiresAt && new Date(application.offerExpiresAt) < new Date()) fail(409, 'This offer has expired.', 'offer_expired')
+  return signOfferDocuments({ application, signature: parseSignature(input.signature), req, capturedBy: viewer })
+}
+
+/** The code the customer received by email, read out to the staff member recording an in-person acceptance. */
+const verifyAcceptanceCode = async (req, viewer, application, input) => {
+  requirePermission(viewer, 'offers.record', 'Your role can’t record acceptances.')
   const code = text(input.code, 12)
   if (!code) fail(400, 'Enter the code the customer received by email.', 'invalid_input')
-  const otpError = await checkOtp(application.applicantEmail, code)
+  const otpError = await checkOtp({ email: application.applicantEmail, code, purpose: 'offer', req })
   if (otpError) fail(otpError.status, otpError.message.replace('The code entered', 'The customer’s code'), 'invalid_code')
-  return signOfferDocuments({ application, signature: parseSignature(input.signature), req, capturedBy: viewer })
+  return true
 }
 
 const act = async (req, res, { params }) => {
@@ -89,11 +95,14 @@ const act = async (req, res, { params }) => {
   const application = await findVisibleApplication(viewer, params.id)
   const input = { ...(req.body || {}) }
   const { requireSignature } = await getSetting('offers')
+  // The customer's emailed code is checked once, here, where the caller's address is known
+  // for the guess limits; the action itself then trusts that check.
+  const codeVerified = input.action === 'record_acceptance' ? await verifyAcceptanceCode(req, viewer, application, input) : false
   const signed = input.action === 'record_acceptance' && requireSignature ? await signInPerson(req, viewer, application, input) : null
   if (signed) input.signatureId = signed.id
   let outcome
   try {
-    outcome = await applyAction(viewer, application.id, input)
+    outcome = await applyAction(viewer, application.id, input, { codeVerified })
   } catch (error) {
     await discardSignature(signed)
     throw error
@@ -101,7 +110,7 @@ const act = async (req, res, { params }) => {
   const { application: updated, result } = outcome
   await recordAudit({ req, actor: viewer, action: `application.${input.action}`, entityType: 'application', entityId: application.id, detail: { reference: application.reference, status: updated.status } })
 
-  if (result.consumeOtpFor) await consumeOtp(result.consumeOtpFor)
+  if (result.consumeOtpFor) await consumeOtp('offer', result.consumeOtpFor)
   // The offer letter and agreement are made from the published templates straight away.
   if (result.approved) afterResponse('offer documents', () => ensureOfferDocuments(updated.id))
   notifyStaffAbout(req, viewer, input.action, input, updated)
@@ -314,7 +323,7 @@ const acceptOffer = async (req, res, { params }) => {
     const signature = parseSignature(req.body?.signature)
     const code = text(req.body?.code, 12)
     if (!code) fail(400, 'Enter the code we emailed you.', 'code_required')
-    const otpError = await checkOtp(application.applicantEmail, code)
+    const otpError = await checkOtp({ email: application.applicantEmail, code, purpose: 'sign', req })
     if (otpError) fail(otpError.status, otpError.message, 'invalid_code')
     signed = await signOfferDocuments({ application, signature, req })
   }
@@ -343,7 +352,7 @@ const acceptOffer = async (req, res, { params }) => {
     await discardSignature(signed)
     throw error
   }
-  if (signed) await consumeOtp(application.applicantEmail)
+  if (signed) await consumeOtp('sign', application.applicantEmail)
   await recordAudit({ req, actor: viewer, action: 'application.offer_accepted', entityType: 'application', entityId: application.id, detail: { reference: application.reference, signature: signed?.id ?? null } })
   afterResponse('staff notifications', async () =>
     notifyUsers(followerIds(application).length ? followerIds(application) : await creditStaffIds(), { type: 'offer_accepted', title: `${application.reference}: offer accepted`, body: 'Ready for payout.', applicationId: application.id }, { origin: appOrigin(req) })

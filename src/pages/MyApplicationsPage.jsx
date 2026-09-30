@@ -84,7 +84,7 @@ function SignIn({ initialEmail, onSignedIn, staffUser }) {
     setBusy(true)
     setError('')
     try {
-      const response = await fetch('/api/otp/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: normalized }) })
+      const response = await fetch('/api/otp/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: normalized, purpose: 'login' }) })
       const body = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(body.message || 'We could not send a code. Try again.')
       setStage('code')

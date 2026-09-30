@@ -164,7 +164,7 @@ const submitApplication = async (req) => {
   if (staff) {
     const code = text(body.consentCode, 12)
     if (!code) fail(400, 'Enter the code we emailed to the customer to confirm they agree.', 'consent_code_required')
-    const otpError = await checkOtp(applicant.email, code)
+    const otpError = await checkOtp({ email: applicant.email, code, purpose: 'consent', req })
     if (otpError) fail(otpError.status, otpError.message.replace('The code entered', 'The customer’s code'), 'invalid_consent_code')
   }
   const point = wanted.location ? body.location : null
@@ -278,7 +278,7 @@ const submitApplication = async (req) => {
     return row
   })
 
-  if (staff) await consumeOtp(applicant.email)
+  if (staff) await consumeOtp('consent', applicant.email)
   await deleteDraft(draftEmail, draft, token)
   await recordAudit({ req, actor: staff, action: 'application.submitted', entityType: 'application', entityId: application.id, detail: { reference: application.reference, channel: attribution.channel } })
 

@@ -12,18 +12,21 @@ export const fieldId = (key) => `#field-${key.replace(/[^a-zA-Z0-9_-]+/g, '-')}`
 
 const KV_FILE = path.resolve('.e2e/kv.json')
 
-/** The latest emailed code for an address, read from the test run's local store. */
-export const emailedCode = async (email) => {
+/**
+ * The latest code emailed to an address for `purpose` (resume, login, consent, offer,
+ * sign — api/_lib/otp.js), read from the test run's local store.
+ */
+export const emailedCode = async (email, purpose) => {
   let code = null
   await expect
     .poll(() => {
       try {
-        code = JSON.parse(fs.readFileSync(KV_FILE, 'utf8'))[`otp:${email}`]?.value?.code || null
+        code = JSON.parse(fs.readFileSync(KV_FILE, 'utf8'))[`otp:${purpose}:${email}`]?.value?.code || null
       } catch {
         code = null
       }
       return code
-    }, { message: `no code emailed to ${email}` })
+    }, { message: `no ${purpose} code emailed to ${email}` })
     .not.toBeNull()
   return code
 }
@@ -76,6 +79,6 @@ export const customerSignIn = async (page, email) => {
   await page.goto('/my-applications')
   await page.locator('#my-email').fill(email)
   await page.getByRole('button', { name: 'Send me a code' }).click()
-  await page.locator('#my-code').fill(await emailedCode(email))
+  await page.locator('#my-code').fill(await emailedCode(email, 'login'))
   await page.getByRole('button', { name: 'Sign in' }).click()
 }

@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { PDFDocument } from 'pdf-lib'
-import { createMemoryKv, client, draftPreparer, signedAcceptance } from './helpers.js'
+import { createMemoryKv, client, draftPreparer, signedAcceptance, emailCode } from './helpers.js'
 
 const kv = createMemoryKv()
 vi.mock('../api/_lib/kv.js', () => ({ default: kv }))
@@ -46,7 +46,7 @@ const approvedLoan = async (email) => {
 
 const customerFor = async (email) => {
   const customer = client(handler)
-  await kv.set(`otp:${email}`, { code: '101010', attempts: 0, createdAt: Date.now() }, { ex: 600 })
+  await emailCode(kv, 'login', email, '101010')
   await customer.post('/auth/customer', { email, code: '101010' })
   return customer
 }

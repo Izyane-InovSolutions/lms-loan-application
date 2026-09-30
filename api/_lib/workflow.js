@@ -211,14 +211,17 @@ const ACTIONS = {
    * The customer accepted the offer in person: the agent or officer enters the code the
    * customer received by email, as proof it was them.
    */
-  async record_acceptance(tx, viewer, application, input, settings) {
+  async record_acceptance(tx, viewer, application, input, settings, context) {
     requireCase(viewer, 'offers.record')
     requireStatus(application, ['approved'], 'There is no offer waiting to be accepted.')
     if (application.offerExpiresAt && new Date(application.offerExpiresAt) < new Date()) fail(409, 'This offer has expired.', 'offer_expired')
-    const code = text(input.code, 12)
-    if (!code) fail(400, 'Enter the code the customer received by email.', 'invalid_input')
-    const otpError = await checkOtp(application.applicantEmail, code)
-    if (otpError) fail(otpError.status, otpError.message.replace('The code entered', 'The customer’s code'), 'invalid_code')
+    // The handler checks the customer's code before the transaction (handlers/workflow.js).
+    if (!context?.codeVerified) {
+      const code = text(input.code, 12)
+      if (!code) fail(400, 'Enter the code the customer received by email.', 'invalid_input')
+      const otpError = await checkOtp({ email: application.applicantEmail, code, purpose: 'offer' })
+      if (otpError) fail(otpError.status, otpError.message.replace('The code entered', 'The customer’s code'), 'invalid_code')
+    }
     // With signing on, the handler has the customer sign first (signing.js) and passes the result.
     const signature = settings.offers.requireSignature ? await signatureFor(tx, application.id, input.signatureId) : null
     if (settings.offers.requireSignature && !signature) fail(400, 'The customer needs to sign the offer first.', 'signature_required')
@@ -423,7 +426,7 @@ const finalDecision = async (tx, viewer, application, { verdict, amount, tenure,
  * screen is refused with a prompt to refresh instead of overwriting a colleague's work.
  * Returns { application, result } where result carries `approved` / `notify` hints.
  */
-export const applyAction = async (viewer, applicationId, input) => {
+export const applyAction = async (viewer, applicationId, input, context = {}) => {
   const handler = ACTIONS[input?.action]
   if (!handler) fail(400, 'Unknown action.', 'invalid_input')
   const settings = { workflow: await getSetting('workflow'), offers: await getSetting('offers'), products: await getProducts(), stages: await getSetting('stages') }
@@ -436,7 +439,7 @@ export const applyAction = async (viewer, applicationId, input) => {
       fail(409, 'Someone else has updated this case. Refresh to see their changes before you continue.', 'stale')
     }
 
-    const result = await handler(tx, viewer, application, input, settings)
+    const result = await handler(tx, viewer, application, input, settings, context)
     const nextStatus = result.changes.status
     const [updated] = await tx
       .update(applications)

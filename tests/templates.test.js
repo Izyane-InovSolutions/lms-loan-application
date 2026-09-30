@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { PDFDocument } from 'pdf-lib'
-import { createMemoryKv, client, draftPreparer } from './helpers.js'
+import { createMemoryKv, client, draftPreparer, emailCode } from './helpers.js'
 
 const kv = createMemoryKv()
 vi.mock('../api/_lib/kv.js', () => ({ default: kv }))
@@ -130,7 +130,7 @@ describe('an approved loan', () => {
 
   it('shows them to the customer with the offer, apart from the documents they sent', async () => {
     const customer = client(handler)
-    await kv.set('otp:offered@example.com', { code: '424242', attempts: 0, createdAt: Date.now() }, { ex: 600 })
+    await emailCode(kv, 'login', 'offered@example.com', '424242')
     await customer.post('/auth/customer', { email: 'offered@example.com', code: '424242' })
     const { body } = await customer.get(`/me/applications/${id}`)
     expect(body.offerDocuments.map((document) => document.kind).sort()).toEqual(['loan_agreement', 'offer_letter'])
