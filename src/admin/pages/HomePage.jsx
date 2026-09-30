@@ -4,12 +4,14 @@ import { Check, Copy, FilePlus2, History, Loader2, UserPlus, Users } from 'lucid
 
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { applyPath } from '@/config/applicationSteps'
 import { ROLES, STAFF_ROLES, roleLabel } from '@/config/roles'
 import { LOAN_TYPE_LABELS, LMS_SYNC_LABELS, statusLabel } from '@/config/applications'
 import { setAssistedFlag } from '@/lib/assisted'
 import { api } from '../api'
 import { useAuth } from '../auth'
 import { EmptyState, FormError, Initials, PageHeader, Panel, ROLE_TONES, StatusBadge, StatusText, money, timeAgo } from '../components'
+import { AssistedApplicationTypeDialog } from '../AssistedApplicationTypeDialog'
 import { describeAction } from './AuditPage'
 import { KpiStrip, Leaderboard, ProductMix, QueueTiles, RuleOutcomes, StageBreakdown, SubmissionsTrend } from './dashboardCharts'
 
@@ -98,7 +100,7 @@ function RoleDashboard({ user, dashboard, overview }) {
     </Panel>
   )
   const rules = (
-    <Panel title="Credit rules" description="How prescreening went">
+    <Panel title="Policy rules" description="How prescreening went">
       <RuleOutcomes outcomes={dashboard.prescreenOutcomes} />
     </Panel>
   )
@@ -128,7 +130,7 @@ function RoleDashboard({ user, dashboard, overview }) {
       <>
         <KpiStrip kpis={dashboard.kpis} days={dashboard.days} />
         <div className="grid gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-          <RecentApplications rows={dashboard.recent} />
+          <RecentApplications rows={dashboard.recent} role={user.role} />
           <div className="space-y-6">
             {user.referralCode ? <ReferralPanel code={user.referralCode} /> : null}
             {stages}
@@ -171,45 +173,55 @@ function RoleDashboard({ user, dashboard, overview }) {
   )
 }
 
-function RecentApplications({ rows }) {
+function RecentApplications({ rows, role }) {
   const navigate = useNavigate()
-  const start = () => {
+  const [chooseType, setChooseType] = useState(false)
+  const start = (loanType = 'personal') => {
     setAssistedFlag()
-    navigate('/apply/personal/personal-information')
+    navigate(applyPath(loanType, 0))
+  }
+  const begin = () => {
+    if (role === 'rm') setChooseType(true)
+    else start()
   }
   return (
-    <Panel
-      title="Latest applications"
-      action={
-        <Button size="sm" onClick={start}>
+    <>
+      <Panel
+        title="Latest applications"
+        action={
+          <Button size="sm" onClick={begin}>
           <FilePlus2 />
           New application
-        </Button>
-      }
-      bodyClassName="p-0"
-    >
-      {rows?.length ? (
-        <ul className="divide-y">
-          {rows.map((row) => (
-            <li key={row.id}>
-              <Link to={`/admin/applications/${row.id}`} className="flex items-center justify-between gap-3 px-5 py-3 hover:bg-muted/30">
-                <span className="min-w-0">
-                  <span className="block truncate text-sm font-medium text-foreground">{row.applicantName}</span>
-                  <span className="block text-xs text-muted-foreground">
-                    {money(row.amount)} {LOAN_TYPE_LABELS[row.loanType].toLowerCase()}, {timeAgo(row.submittedAt)}
+          </Button>
+        }
+        bodyClassName="p-0"
+      >
+        {rows?.length ? (
+          <ul className="divide-y">
+            {rows.map((row) => (
+              <li key={row.id}>
+                <Link to={`/admin/applications/${row.id}`} className="flex items-center justify-between gap-3 px-5 py-3 hover:bg-muted/30">
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-medium text-foreground">{row.applicantName}</span>
+                    <span className="block text-xs text-muted-foreground">
+                      {money(row.amount)} {LOAN_TYPE_LABELS[row.loanType].toLowerCase()}, {timeAgo(row.submittedAt)}
+                    </span>
                   </span>
-                </span>
-                <StatusBadge status={row.status} label={statusLabel(row.status)} />
-              </Link>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <EmptyState icon={FilePlus2} title="No applications yet">
-          Fill one in with a customer, or share your referral link.
-        </EmptyState>
-      )}
-    </Panel>
+                  <StatusBadge status={row.status} label={statusLabel(row.status)} />
+                </Link>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <EmptyState icon={FilePlus2} title="No applications yet">
+            Fill one in with a customer, or share your referral link.
+          </EmptyState>
+        )}
+      </Panel>
+      {role === 'rm' ? (
+        <AssistedApplicationTypeDialog open={chooseType} onOpenChange={setChooseType} onChoose={start} />
+      ) : null}
+    </>
   )
 }
 

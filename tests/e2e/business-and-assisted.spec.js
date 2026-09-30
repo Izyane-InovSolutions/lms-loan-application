@@ -76,3 +76,15 @@ test('an agent fills in an application with a customer, who confirms with a code
   await expect(page.getByText(/Chisokone Hardware/).first()).toBeVisible()
   await expect(page.getByText(/direct sales agent/i).first()).toBeVisible()
 })
+
+test('an RM can choose a business loan when starting an assisted application', async ({ page }) => {
+  await signInAs(page, 'Relationship manager')
+  await page.goto('/admin/applications')
+  await page.getByRole('button', { name: 'New application' }).first().click()
+
+  await expect(page.getByRole('dialog')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Personal loan' })).toBeVisible()
+  await page.getByRole('button', { name: 'Business loan' }).click()
+  await page.waitForURL('**/apply/business/business-information')
+  await expect(page.getByText(/filling this in for a customer/)).toBeVisible()
+})

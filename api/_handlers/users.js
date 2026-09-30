@@ -15,6 +15,27 @@ const manager = alias(users, 'manager')
 // Roles whose applications are attributed to them, so they carry a referral code.
 const REFERRING_ROLES = ['dsa', 'rm']
 
+/**
+ * The band of loan amounts a person may finally approve. A blank maximum means no upper
+ * limit. Returns only the fields the request actually sent, and checks max >= min against
+ * whatever the record already holds for the field that is not being changed.
+ */
+const parseApprovalBand = (body, current) => {
+  const toAmount = (raw, label) => {
+    if (raw === '' || raw === null || raw === undefined) return null
+    const value = Number(raw)
+    if (!Number.isInteger(value) || value < 0) fail(400, `${label} must be a whole number of 0 or more.`, 'invalid_input')
+    return value
+  }
+  const changes = {}
+  if (body.approvalMin !== undefined) changes.approvalMin = toAmount(body.approvalMin, 'The minimum approval amount') ?? 0
+  if (body.approvalMax !== undefined) changes.approvalMax = toAmount(body.approvalMax, 'The maximum approval amount')
+  const min = changes.approvalMin ?? current?.approvalMin ?? 0
+  const max = changes.approvalMax !== undefined ? changes.approvalMax : current?.approvalMax ?? null
+  if (max != null && max < min) fail(400, 'The maximum approval amount cannot be less than the minimum.', 'invalid_input')
+  return changes
+}
+
 const userColumns = {
   user: users,
   managerName: manager.name,
@@ -106,6 +127,8 @@ const inviteUser = async (req) => {
     )
   }
 
+  const band = parseApprovalBand(req.body || {}, null)
+
   const [user] = await db
     .insert(users)
     .values({
@@ -117,6 +140,7 @@ const inviteUser = async (req) => {
       status: 'invited',
       referralCode: REFERRING_ROLES.includes(role) ? await uniqueReferralCode(db) : null,
       createdBy: actor.id,
+      ...band,
     })
     .returning()
 
@@ -182,6 +206,8 @@ const updateUser = async (req, res, { params }) => {
     // Re-enabling someone who never set a password puts them back to "invited", not active.
     changes.status = body.status === 'active' && !target.passwordHash ? 'invited' : body.status
   }
+
+  Object.assign(changes, parseApprovalBand(body, target))
 
   if (!Object.keys(changes).length) return { user: publicUser(target) }
 

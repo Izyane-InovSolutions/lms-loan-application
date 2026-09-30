@@ -57,6 +57,15 @@ const terms = (application, input, settings) => {
   return { amount, tenure }
 }
 
+const requireAssignmentRange = (person, application) => {
+  const min = person.approvalMin ?? 0
+  const max = person.approvalMax ?? null
+  if (application.amount < min || (max != null && application.amount > max)) {
+    const upper = max == null ? 'no upper limit' : `K${max.toLocaleString()}`
+    fail(403, `${person.name} cannot be assigned applications outside K${min.toLocaleString()} to ${upper}.`, 'outside_approval_range')
+  }
+}
+
 const ACTIONS = {
   /** Officer takes a case, or an admin / officer hands it to an officer. */
   async assign(tx, viewer, application, input) {
@@ -65,6 +74,7 @@ const ACTIONS = {
     const officerId = input.officerId || viewer.id
     const [person] = await tx.select().from(users).where(eq(users.id, officerId)).limit(1)
     if (!person || !CREDIT_ROLES.includes(person.role) || person.status !== 'active') fail(400, 'Choose an active loan officer.', 'invalid_officer')
+    requireAssignmentRange(person, application)
     return {
       changes: { assignedOfficer: person.id },
       event: { type: 'assignment', message: person.id === viewer.id ? `${viewer.name} took the case` : `Assigned to ${person.name}` },
@@ -74,6 +84,7 @@ const ACTIONS = {
   async start_review(tx, viewer, application) {
     requireCredit(viewer)
     requireStatus(application, ['submitted'], 'Only a newly submitted case can be started.')
+    if (!application.assignedOfficer) requireAssignmentRange(viewer, application)
     return {
       changes: { status: 'in_review', assignedOfficer: application.assignedOfficer || viewer.id },
       event: { type: 'status', message: 'Review started', visibleToCustomer: true },
@@ -221,7 +232,7 @@ const ACTIONS = {
   },
 }
 
-/** Approve or decline, enforcing four-eyes against the originator and the officer limit. */
+/** Approve or decline, enforcing four-eyes against the originator and the approver's limit. */
 const finalDecision = async (tx, viewer, application, { verdict, amount, tenure, conditions, rationale }, settings, { recordAppraisal }) => {
   if (settings.workflow.requireSecondApproval && application.sourcedBy === viewer.id) {
     fail(403, 'A different person must decide a case you brought in.', 'four_eyes')
@@ -229,8 +240,13 @@ const finalDecision = async (tx, viewer, application, { verdict, amount, tenure,
   let approved = null
   if (verdict === 'approve') {
     approved = terms(application, { amount, tenure }, settings)
-    if (viewer.role !== 'admin' && approved.amount > settings.workflow.officerApprovalLimit) {
-      fail(403, `Approvals above K${settings.workflow.officerApprovalLimit.toLocaleString()} need an administrator.`, 'over_limit')
+    const min = viewer.approvalMin ?? 0
+    const max = viewer.approvalMax ?? null
+    if (approved.amount < min) {
+      fail(403, `You can only approve amounts of K${min.toLocaleString()} or more.`, 'under_limit')
+    }
+    if (max != null && approved.amount > max) {
+      fail(403, `Approvals above K${max.toLocaleString()} are outside your limit.`, 'over_limit')
     }
   }
   if (recordAppraisal) {

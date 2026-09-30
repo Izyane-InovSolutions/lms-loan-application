@@ -7,7 +7,7 @@ import { prescreenApplication } from '../ai/prescreen.js'
 import { findFormMismatches } from '../../../src/utils/documentChecks.js'
 import { evaluateRules } from '../../../src/config/creditRules.js'
 import { computeFacts, expectedFor } from './facts.js'
-import { getPublishedRuleset } from './rulesets.js'
+import { getPublishedRuleset, rulesetFlatRules } from './rulesets.js'
 import { addressDistanceKm } from '../geo.js'
 
 const { applications, applicationDocuments, prescreens, locations, crbReports } = schema
@@ -41,7 +41,7 @@ export const runPrescreen = async (applicationId, { actor = null } = {}) => {
   const locationDistanceKm = applicantPoint ? await addressDistanceKm(application, applicantPoint).catch(() => null) : null
   const facts = computeFacts(application, documents, { locations: points, crbScore: crb?.score ?? null, locationDistanceKm })
   const ruleset = await getPublishedRuleset()
-  const { outcome, results } = evaluateRules(ruleset.rules, facts, application.loanType)
+  const { outcome, results } = evaluateRules(rulesetFlatRules(ruleset), facts, application.loanType)
 
   let aiReview = null
   let aiError = null

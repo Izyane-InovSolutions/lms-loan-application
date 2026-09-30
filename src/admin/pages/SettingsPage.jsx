@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, Check, Database, Loader2, PlugZap, Rocket, Send, Trash2, Undo2 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -166,12 +166,16 @@ function WorkflowTab({ settings, notify }) {
             checked={workflow.value.requireSecondApproval}
             onChange={(requireSecondApproval) => workflow.set({ requireSecondApproval })}
           />
-          <Field id="officer-limit" label="Loan officer approval limit (K)" hint="Above this amount, only an administrator can approve.">
-            <Input id="officer-limit" type="number" min="0" value={workflow.value.officerApprovalLimit} onChange={(event) => workflow.set({ officerApprovalLimit: event.target.value })} />
-          </Field>
           <Field id="sla-days" label="Target days to a decision" hint="Open cases older than this are flagged, and officers get a daily reminder.">
             <Input id="sla-days" type="number" min="1" max="60" value={workflow.value.slaDays} onChange={(event) => workflow.set({ slaDays: event.target.value })} />
           </Field>
+          <p className="text-sm text-muted-foreground">
+            How much each person may approve is now set per user on the{' '}
+            <Link to="/admin/users" className="text-primary hover:underline">
+              Team
+            </Link>{' '}
+            page, as a minimum and maximum on their profile.
+          </p>
         </div>
         <FormError message={workflow.error} />
         <SaveBar dirty={workflow.dirty} saving={workflow.saving} onSave={() => workflow.save()} />

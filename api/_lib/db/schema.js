@@ -46,6 +46,10 @@ export const users = pgTable(
     managerId: uuid('manager_id').references(() => users.id, { onDelete: 'set null' }),
     // Stamped on applications that arrive through this person's link (Phase 5).
     referralCode: text('referral_code'),
+    // The band of loan amounts this person may give final approval to. approvalMax null
+    // means no upper limit. Administrators are never limited, whatever these hold.
+    approvalMin: integer('approval_min').notNull().default(0),
+    approvalMax: integer('approval_max'),
     isDemo: boolean('is_demo').notNull().default(false),
     // Two-step sign-in: the authenticator secret (encrypted, see secrets.js), when it was
     // switched on, and the hashes of unused one-time recovery codes.

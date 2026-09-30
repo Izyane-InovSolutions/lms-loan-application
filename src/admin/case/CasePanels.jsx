@@ -25,7 +25,7 @@ export function RulesPanel({ prescreen, canRerun, onRerun }) {
 
   if (!prescreen) {
     return (
-      <Panel title="Credit rules">
+      <Panel title="Policy rules">
         <p className="flex items-center gap-2 text-sm text-muted-foreground">
           <Loader2 className="size-4 animate-spin" aria-hidden="true" />
           Prescreening…
@@ -39,7 +39,7 @@ export function RulesPanel({ prescreen, canRerun, onRerun }) {
 
   return (
     <Panel
-      title="Credit rules"
+      title="Policy rules"
       description={`Version ${prescreen.rulesetVersion}, run ${timeAgo(prescreen.updatedAt)}`}
       action={
         canRerun ? (
@@ -145,7 +145,7 @@ export function AiReviewPanel({ prescreen }) {
           ) : null}
         </div>
       ) : (
-        <p className="text-sm text-muted-foreground">The AI review couldn’t run for this application. The credit rules still apply.</p>
+        <p className="text-sm text-muted-foreground">The AI review couldn’t run for this application. The policy rules still apply.</p>
       )}
     </Panel>
   )

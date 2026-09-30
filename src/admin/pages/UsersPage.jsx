@@ -390,7 +390,14 @@ function EditDialog({ person, viewer, managers, onClose, onSaved }) {
 
   useEffect(() => {
     if (person) {
-      setForm({ name: person.name, phone: person.phone || '', role: person.role, managerId: person.managerId || '' })
+      setForm({
+        name: person.name,
+        phone: person.phone || '',
+        role: person.role,
+        managerId: person.managerId || '',
+        approvalMin: person.approvalMin ?? 0,
+        approvalMax: person.approvalMax ?? '',
+      })
       setError('')
       setManualUrl(null)
     }
@@ -418,7 +425,14 @@ function EditDialog({ person, viewer, managers, onClose, onSaved }) {
   const handleSubmit = (event) => {
     event.preventDefault()
     save(
-      { name: form.name, phone: form.phone, role: form.role, managerId: form.role === 'dsa' ? form.managerId || null : null },
+      {
+        name: form.name,
+        phone: form.phone,
+        role: form.role,
+        managerId: form.role === 'dsa' ? form.managerId || null : null,
+        approvalMin: form.approvalMin,
+        approvalMax: form.approvalMax,
+      },
       'Changes saved'
     )
   }
@@ -477,6 +491,16 @@ function EditDialog({ person, viewer, managers, onClose, onSaved }) {
           <Field id="edit-phone" label="Phone">
             <Input id="edit-phone" type="tel" value={form.phone} onChange={update('phone')} />
           </Field>
+          {['admin', 'loan_officer'].includes(form.role) ? (
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field id="edit-approval-min" label="Minimum approval amount (K)" hint="Applications outside this band cannot be assigned to this person or approved by them.">
+                <Input id="edit-approval-min" type="number" min="0" step="1" value={form.approvalMin} onChange={update('approvalMin')} />
+              </Field>
+              <Field id="edit-approval-max" label="Maximum approval amount (K)" hint="Leave blank for no upper limit.">
+                <Input id="edit-approval-max" type="number" min="0" step="1" value={form.approvalMax} onChange={update('approvalMax')} />
+              </Field>
+            </div>
+          ) : null}
 
           {manualUrl ? <ManualLink url={manualUrl} /> : null}
           <FormError message={error} />

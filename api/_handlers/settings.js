@@ -127,7 +127,6 @@ const VALIDATORS = {
   },
   workflow: (value) => ({
     requireSecondApproval: Boolean(value.requireSecondApproval),
-    officerApprovalLimit: number(value.officerApprovalLimit, { min: 0, label: 'The approval limit' }),
     slaDays: number(value.slaDays, { min: 1, max: 60, integer: true, label: 'The target days' }),
   }),
   offers: (value) => ({
