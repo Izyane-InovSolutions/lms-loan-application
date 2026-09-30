@@ -7,7 +7,8 @@ import { LMS_SYNC_LABELS } from '@/config/applications'
 import { STAGE_PHASES, checkLabel, checklistOf, pendingStages, phaseForStatus, stagesFor } from '@/config/stages'
 import { roleLabel } from '@/config/roles'
 import { FACTS, OUTCOMES, describeCondition, formatFact } from '@/config/creditRules'
-import { CONSENT_NOTICES } from '@/config/consent'
+import { consentText } from '@/config/consent'
+import { useBranding } from '@/components/brand/BrandingProvider'
 import { OutcomeMark, Panel, dateTime, money, timeAgo } from '../components'
 import { LocationMap } from './LocationMap'
 
@@ -477,6 +478,7 @@ const CONSENT_LABELS = { data_processing: 'Terms and privacy notice', draft_cont
 const METHOD_LABELS = { applicant_checkbox: 'by the applicant online', customer_code: 'by the customer’s emailed code, with an agent' }
 
 export function ConsentPanel({ consents }) {
+  const { name: brand } = useBranding()
   if (!consents.length) return null
   return (
     <Panel title="Consent">
@@ -486,7 +488,7 @@ export function ConsentPanel({ consents }) {
             {consent.granted ? <Check className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" /> : <span className="mt-0.5 size-4 shrink-0 text-center text-muted-foreground">–</span>}
             <span>
               <span className="text-foreground">{CONSENT_LABELS[consent.type]}</span>
-              <span className="block text-xs text-muted-foreground" title={CONSENT_NOTICES[consent.type]?.text}>
+              <span className="block text-xs text-muted-foreground" title={consentText(consent.type, brand)}>
                 {consent.granted ? `Given ${METHOD_LABELS[consent.method] || ''}` : 'Not given'}, notice {consent.noticeVersion}
               </span>
             </span>

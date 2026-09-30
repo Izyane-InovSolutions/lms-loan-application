@@ -7,6 +7,7 @@
  * a field below (with or without the braces, any case); a PDF without fields is used as it
  * is, with a generated summary page added. The customer signs both when accepting.
  */
+import { DEFAULT_BRAND_NAME } from './branding.js'
 
 export const TEMPLATE_KINDS = {
   offer_letter: {
@@ -42,7 +43,7 @@ export const MERGE_FIELDS = [
   { key: 'offer_expiry_date', label: 'Date the offer lapses', sample: '14 October 2026' },
   { key: 'decision_date', label: 'Date approved', sample: '30 September 2026' },
   { key: 'approved_by', label: 'Who approved it', sample: 'Mwila Sakala' },
-  { key: 'lender_name', label: 'Lender’s name', sample: 'Loan Origination' },
+  { key: 'lender_name', label: 'Lender’s name', sample: DEFAULT_BRAND_NAME },
   { key: 'today', label: 'Today’s date', sample: '30 September 2026' },
 ]
 

@@ -147,6 +147,7 @@ needed, and every change is recorded in the audit log.
 | Notifications and SMS | Staff emails, customer texts, and the SMS provider (Africa's Talking) with a test message |
 | Data retention | How long declined, withdrawn and lapsed applications, paid-out loans and audit entries are kept before automatic deletion |
 | Security | Roles that must use two-step sign-in |
+| Branding | The product's name and logo: the site header, sign-in pages, browser tab, emails, consent wording, the authenticator app and offer documents. The logo is a PNG, JPG or WebP image of up to 1 MB. |
 | Offer documents | The offer letter and loan agreement every approved loan gets: written in the workspace with fields, or your own PDF uploaded (see [Offer letter, agreement and signature](#offer-letter-agreement-and-signature)) |
 | Terms and privacy | The terms and privacy notice applicants accept, edited and published as numbered versions. Each application records the versions its applicant accepted. |
 

@@ -1,6 +1,7 @@
 import React from 'react'
 import { MessageCircle } from 'lucide-react'
-import { CONSENT_NOTICES } from '@/config/consent'
+import { consentText } from '@/config/consent'
+import { useBranding } from '@/components/brand/BrandingProvider'
 import { fieldId } from '@/lib/fieldId'
 
 /**
@@ -9,6 +10,7 @@ import { fieldId } from '@/lib/fieldId'
  * the draft appear in the workspace's pipeline (api/_lib/drafts.js).
  */
 export function DraftContactConsent({ checked, onChange, error }) {
+  const { name } = useBranding()
   const id = fieldId('contactConsent')
   return (
     <section className="rounded-lg border bg-card p-5 print:hidden">
@@ -27,7 +29,7 @@ export function DraftContactConsent({ checked, onChange, error }) {
             <MessageCircle className="size-3.5 text-muted-foreground" aria-hidden="true" />
             Help with finishing
           </span>
-          <span className="mt-0.5 block text-muted-foreground">{CONSENT_NOTICES.draft_contact.text}</span>
+          <span className="mt-0.5 block text-muted-foreground">{consentText('draft_contact', name)}</span>
         </span>
       </label>
       {error ? (

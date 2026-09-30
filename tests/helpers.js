@@ -1,5 +1,6 @@
 import crypto from 'node:crypto'
 import zlib from 'node:zlib'
+import { Readable } from 'node:stream'
 
 /*
  * Drives API handlers in-process with minimal stand-ins for Node's req/res, the same
@@ -23,6 +24,8 @@ export const createMemoryKv = () => {
     },
     async set(key, value, options = {}) {
       const existing = live(key)
+      // Redis SET NX: nothing written, and null back, when the key is already there.
+      if (options.nx && existing) return null
       const expiresAt = options.ex ? Date.now() + options.ex * 1000 : options.keepTtl ? existing?.expiresAt ?? null : null
       map.set(key, { value, expiresAt })
       return 'OK'
@@ -81,13 +84,20 @@ const createRes = () => {
  */
 export const client = (handler, { origin } = {}) => {
   let cookie = ''
-  const call = async (method, path, body, extraHeaders = {}) => {
-    const req = {
+  const call = async (method, path, body, extraHeaders = {}, rawBody = null) => {
+    const fields = {
       method,
       url: `/api/v1${path}`,
       headers: { host: 'localhost', cookie, ...(origin ? { origin } : {}), ...extraHeaders },
       body,
       socket: { remoteAddress: '127.0.0.1' },
+    }
+    // A raw body (a multipart upload) arrives as a stream, as from a real browser.
+    let req = fields
+    if (rawBody) {
+      req = Object.assign(new Readable({ read() {} }), fields)
+      req.push(rawBody)
+      req.push(null)
     }
     const res = createRes()
     await handler(req, res)
@@ -104,6 +114,17 @@ export const client = (handler, { origin } = {}) => {
     patch: (path, body = {}, headers) => call('PATCH', path, body, headers),
     put: (path, body = {}, headers) => call('PUT', path, body, headers),
     del: (path, headers) => call('DELETE', path, undefined, headers),
+    /** A multipart/form-data POST with one `file`, as the workspace's upload buttons send. */
+    upload: (path, { filename, contentType, data, fields = {} }, headers) => {
+      const boundary = `----test${crypto.randomBytes(8).toString('hex')}`
+      const raw = Buffer.concat([
+        ...Object.entries(fields).map(([key, value]) => Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="${key}"\r\n\r\n${value}\r\n`)),
+        Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: ${contentType}\r\n\r\n`),
+        data,
+        Buffer.from(`\r\n--${boundary}--\r\n`),
+      ])
+      return call('POST', path, undefined, { 'content-type': `multipart/form-data; boundary=${boundary}`, 'content-length': String(raw.length), ...headers }, raw)
+    },
     get cookie() {
       return cookie
     },

@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import { PDFDocument, PDFTextField, StandardFonts, rgb } from 'pdf-lib'
 import { SIGNATURE_FIELD, fieldKeyFor, fillPlaceholders } from '../../src/config/templates.js'
+import { DEFAULT_BRAND_NAME } from '../../src/config/branding.js'
 
 /*
  * The PDFs the workspace makes: offer letters and loan agreements from a written template
@@ -169,10 +170,10 @@ const addFooters = (doc, font, label) => {
  * {{fields}} are filled from `values`; a line left empty by its fields (a company name on
  * a personal loan) is dropped rather than leaving a gap.
  */
-export const renderTextTemplate = async ({ title, body, values, footer }) => {
+export const renderTextTemplate = async ({ title, body, values, footer, producer = `${DEFAULT_BRAND_NAME} workspace` }) => {
   const doc = await PDFDocument.create()
   doc.setTitle(fillPlaceholders(title, values))
-  doc.setProducer('Loan Origination workspace')
+  doc.setProducer(producer)
   const writer = await createWriter(doc)
   writer.newPage()
   writer.title(fillPlaceholders(title, values))

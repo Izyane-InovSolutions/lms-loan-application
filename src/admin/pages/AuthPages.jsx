@@ -5,6 +5,7 @@ import { ArrowLeft, Loader2, MailCheck } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Logo } from '@/components/brand/Logo'
+import { useBranding } from '@/components/brand/BrandingProvider'
 import { cn } from '@/lib/utils'
 import { ROLES, roleLabel } from '@/config/roles'
 import { api } from '../api'
@@ -13,12 +14,13 @@ import { Field, FormError, roleTone } from '../components'
 
 /** Two-panel frame for the signed-out pages: a navy brand panel and the form. */
 function AuthFrame({ title, description, children, footer }) {
+  const { name } = useBranding()
   return (
     <div className="grid min-h-screen bg-background lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
       <aside className="relative hidden overflow-hidden bg-[hsl(205_65%_14%)] p-10 text-white lg:flex lg:flex-col lg:justify-between">
         <Link to="/" className="flex items-center gap-3 text-sm font-medium text-white/80 hover:text-white">
           <Logo size="sm" showWordmark={false} />
-          Loan Origination
+          {name}
         </Link>
         <div className="max-w-sm">
           <p className="text-3xl font-semibold leading-tight tracking-tight">

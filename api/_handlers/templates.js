@@ -4,7 +4,7 @@ import { recordAudit } from '../_lib/audit.js'
 import { putBlob } from '../_lib/blob.js'
 import { readSingleUpload } from '../_lib/upload.js'
 import { inspectPdf } from '../_lib/pdf.js'
-import { LENDER_NAME, renderTemplate } from '../_lib/offerDocuments.js'
+import { lenderName, renderTemplate } from '../_lib/offerDocuments.js'
 import {
   assertTemplateKind,
   discardTemplateDraft,
@@ -103,7 +103,7 @@ const publish = async (req, res, { params }) => {
   if (!draft) fail(400, 'There is no draft to publish.', 'no_draft')
   // A draft that can't render must not become what customers get.
   try {
-    await renderTemplate(draft, { ...SAMPLE_VALUES, lender_name: LENDER_NAME() })
+    await renderTemplate(draft, { ...SAMPLE_VALUES, lender_name: await lenderName() })
   } catch (error) {
     fail(400, `This draft can’t be turned into a PDF: ${error.message}`, 'invalid_template')
   }
@@ -120,7 +120,7 @@ const preview = async (req, res, { params, query }) => {
   if (!template) fail(404, 'There is no draft to preview.', 'not_found')
   let rendered
   try {
-    rendered = await renderTemplate(template, { ...SAMPLE_VALUES, lender_name: LENDER_NAME() })
+    rendered = await renderTemplate(template, { ...SAMPLE_VALUES, lender_name: await lenderName() })
   } catch (error) {
     fail(400, error.message, 'invalid_template')
   }

@@ -2,6 +2,7 @@ import React from 'react'
 
 import { Button } from '@/components/ui/button'
 import { Logo } from '@/components/brand/Logo'
+import { useBranding } from '@/components/brand/BrandingProvider'
 
 const NAV_LINKS = [
   { href: '#loans', label: 'Loans' },
@@ -11,12 +12,13 @@ const NAV_LINKS = [
 ]
 
 export function SiteHeader({ onApply, onResume }) {
+  const { name } = useBranding()
   return (
     <header className="sticky top-0 z-40 w-full border-b border-border/70 bg-background/85 backdrop-blur supports-[backdrop-filter]:bg-background/70">
       <div className="container flex h-16 items-center justify-between gap-6">
         <a href="#top" className="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
           <Logo />
-          <span className="sr-only">Loan Origination — back to top</span>
+          <span className="sr-only">{name} — back to top</span>
         </a>
 
         <nav aria-label="Primary" className="hidden items-center gap-1 lg:flex">

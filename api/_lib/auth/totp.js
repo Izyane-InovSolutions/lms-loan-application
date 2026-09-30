@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { DEFAULT_BRAND_NAME } from '../../../src/config/branding.js'
 
 /*
  * Time-based one-time passwords (RFC 6238), the six-digit codes authenticator apps
@@ -71,7 +72,7 @@ export const matchTotp = (secret, code, now = Date.now()) => {
 /** True if `code` is valid now, or one step either side (clock drift). */
 export const verifyTotp = (secret, code, now = Date.now()) => matchTotp(secret, code, now) !== null
 
-export const otpauthUrl = ({ secret, email, issuer = 'Loan Origination' }) =>
+export const otpauthUrl = ({ secret, email, issuer = DEFAULT_BRAND_NAME }) =>
   `otpauth://totp/${encodeURIComponent(`${issuer}:${email}`)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=${DIGITS}&period=${STEP_SECONDS}`
 
 const hashCode = (code) => crypto.createHash('sha256').update(code.replace(/-/g, '').toUpperCase()).digest('hex')

@@ -5,6 +5,7 @@ import { getProductConfig } from './products.js'
 import { getPublishedTemplate } from './templates.js'
 import { fillUploadedPdf, renderTextTemplate, sha256 } from './pdf.js'
 import { addEvent } from './applications.js'
+import { brandName } from './branding.js'
 import { LOAN_TYPE_LABELS, APPROVED_STATUSES } from '../../src/config/applications.js'
 import { TEMPLATE_KINDS, TEMPLATE_KIND_KEYS } from '../../src/config/templates.js'
 import { describeInterest, priceLoan } from '../../src/config/loanProducts.js'
@@ -19,7 +20,8 @@ const { applications, applicationDocuments, appraisals } = schema
  * stored file, fingerprinted with SHA-256.
  */
 
-export const LENDER_NAME = () => (process.env.LENDER_NAME || 'Loan Origination').trim()
+/** The lender named in offer documents: LENDER_NAME when the legal name differs from the brand, else the brand name. */
+export const lenderName = async () => (process.env.LENDER_NAME || '').trim() || brandName()
 
 const kwacha = (value) =>
   `K${Number(value || 0).toLocaleString('en-ZM', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
@@ -71,7 +73,7 @@ export const mergeValuesFor = async (application) => {
     offer_expiry_date: application.offerExpiresAt ? longDate(application.offerExpiresAt) : 'the date we tell you',
     decision_date: longDate(application.decidedAt),
     approved_by: approval?.officerName || '',
-    lender_name: LENDER_NAME(),
+    lender_name: await lenderName(),
     today: longDate(new Date()),
   }
 }
@@ -103,7 +105,7 @@ export const renderTemplate = async (template, values) => {
       },
     })
   }
-  return renderTextTemplate({ title: template.title, body: template.body, values, footer })
+  return renderTextTemplate({ title: template.title, body: template.body, values, footer, producer: `${await brandName()} workspace` })
 }
 
 const slotFor = (kind) => `offer.${kind}`

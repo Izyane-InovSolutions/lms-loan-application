@@ -13,6 +13,8 @@ import { LEGAL_KINDS, discardLegalDraft, getDraftLegal, getPublishedLegal, isPla
 import { listRoles } from '../_lib/roles.js'
 import { validateStagesConfig } from '../_lib/stages.js'
 import { clearTwoFactorCache } from '../_lib/auth/twoFactor.js'
+import { brandName } from '../_lib/branding.js'
+import { BRAND_NAME_MAX } from '../../src/config/branding.js'
 
 /*
  * Settings → everything an administrator configures in the workspace. Each key is
@@ -94,6 +96,13 @@ const aiFieldValues = (value, { onlyPresent = false } = {}) =>
   Object.fromEntries(AI_FIELDS.filter((field) => !onlyPresent || value[field.key]).map((field) => [field.key, aiField(field, value[field.key])]))
 
 const VALIDATORS = {
+  // The name only: the logo is set by its own upload endpoint (branding.js), never from a
+  // body here, which could otherwise point it at any stored file.
+  branding: (value) => {
+    const name = text(value.name, BRAND_NAME_MAX).replace(/\s+/g, ' ')
+    if (name.length < 2) throw new Error('Give the product a name of at least two characters.')
+    return { name }
+  },
   lms: (value) => {
     if (!['submit', 'approval'].includes(value.syncOn)) throw new Error('Choose when to send applications to the LMS.')
     return { syncOn: value.syncOn, sendPrescreen: Boolean(value.sendPrescreen) }
@@ -254,7 +263,7 @@ const testSms = async (req) => {
   const to = toZambianE164(req.body?.phone)
   if (!to) fail(400, 'Enter a Zambian mobile number, e.g. 0971234567.', 'invalid_input')
   try {
-    await sms.send(to, 'Test message from the Loan Origination workspace.')
+    await sms.send(to, `Test message from the ${await brandName()} workspace.`)
     return { ok: true, message: `Sent to ${to}.` }
   } catch (error) {
     return { ok: false, message: error.message }

@@ -3,7 +3,8 @@ import { Loader2, MapPin, ShieldCheck, UserCheck } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { CONSENT_NOTICES } from '@/config/consent'
+import { consentText } from '@/config/consent'
+import { useBranding } from '@/components/brand/BrandingProvider'
 
 /**
  * The choices made at submission, on the Overview step: optional location sharing,
@@ -24,6 +25,7 @@ export function SubmitConsents({
   consentCodeState,
   onSendConsentCode,
 }) {
+  const { name } = useBranding()
   return (
     <section aria-labelledby="submit-consents-title" className="space-y-4 rounded-lg border bg-card p-5 print:hidden">
       <h2 id="submit-consents-title" className="text-base font-semibold tracking-tight">
@@ -45,7 +47,7 @@ export function SubmitConsents({
           <span className="mt-0.5 block text-muted-foreground">
             {assistedBy
               ? 'Your device’s location is saved with the application as the place you met the customer.'
-              : CONSENT_NOTICES.location.text}
+              : consentText('location', name)}
           </span>
         </span>
       </label>
@@ -63,7 +65,7 @@ export function SubmitConsents({
               <ShieldCheck className="size-3.5 text-muted-foreground" aria-hidden="true" />
               Allow a credit bureau check
             </span>
-            <span className="mt-0.5 block text-muted-foreground">{CONSENT_NOTICES.crb.text}</span>
+            <span className="mt-0.5 block text-muted-foreground">{consentText('crb', name)}</span>
           </span>
         </label>
       ) : null}

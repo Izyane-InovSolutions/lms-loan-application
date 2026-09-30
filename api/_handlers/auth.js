@@ -20,6 +20,7 @@ import {
 import { checkOtp, consumeOtp } from '../_lib/otp.js'
 import { sendPasswordLinkEmail } from '../_lib/email.js'
 import { recordAudit } from '../_lib/audit.js'
+import { brandName } from '../_lib/branding.js'
 import { ROLES, isStaffRole, roleLabel } from '../../src/config/roles.js'
 
 const { users, passwordTokens, sessions } = schema
@@ -191,7 +192,7 @@ const setupTwoFactor = async (req) => {
   const secret = newTotpSecret()
   const db = await getDb()
   await db.update(users).set({ totpSecret: encryptSecret(secret), updatedAt: new Date() }).where(eq(users.id, user.id))
-  return { secret, otpauthUrl: otpauthUrl({ secret, email: user.email }) }
+  return { secret, otpauthUrl: otpauthUrl({ secret, email: user.email, issuer: await brandName() }) }
 }
 
 /** Confirms setup with a first code; returns recovery codes, shown this once. */

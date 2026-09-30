@@ -16,6 +16,7 @@ import { api } from '../api'
 import { useAuth } from '../auth'
 import { Field, FormError, PageHeader, Panel, dateTime, useToast } from '../components'
 import { DocumentTemplatesTab } from './DocumentTemplatesTab'
+import { BrandingTab } from './BrandingTab'
 
 const TABS = [
   { id: 'workflow', label: 'Credit workflow' },
@@ -26,6 +27,7 @@ const TABS = [
   { id: 'ai', label: 'AI document checks' },
   { id: 'retention', label: 'Data retention' },
   { id: 'security', label: 'Security' },
+  { id: 'branding', label: 'Branding' },
   { id: 'documents', label: 'Offer documents' },
   { id: 'legal', label: 'Terms and privacy' },
   { id: 'demo', label: 'Sample data', demoOnly: true },
@@ -147,6 +149,7 @@ export function SettingsPage() {
           {tab === 'ai' ? <AiTab settings={state.settings} integrations={state.integrations} notify={notify} onSaved={load} /> : null}
           {tab === 'retention' ? <RetentionTab initial={state.settings.retention} notify={notify} /> : null}
           {tab === 'security' ? <SecurityTab initial={state.settings.security} notify={notify} /> : null}
+          {tab === 'branding' ? <BrandingTab initial={state.settings.branding} notify={notify} /> : null}
           {tab === 'documents' ? <DocumentTemplatesTab notify={notify} /> : null}
           {tab === 'legal' ? <LegalTab notify={notify} onPublished={load} /> : null}
           {tab === 'demo' && demoEnabled ? <SampleData notify={notify} /> : null}

@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router-dom'
 import { ArrowLeft, Check, CircleAlert, FileText, Inbox, Loader2, LogOut, MailCheck, Paperclip, Send, Upload } from 'lucide-react'
 
 import { Logo } from '@/components/brand/Logo'
+import { useBranding } from '@/components/brand/BrandingProvider'
 import { SiteFooter } from '@/components/landing/SiteFooter'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -24,6 +25,7 @@ const dateLabel = (value) =>
  */
 export default function MyApplicationsPage() {
   const location = useLocation()
+  const { name: brand } = useBranding()
   const [session, setSession] = useState({ status: 'loading', user: null })
 
   const refreshSession = useCallback(async () => {
@@ -46,7 +48,7 @@ export default function MyApplicationsPage() {
         <div className="container flex h-16 items-center justify-between">
           <Link to="/" className="flex items-center gap-2.5 font-semibold">
             <Logo size="sm" showWordmark={false} />
-            Loan Origination
+            {brand}
           </Link>
           <Button asChild variant="ghost" size="sm">
             <Link to="/">Home</Link>

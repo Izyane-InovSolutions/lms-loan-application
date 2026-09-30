@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer'
+import { brandName } from './branding.js'
 
 const isTrue = (value) => String(value).toLowerCase() === 'true'
 
@@ -46,7 +47,8 @@ export const sendOtpEmail = async (email, code, { purpose = 'resume', agentName 
     return
   }
   if (purpose === 'consent') {
-    const who = agentName ? `${agentName}, a Loan Origination agent,` : 'A Loan Origination agent'
+    const brand = await brandName()
+    const who = agentName ? `${agentName}, a ${brand} agent,` : `A ${brand} agent`
     await getTransporter().sendMail({
       from: FROM_EMAIL,
       to: email,
@@ -132,14 +134,15 @@ export const sendStaffNotificationEmail = async (email, { name, title, body, url
  */
 export const sendDraftReminderEmail = async (email, { name, product, url, staffName }) => {
   const greeting = name ? `Hello ${name},` : 'Hello,'
-  const lead = `You started a ${product} application with Loan Origination and haven’t finished it yet. Everything you entered is saved.`
+  const brand = await brandName()
+  const lead = `You started a ${product} application with ${brand} and haven’t finished it yet. Everything you entered is saved.`
   const how = 'Open the link, choose “Resume an application”, and we’ll email you a code to pick up where you left off.'
-  const from = staffName ? `\n\n${staffName} from the Loan Origination team is happy to help if you have questions.` : ''
+  const from = staffName ? `\n\n${staffName} from the ${brand} team is happy to help if you have questions.` : ''
   await getTransporter().sendMail({
     from: FROM_EMAIL,
     to: email,
     subject: 'Finish your loan application',
     text: `${greeting}\n\n${lead}\n\n${how}\n\n${url}${from}\n\nUnfinished applications are deleted after 7 days without changes.`,
-    html: `<p>${escapeHtml(greeting)}</p><p>${escapeHtml(lead)}</p><p>${escapeHtml(how)}</p><p><a href="${escapeHtml(url)}">Finish my application</a></p>${staffName ? `<p>${escapeHtml(staffName)} from the Loan Origination team is happy to help if you have questions.</p>` : ''}<p style="color:#64748b">Unfinished applications are deleted after 7 days without changes.</p>`,
+    html: `<p>${escapeHtml(greeting)}</p><p>${escapeHtml(lead)}</p><p>${escapeHtml(how)}</p><p><a href="${escapeHtml(url)}">Finish my application</a></p>${staffName ? `<p>${escapeHtml(staffName)} from the ${escapeHtml(brand)} team is happy to help if you have questions.</p>` : ''}<p style="color:#64748b">Unfinished applications are deleted after 7 days without changes.</p>`,
   })
 }

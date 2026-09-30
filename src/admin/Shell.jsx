@@ -3,6 +3,7 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-do
 import { Loader2, LogOut, Menu, Moon, Sun, X } from 'lucide-react'
 
 import { Logo } from '@/components/brand/Logo'
+import { useBranding } from '@/components/brand/BrandingProvider'
 import { cn } from '@/lib/utils'
 import { ROLES, roleLabel } from '@/config/roles'
 import { useAuth } from './auth'
@@ -101,6 +102,7 @@ export function Shell() {
 }
 
 function Sidebar({ user, demoEnabled, theme, onToggleTheme }) {
+  const { name } = useBranding()
   const { signOut } = useAuth()
   const navigate = useNavigate()
   const sections = navFor(user)
@@ -117,7 +119,7 @@ function Sidebar({ user, demoEnabled, theme, onToggleTheme }) {
           <Logo size="sm" showWordmark={false} />
           <span className="leading-tight">
             <span className="block text-[0.95rem] font-semibold">Loan Workspace</span>
-            <span className="block text-xs text-white/55">Loan Origination</span>
+            <span className="block text-xs text-white/55">{name}</span>
           </span>
         </Link>
         <span className="hidden lg:block">
