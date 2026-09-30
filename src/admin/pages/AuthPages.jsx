@@ -40,7 +40,7 @@ function AuthFrame({ title, description, children, footer }) {
         <div className="w-full max-w-md">
           <div className="mb-8 flex items-center gap-3 lg:hidden">
             <Logo size="sm" showWordmark={false} />
-            <span className="font-semibold">Loan workspace</span>
+            <span className="font-semibold">Loan Workspace</span>
           </div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">{title}</h1>
           {description ? <p className="mt-2 text-sm text-muted-foreground">{description}</p> : null}

@@ -49,7 +49,7 @@ export function Shell() {
       <div className="sticky top-0 z-30 flex h-14 items-center justify-between border-b bg-[hsl(205_65%_14%)] px-4 text-white lg:hidden">
         <Link to="/admin" className="flex items-center gap-2.5 font-semibold">
           <Logo size="sm" showWordmark={false} />
-          Loan workspace
+          Loan Workspace
         </Link>
         <div className="flex items-center gap-1">
           <NotificationBell />
@@ -116,7 +116,7 @@ function Sidebar({ user, demoEnabled, theme, onToggleTheme }) {
         <Link to="/admin" className="flex items-center gap-3 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60">
           <Logo size="sm" showWordmark={false} />
           <span className="leading-tight">
-            <span className="block text-[0.95rem] font-semibold">Loan workspace</span>
+            <span className="block text-[0.95rem] font-semibold">Loan Workspace</span>
             <span className="block text-xs text-white/55">Loan Origination</span>
           </span>
         </Link>
