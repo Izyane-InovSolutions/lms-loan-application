@@ -5,7 +5,9 @@ import { getPublicSetting, getSetting, setSetting, SETTING_DEFAULTS } from '../_
 import { describeLms, getLms } from '../_lib/lms/index.js'
 import { createFrappeLms } from '../_lib/lms/frappe.js'
 import { getCrb } from '../_lib/crb/index.js'
-import { getAiProvider } from '../_lib/ai/index.js'
+import { describeAi, testAiService } from '../_lib/ai/index.js'
+import { parseServiceAccount } from '../_lib/ai/cloud/google.js'
+import { AI_CONNECTIONS, AI_FIELDS, AI_MODEL_PROVIDERS, OCR_ENGINES } from '../../src/config/aiProviders.js'
 import { getSms, toZambianE164 } from '../_lib/sms.js'
 import { LEGAL_KINDS, discardLegalDraft, getDraftLegal, getPublishedLegal, isPlaceholder, legalHistory, publishLegalDraft, saveLegalDraft } from '../_lib/legal.js'
 import { STAFF_ROLES } from '../../src/config/roles.js'
@@ -54,6 +56,40 @@ const path = (value, label) => {
   if (!cleaned.startsWith('/')) throw new Error(`${label} must be a path starting with /.`)
   return cleaned
 }
+
+// Model ids go into request paths and bodies; blank means the default.
+const modelName = (value, label) => {
+  const cleaned = text(value, 200)
+  if (cleaned && !/^[\w.:/@-]+$/.test(cleaned)) throw new Error(`${label} should be a model id such as gemini-3.8-flash or mistral-small-latest.`)
+  return cleaned
+}
+
+const AI_FIELD_LABELS = Object.fromEntries(AI_CONNECTIONS.flatMap((connection) => connection.fields.map((field) => [field.key, `${connection.label}: ${field.label}`])))
+
+/** One AI connection field (src/config/aiProviders.js). Secrets: null clears, blank keeps. */
+const aiField = (field, raw) => {
+  const label = AI_FIELD_LABELS[field.key]
+  if (field.secret && raw === null) return null
+  if (field.kind === 'json') {
+    const cleaned = String(raw ?? '').trim()
+    if (cleaned.length > 20000) throw new Error(`${label} is too long to be a service account key.`)
+    if (cleaned) parseServiceAccount(cleaned)
+    return cleaned
+  }
+  if (field.secret) return text(raw, 500)
+  if (field.kind === 'model') return modelName(raw, label)
+  if (field.kind === 'url') {
+    const cleaned = text(raw, 300).replace(/\/+$/, '')
+    if (cleaned && !/^https:\/\/[^\s]+$/i.test(cleaned) && !(field.allowHttp && /^http:\/\/[^\s]+$/i.test(cleaned))) {
+      throw new Error(`${label} must start with https://${field.allowHttp ? ' (or http:// on your own network)' : ''}.`)
+    }
+    return cleaned
+  }
+  return text(raw, 200)
+}
+
+const aiFieldValues = (value, { onlyPresent = false } = {}) =>
+  Object.fromEntries(AI_FIELDS.filter((field) => !onlyPresent || value[field.key]).map((field) => [field.key, aiField(field, value[field.key])]))
 
 const VALIDATORS = {
   lms: (value) => {
@@ -112,6 +148,17 @@ const VALIDATORS = {
     const provider = value.provider === 'africastalking' ? 'africastalking' : 'none'
     return { provider, username: text(value.username, 100), apiKey: value.apiKey === null ? null : text(value.apiKey, 300), senderId: text(value.senderId, 11) }
   },
+  ai: (value) => {
+    const providerIds = AI_MODEL_PROVIDERS.map((entry) => entry.id)
+    return {
+      provider: ['environment', 'off', ...providerIds].includes(value.provider) ? value.provider : 'environment',
+      fallback: Boolean(value.fallback),
+      fallbacks: (Array.isArray(value.fallbacks) ? value.fallbacks : []).filter((id, index, list) => providerIds.includes(id) && list.indexOf(id) === index),
+      ocr: ['off', ...OCR_ENGINES.map((entry) => entry.id)].includes(value.ocr) ? value.ocr : 'off',
+      ocrMode: value.ocrMode === 'always' ? 'always' : 'when_needed',
+      ...aiFieldValues(value),
+    }
+  },
   security: (value) => ({
     requireTwoFactorRoles: (Array.isArray(value.requireTwoFactorRoles) ? value.requireTwoFactorRoles : []).filter((role) => STAFF_ROLES.includes(role)),
   }),
@@ -126,7 +173,7 @@ const getSettings = async (req) => {
     integrations: {
       lms,
       crb: getCrb()?.name || null,
-      ai: Boolean(getAiProvider()),
+      ai: await describeAi(),
       geocoder: (process.env.GEOCODER || '').trim() || null,
       sms: Boolean(await getSms()),
       email: Boolean(process.env.EMAIL_HOST && process.env.EMAIL_HOST_USER),
@@ -205,6 +252,24 @@ const testSms = async (req) => {
   }
 }
 
+/**
+ * Tries one model provider or OCR engine with the values in the form (blank ones fall
+ * back to the saved values, then the environment).
+ */
+const testAi = async (req) => {
+  const actor = await requireUser(req, { roles: ['admin'] })
+  const service = String(req.body?.service || '')
+  let values
+  try {
+    values = aiFieldValues(req.body?.values || {}, { onlyPresent: true })
+  } catch (error) {
+    fail(400, error.message, 'invalid_input')
+  }
+  const result = await testAiService(service, values)
+  await recordAudit({ req, actor, action: 'settings.ai_tested', detail: { service, ok: result.ok } })
+  return result
+}
+
 // ---------------------------------------------------------------------------
 // Terms and privacy notice
 // ---------------------------------------------------------------------------
@@ -260,6 +325,7 @@ export const settingsRoutes = [
   ['PUT', '/settings/:key', saveSetting],
   ['POST', '/settings/lms/test', testLms],
   ['POST', '/settings/sms/test', testSms],
+  ['POST', '/settings/ai/test', testAi],
   ['GET', '/legal/:kind', publishedLegal],
   ['GET', '/admin/legal/:kind', legalForAdmin],
   ['PUT', '/admin/legal/:kind/draft', saveLegal],

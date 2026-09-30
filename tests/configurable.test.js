@@ -14,6 +14,8 @@ const { priceLoan } = await import('../src/config/loanProducts.js')
 const { encryptSecret, decryptSecret } = await import('../api/_lib/secrets.js')
 const { runDailyMaintenance } = await import('../api/_lib/maintenance.js')
 const { getDb, schema } = await import('../api/_lib/db/client.js')
+const { generateJson } = await import('../api/_lib/ai/index.js')
+const { signAwsRequest } = await import('../api/_lib/ai/cloud/aws.js')
 
 const PDF = Buffer.from('%PDF-1.4\n% test file\n')
 
@@ -386,5 +388,171 @@ describe('notifications and health', () => {
     expect(grouped.count).toBe(3)
     expect(report.checks.database.ok).toBe(true)
     expect((await officer.get('/admin/health')).status).toBe(403)
+  })
+})
+
+describe('AI provider from settings (against stand-in Gemini and Mistral)', () => {
+  const calls = []
+  let geminiStatus = 200
+  const realFetch = globalThis.fetch
+  const json = (status, body) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+
+  beforeAll(() => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+      const target = String(url)
+      if (target.startsWith('https://generativelanguage.googleapis.com/')) {
+        calls.push({ provider: 'gemini', key: init.headers['x-goog-api-key'], body: JSON.parse(init.body) })
+        if (geminiStatus !== 200) return json(geminiStatus, { error: { code: geminiStatus, message: 'This model is currently experiencing high demand.', status: 'UNAVAILABLE' } })
+        return json(200, { candidates: [{ content: { parts: [{ text: '{"ok":true}' }] } }] })
+      }
+      if (target === 'https://api.mistral.ai/v1/ocr') {
+        calls.push({ provider: 'mistral-ocr', body: JSON.parse(init.body) })
+        return json(200, { pages: [{ index: 0, markdown: 'PAYSLIP Ada Phiri Net pay 12500.00' }] })
+      }
+      if (target.startsWith('https://api.mistral.ai/')) {
+        calls.push({ provider: 'mistral', key: init.headers.Authorization, body: JSON.parse(init.body) })
+        return json(200, { choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }] })
+      }
+      if (target === 'https://api.anthropic.com/v1/messages?beta=true' || target === 'https://api.anthropic.com/v1/messages') {
+        const headers = new Headers(init.headers)
+        calls.push({ provider: 'anthropic', key: headers.get('x-api-key'), beta: headers.get('anthropic-beta'), body: JSON.parse(init.body) })
+        return json(200, {
+          id: 'msg_1',
+          type: 'message',
+          role: 'assistant',
+          model: 'claude-opus-5-5',
+          content: [{ type: 'text', text: '{"ok":true}' }],
+          stop_reason: 'end_turn',
+          usage: { input_tokens: 10, output_tokens: 5 },
+        })
+      }
+      if (target === 'http://gemma.test:11434/v1/chat/completions') {
+        calls.push({ provider: 'openai-compatible', body: JSON.parse(init.body) })
+        return json(200, { choices: [{ message: { content: '{"ok":true}' }, finish_reason: 'stop' }] })
+      }
+      return realFetch(url, init)
+    })
+  })
+
+  afterAll(async () => {
+    vi.mocked(globalThis.fetch).mockRestore()
+    // Back to the environment (no keys in tests), so later suites run with AI off.
+    await admin.put('/settings/ai', {
+      provider: 'environment',
+      fallback: true,
+      fallbacks: ['gemini', 'mistral'],
+      ocr: 'off',
+      geminiApiKey: null,
+      mistralApiKey: null,
+      anthropicApiKey: null,
+      geminiModel: '',
+      mistralModel: '',
+      openaiCompatibleBaseUrl: '',
+      openaiCompatibleModel: '',
+    })
+  })
+
+  const ask = () =>
+    generateJson({
+      system: 'Check the file.',
+      text: 'Is it ok?',
+      files: [{ mimeType: 'application/pdf', data: PDF }],
+      schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false },
+      schemaName: 'check',
+    })
+
+  it('switches providers from Settings without returning the keys', async () => {
+    expect((await admin.get('/settings')).body.integrations.ai.active).toBeNull()
+
+    const saved = await admin.put('/settings/ai', { provider: 'mistral', fallback: false, geminiApiKey: 'g-key', mistralApiKey: 'm-key', geminiModel: '', mistralModel: '' })
+    expect(saved.body.ai.mistralApiKey).toBe('')
+    expect(saved.body.ai.mistralApiKeySet).toBe(true)
+    expect((await admin.get('/settings')).body.integrations.ai.active).toMatchObject({ name: 'mistral', model: 'mistral-small-latest' })
+
+    calls.length = 0
+    expect((await ask()).provider).toBe('mistral')
+    expect(calls).toHaveLength(1)
+    expect(calls[0].key).toBe('Bearer m-key')
+    expect(calls[0].body.messages[1].content.find((part) => part.type === 'document_url').document_url).toMatch(/^data:application\/pdf;base64,/)
+
+    await admin.put('/settings/ai', { provider: 'gemini', fallback: false, geminiModel: 'gemini-test-model' })
+    calls.length = 0
+    const answer = await ask()
+    expect(answer).toMatchObject({ provider: 'gemini', model: 'gemini-test-model', result: { ok: true } })
+    expect(calls[0].key).toBe('g-key')
+  })
+
+  it('falls back to the other provider when the chosen one is overloaded', async () => {
+    geminiStatus = 503
+    await admin.put('/settings/ai', { provider: 'gemini', fallback: true, fallbacks: ['gemini', 'mistral'], geminiModel: '' })
+    calls.length = 0
+    expect((await ask()).provider).toBe('mistral')
+    // One attempt on the busy model, not a round of retries, before moving on.
+    expect(calls.map((call) => call.provider)).toEqual(['gemini', 'mistral'])
+
+    const test = await admin.post('/settings/ai/test', { service: 'gemini' })
+    expect(test.body.ok).toBe(false)
+    expect((await admin.post('/settings/ai/test', { service: 'mistral', values: { mistralModel: 'mistral-large-latest' } })).body).toMatchObject({ ok: true })
+    geminiStatus = 200
+  })
+
+  it('checks with Claude, asking for structured output and the server-side fallback', async () => {
+    await admin.put('/settings/ai', { provider: 'anthropic', fallback: false, anthropicApiKey: 'a-key' })
+    calls.length = 0
+    expect(await ask()).toMatchObject({ provider: 'anthropic', model: 'claude-opus-5-5', result: { ok: true } })
+    const [call] = calls
+    expect(call.key).toBe('a-key')
+    expect(call.beta).toContain('server-side-fallback-2026-07-01')
+    expect(call.body.fallbacks).toBe('default')
+    expect(call.body.output_config).toMatchObject({ format: { type: 'json_schema' }, effort: 'medium' })
+    expect(call.body.messages[0].content[0]).toMatchObject({ type: 'document', source: { type: 'base64', media_type: 'application/pdf' } })
+  })
+
+  it('reads PDFs through the OCR step for a self-hosted model that only takes images', async () => {
+    const selfHosted = {
+      provider: 'openai-compatible',
+      fallback: false,
+      openaiCompatibleBaseUrl: 'http://gemma.test:11434/v1',
+      openaiCompatibleModel: 'gemma3:27b',
+      ocr: 'mistral-ocr',
+      ocrMode: 'when_needed',
+    }
+    await admin.put('/settings/ai', selfHosted)
+    expect((await admin.get('/settings')).body.integrations.ai.ocr).toMatchObject({ name: 'mistral-ocr', mode: 'when_needed' })
+    calls.length = 0
+    expect(await ask()).toMatchObject({ provider: 'openai-compatible', ocr: 'mistral-ocr' })
+    expect(calls.map((call) => call.provider)).toEqual(['mistral-ocr', 'openai-compatible'])
+    const sent = calls[1].body.messages[1].content
+    expect(sent).toHaveLength(1)
+    expect(sent[0].text).toContain('Net pay 12500.00')
+
+    // Without OCR the self-hosted model can't take the PDF at all.
+    await admin.put('/settings/ai', { ...selfHosted, ocr: 'off' })
+    await expect(ask()).rejects.toThrow(/cannot read application\/pdf/)
+  })
+
+  it('rejects a service account key that is not one, and unknown services', async () => {
+    const bad = await admin.put('/settings/ai', { googleServiceAccount: '{"type":"user"}' })
+    expect(bad.status).toBe(400)
+    expect(bad.body.message).toMatch(/service account/)
+    expect((await admin.post('/settings/ai/test', { service: 'nope' })).body.ok).toBe(false)
+  })
+
+  it('signs AWS requests as in AWS’s published SigV4 test vector', () => {
+    const signed = signAwsRequest({
+      method: 'GET',
+      host: 'example.amazonaws.com',
+      path: '/',
+      body: '',
+      region: 'us-east-1',
+      service: 'service',
+      accessKeyId: 'AKIDEXAMPLE',
+      secretAccessKey: 'wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY',
+      now: new Date('2015-08-30T12:36:00Z'),
+      signPayloadHeader: false,
+    })
+    expect(signed.headers.Authorization).toBe(
+      'AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31'
+    )
   })
 })

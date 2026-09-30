@@ -61,7 +61,7 @@ isn't configured, the app falls back to a local stand-in:
 | Redis (drafts, email codes, rate limits) | `KV_REST_API_URL` + `KV_REST_API_TOKEN` | JSON file `.local-kv.json` |
 | Blob storage (documents) | `BLOB_READ_WRITE_TOKEN` | Files in `.local-blob/` |
 | Email (codes, invitations, notifications) | `EMAIL_*` | None. Sending fails unless you set `LOS_DEV_LOG_CODES=true`, which prints codes to the terminal. |
-| AI document checks and reviews | `GEMINI_API_KEY`, or `AI_PROVIDER=openai-compatible` | Off. The AI notes are hidden. |
+| AI document checks and reviews | *Settings → AI document checks* (Gemini, Mistral, Claude, OpenAI, Azure OpenAI, Vertex AI, Bedrock or self-hosted, plus an optional OCR step), or the variables in `.env.example` | Off. The AI notes are hidden. |
 | Frappe LMS | *Settings → LMS connection*, or `LMS_*` variables | Off. The workspace runs on its own. |
 | SMS to customers | *Settings → Notifications and SMS* | Off |
 | Credit bureau | `CRB_PROVIDER` | Off. `demo` gives sample scores marked as sample data. |
@@ -274,8 +274,9 @@ and Preview**, since Vercel scopes variables per environment.
    thresholds, and turn on two-step sign-in for admins and officers. Enter the LMS
    connection when the LMS team provides it.
 
-Optional: `GEMINI_API_KEY` from a *billed* Google Cloud project (on the free tier Google
-may use the content), `CRB_PROVIDER` once a bureau contract exists, `CLAMAV_HOST` for
+Optional: an AI key, entered in Settings → AI document checks or set as `GEMINI_API_KEY`
+(from a *billed* Google Cloud project; on the free tier Google may use the content) or
+`MISTRAL_API_KEY` (or any other provider in that tab), `CRB_PROVIDER` once a bureau contract exists, `CLAMAV_HOST` for
 virus scanning, `GEOCODER=nominatim` for the address-distance check, and
 `VITE_MAP_TILE_URL` for a map tile server. `VITE_*` variables are read at build time, so
 changing one needs a redeploy.

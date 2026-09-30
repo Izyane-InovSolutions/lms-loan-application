@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # One-time server setup for Ubuntu 22.04/24.04. Run as root from a clone of the repo:
 #   sudo REPO_URL=<git url> DOMAIN=loans.example.com bash deploy/setup.sh
+# BRANCH=staging deploys another branch (default main). Safe to re-run if it stops midway.
 # It installs packages, creates the database and service user, builds the app and installs
 # the service, nginx site and cron job. It stops before HTTPS and the first admin (see
 # DEPLOY-LINUX.md, steps 5 and 6) because those need DNS and a password from you.
@@ -18,11 +19,18 @@ fi
 id los >/dev/null 2>&1 || useradd --system --create-home --home-dir /opt/los --shell /usr/sbin/nologin los
 mkdir -p /var/lib/los/blob && chown -R los:los /var/lib/los
 
+[ -d "$APP/.git" ] || sudo -u los git clone -b "${BRANCH:-main}" "$REPO_URL" "$APP"
+
 if [ ! -f /etc/los.env ]; then
+  # Safe to re-run after a failed attempt: an existing role just gets the new password.
   DB_PASSWORD=$(openssl rand -hex 16)
-  sudo -u postgres psql -c "CREATE USER los WITH PASSWORD '$DB_PASSWORD'" 
-  sudo -u postgres psql -c "CREATE DATABASE los_db OWNER los"
-  [ -d "$APP" ] || sudo -u los git clone "$REPO_URL" "$APP"
+  if sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='los'" | grep -q 1; then
+    sudo -u postgres psql -c "ALTER USER los WITH PASSWORD '$DB_PASSWORD'"
+  else
+    sudo -u postgres psql -c "CREATE USER los WITH PASSWORD '$DB_PASSWORD'"
+  fi
+  sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname='los_db'" | grep -q 1 \
+    || sudo -u postgres psql -c "CREATE DATABASE los_db OWNER los"
   sed -e "s#loans.example.com#$DOMAIN#" \
       -e "s#CHANGE_ME#$DB_PASSWORD#" \
       -e "s#^LOS_SECRETS_KEY=.*#LOS_SECRETS_KEY=$(openssl rand -base64 32)#" \
@@ -31,7 +39,6 @@ if [ ! -f /etc/los.env ]; then
   chmod 600 /etc/los.env
   echo "Wrote /etc/los.env - edit the EMAIL_* settings before going live."
 fi
-[ -d "$APP" ] || sudo -u los git clone "$REPO_URL" "$APP"
 chmod o+rx /opt/los
 
 cd "$APP"

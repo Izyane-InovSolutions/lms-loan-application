@@ -12,7 +12,7 @@ const CHECKS = [
   ['storage', 'Document storage', (check) => check.kind],
   ['email', 'Email', () => 'SMTP'],
   ['lms', 'Loan management system', (check) => (check.connected ? `Connected (${check.source})` : 'Not connected — running on its own')],
-  ['ai', 'AI document checks', () => null],
+  ['ai', 'AI document checks', (check) => check.kind],
   ['crb', 'Credit bureau', (check) => (check.kind === 'demo' ? 'Sample data' : check.kind)],
   ['sms', 'Text messages', () => null],
   ['virusScan', 'Virus scanning', () => 'ClamAV'],

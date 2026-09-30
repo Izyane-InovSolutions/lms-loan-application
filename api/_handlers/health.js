@@ -6,7 +6,7 @@ import { clientIp, fail, text } from '../_lib/http.js'
 import { requireUser } from '../_lib/rbac.js'
 import { reportError } from '../_lib/errors.js'
 import { describeLms } from '../_lib/lms/index.js'
-import { getAiProvider } from '../_lib/ai/index.js'
+import { describeAi } from '../_lib/ai/index.js'
 import { getCrb } from '../_lib/crb/index.js'
 import { getSms } from '../_lib/sms.js'
 import { CRON_LAST_RUN_KEY, runDailyMaintenance } from '../_lib/maintenance.js'
@@ -65,7 +65,10 @@ const health = async (req, res, { query }) => {
       redis: { ok: Boolean(process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL) || !process.env.VERCEL, kind: process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL ? 'Upstash Redis' : 'local file' },
       email: { ok: Boolean(process.env.EMAIL_HOST && process.env.EMAIL_HOST_USER) },
       lms,
-      ai: { ok: Boolean(getAiProvider()) },
+      ai: await describeAi().then(({ active, fallbacks }) => ({
+        ok: Boolean(active),
+        kind: active ? [active, ...fallbacks].map((entry) => `${entry.label} (${entry.model})`).join(', then ') : null,
+      })),
       crb: { ok: Boolean(getCrb()), kind: getCrb()?.name || null },
       sms: { ok: Boolean(await getSms()) },
       virusScan: { ok: Boolean(process.env.CLAMAV_HOST) },
