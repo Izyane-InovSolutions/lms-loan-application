@@ -7,7 +7,7 @@ import { requireUser } from '../_lib/rbac.js'
 import { reportError } from '../_lib/errors.js'
 import { describeLms } from '../_lib/lms/index.js'
 import { describeAi } from '../_lib/ai/index.js'
-import { getCrb } from '../_lib/crb/index.js'
+import { describeCrb } from '../_lib/crb/index.js'
 import { getSms } from '../_lib/sms.js'
 import { CRON_LAST_RUN_KEY, runDailyMaintenance } from '../_lib/maintenance.js'
 import { appOrigin } from '../_lib/http.js'
@@ -69,7 +69,7 @@ const health = async (req, res, { query }) => {
         ok: Boolean(active),
         kind: active ? [active, ...fallbacks].map((entry) => `${entry.label} (${entry.model})`).join(', then ') : null,
       })),
-      crb: { ok: Boolean(getCrb()), kind: getCrb()?.name || null },
+      crb: describeCrb(),
       sms: { ok: Boolean(await getSms()) },
       virusScan: { ok: Boolean(process.env.CLAMAV_HOST) },
       secretsKey: { ok: Boolean(process.env.LOS_SECRETS_KEY) },

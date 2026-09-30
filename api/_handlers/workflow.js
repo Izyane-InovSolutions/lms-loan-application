@@ -14,7 +14,10 @@ import { runPrescreen, loadFactInputs } from '../_lib/prescreen/run.js'
 import { computeFacts } from '../_lib/prescreen/facts.js'
 import { getDraftRuleset, getPublishedRuleset, listRulesetHistory, publishDraftRuleset, saveDraftRuleset } from '../_lib/prescreen/rulesets.js'
 import { getSetting } from '../_lib/settings.js'
-import { getCrb } from '../_lib/crb/index.js'
+import { CrbError, getCrb } from '../_lib/crb/index.js'
+import { identityFor } from '../_lib/crb/identity.js'
+import kv from '../_lib/kv.js'
+import { reportError } from '../_lib/errors.js'
 import { loadCase } from './applications.js'
 import { consumeOtp } from '../_lib/otp.js'
 import { creditStaffIds, followerIds, notifyUsers } from '../_lib/notify.js'
@@ -77,7 +80,7 @@ const act = async (req, res, { params }) => {
   if (handOff && (await queueLmsSyncIfDue(updated, 'approval'))) {
     afterResponse('LMS hand-off', () => syncApplicationToLms(updated.id, { actor: viewer }))
   }
-  return loadCase(application.id)
+  return loadCase(application.id, viewer)
 }
 
 /** Credit staff for the "assign to" picker. */
@@ -115,7 +118,7 @@ const addStaffDocument = async (req, res, { params }) => {
   })
   await addEvent(db, { applicationId: application.id, actor: viewer, type: 'document', message: `Added a document: ${label}` })
   await recordAudit({ req, actor: viewer, action: 'application.document_added', entityType: 'application', entityId: application.id, detail: { label } })
-  return loadCase(application.id)
+  return loadCase(application.id, viewer)
 }
 
 const rerunPrescreen = async (req, res, { params }) => {
@@ -123,7 +126,7 @@ const rerunPrescreen = async (req, res, { params }) => {
   const application = await findVisibleApplication(viewer, params.id)
   await runPrescreen(application.id, { actor: viewer })
   await recordAudit({ req, actor: viewer, action: 'application.prescreen_rerun', entityType: 'application', entityId: application.id })
-  return loadCase(application.id)
+  return loadCase(application.id, viewer)
 }
 
 /** A field visit: where the staff member is now, with a note. Needs their device's location. */
@@ -150,10 +153,32 @@ const logVisit = async (req, res, { params }) => {
   })
   await addEvent(db, { applicationId: application.id, actor: viewer, type: 'visit', message: note ? `Field visit: ${note}` : 'Field visit logged' })
   await recordAudit({ req, actor: viewer, action: 'application.visit_logged', entityType: 'application', entityId: application.id })
-  return loadCase(application.id)
+  return loadCase(application.id, viewer)
 }
 
-/** Pulls a credit bureau report, only with the applicant's recorded consent. */
+// Long enough to cover the bureau's timeout plus loading its WSDL.
+const CRB_LOCK_SECONDS = 180
+// Our own setup, not the bureau, is at fault for these.
+const CRB_SETUP_CODES = new Set(['crb_not_configured', 'crb_contract_mismatch', 'crb_insecure_url'])
+
+const crbEventMessage = (crb, score, report, unchanged) => {
+  if (crb.sample) return `Credit bureau score ${score} (sample data)`
+  const headline = report.found === false
+    ? `Credit bureau: no report for this NRC${report.responseCode === null || report.responseCode === undefined ? '' : ` (response code ${report.responseCode})`}`
+    :`Credit bureau score ${score ?? 'not given'}${report.grade ? `, grade ${report.grade}` : ''}`
+  const notes = [
+    report.testIdentity && `bureau test identity ${report.testIdentity.nrc}, not the applicant`,
+    unchanged && 'unchanged since the previous report',
+    report.identity?.mismatch && 'the bureau returned a different NRC — check before relying on it',
+  ]
+  return [headline, ...notes.filter(Boolean)].join('; ')
+}
+
+/**
+ * Pulls a credit bureau report, only with the applicant's recorded consent, for the
+ * person the application is about. Staff wait for the answer (at most the bureau's
+ * timeout); each pull is kept, so the case shows every enquiry made.
+ */
 const runCreditCheck = async (req, res, { params }) => {
   const viewer = await requireUser(req, { roles: CREDIT_ROLES })
   const application = await findVisibleApplication(viewer, params.id)
@@ -166,18 +191,52 @@ const runCreditCheck = async (req, res, { params }) => {
     .where(and(eq(consents.applicationId, application.id), eq(consents.type, 'crb'), eq(consents.granted, true)))
     .limit(1)
   if (!consent) fail(403, 'The applicant has not consented to a credit bureau check.', 'no_consent')
+  const identity = identityFor(application)
 
-  const identity =
-    application.loanType === 'personal'
-      ? { nrc: application.data?.personalInfo?.nrc, name: application.applicantName, dateOfBirth: application.data?.personalInfo?.birthDate }
-      : { nrc: application.data?.directorInfo?.applicantNrc, name: application.applicantName, dateOfBirth: application.data?.directorInfo?.applicantBirthDate }
-  const { score, report } = await crb.fetchReport(identity)
-  await db.insert(crbReports).values({ applicationId: application.id, provider: crb.name, score, report, requestedBy: viewer.id })
-  await addEvent(db, { applicationId: application.id, actor: viewer, type: 'crb', message: `Credit bureau score ${score}${crb.sample ? ' (sample data)' : ''}` })
-  await recordAudit({ req, actor: viewer, action: 'application.crb_checked', entityType: 'application', entityId: application.id, detail: { provider: crb.name } })
+  // One pull at a time per case: a double click, or two officers at once, would
+  // otherwise make two enquiries at the bureau.
+  const lockKey = `los:crb-pull:${application.id}`
+  if ((await kv.set(lockKey, viewer.id, { nx: true, ex: CRB_LOCK_SECONDS })) === null) {
+    fail(409, 'A credit report is already being pulled for this application. Try again in a moment.', 'crb_in_progress')
+  }
+  let pulled
+  try {
+    pulled = await crb.fetchReport(identity)
+  } catch (error) {
+    if (!(error instanceof CrbError)) throw error
+    // Only our own wording is recorded: the bureau's reply may echo the applicant's details.
+    const message = error.uncertain ? `${error.message} It may still have recorded the enquiry.` : error.message
+    await addEvent(db, { applicationId: application.id, actor: viewer, type: 'crb', message: `Credit bureau check failed: ${message}` })
+    await recordAudit({ req, actor: viewer, action: 'application.crb_failed', entityType: 'application', entityId: application.id, detail: { provider: crb.name, code: error.code, uncertain: error.uncertain } })
+    await reportError({ source: 'crb', message: `${error.code}: ${error.message}`, route: 'POST /applications/:id/crb', detail: { provider: crb.name } })
+    fail(CRB_SETUP_CODES.has(error.code) ? 503 : 502, message, error.code)
+  } finally {
+    await kv.del(lockKey)
+  }
+
+  const { score, report } = pulled
+  const [previous] = await db
+    .select({ report: crbReports.report })
+    .from(crbReports)
+    .where(eq(crbReports.applicationId, application.id))
+    .orderBy(desc(crbReports.createdAt))
+    .limit(1)
+  const unchanged = Boolean(report.fingerprint) && previous?.report?.fingerprint === report.fingerprint
+  await db.transaction(async (tx) => {
+    await tx.insert(crbReports).values({ applicationId: application.id, provider: crb.name, score, report, requestedBy: viewer.id })
+    await addEvent(tx, { applicationId: application.id, actor: viewer, type: 'crb', message: crbEventMessage(crb, score, report, unchanged) })
+  })
+  await recordAudit({
+    req,
+    actor: viewer,
+    action: 'application.crb_checked',
+    entityType: 'application',
+    entityId: application.id,
+    detail: { provider: crb.name, ...(report.requestNo ? { bureauRequest: report.requestNo } : {}), ...(report.identity?.mismatch ? { identityMismatch: true } : {}) },
+  })
   // The score is a rule input, so the prescreen is brought up to date.
   await runPrescreen(application.id, { actor: viewer })
-  return loadCase(application.id)
+  return loadCase(application.id, viewer)
 }
 
 // ---------------------------------------------------------------------------

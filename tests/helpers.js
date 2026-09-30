@@ -20,6 +20,7 @@ export const createMemoryKv = () => {
     },
     async set(key, value, options = {}) {
       const existing = live(key)
+      if (options.nx && existing) return null
       const expiresAt = options.ex ? Date.now() + options.ex * 1000 : options.keepTtl ? existing?.expiresAt ?? null : null
       map.set(key, { value, expiresAt })
       return 'OK'

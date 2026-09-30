@@ -30,7 +30,9 @@ export default defineConfig({
       GEMINI_API_KEY: '',
       MISTRAL_API_KEY: '',
     },
-    // PGlite takes a moment to boot and migrate on first use.
+    // PGlite takes a moment to boot and migrate on first use — in each file's first
+    // beforeAll, with every file booting its own at once.
     testTimeout: 30000,
+    hookTimeout: 30000,
   },
 })

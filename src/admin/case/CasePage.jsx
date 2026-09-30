@@ -39,6 +39,8 @@ import {
 import { sectionsFor } from './fields'
 
 const CREDIT_ROLES = ['admin', 'loan_officer']
+// A report younger than this is reused when a case is opened, as the Django adapter did.
+const CRB_FRESH_HOURS = 24
 
 export function CasePage() {
   const { id } = useParams()
@@ -98,6 +100,40 @@ export function CasePage() {
     },
     [id, notify]
   )
+
+  const [crbPull, setCrbPull] = useState({ status: 'idle' })
+  const pullCrb = useCallback(
+    async (message) => {
+      setCrbPull({ status: 'pulling' })
+      try {
+        await post('/crb', {}, message)
+        setCrbPull({ status: 'idle' })
+      } catch (error) {
+        // Another officer (or tab) is already pulling: show their report once it lands.
+        if (error.code === 'crb_in_progress') {
+          setCrbPull({ status: 'pulling' })
+          setTimeout(() => load().finally(() => setCrbPull({ status: 'idle' })), 5000)
+          return
+        }
+        setCrbPull({ status: 'error', message: error.message })
+      }
+    },
+    [post, load]
+  )
+
+  // Opening a case pulls its credit report when credit staff open it, the applicant
+  // consented, and there is no report from the last CRB_FRESH_HOURS. Each pull is a
+  // billable enquiry, so it runs once per visit and never repeats a fresh report.
+  const autoPulledFor = useRef(null)
+  useEffect(() => {
+    if (state.status !== 'ready' || !isCredit || autoPulledFor.current === id) return
+    autoPulledFor.current = id
+    const consented = state.consents.some((consent) => consent.type === 'crb' && consent.granted)
+    if (!state.crbProvider || !consented) return
+    const latest = state.crbReports[0]
+    const fresh = latest && Date.now() - new Date(latest.createdAt).getTime() < CRB_FRESH_HOURS * 3600000
+    if (!fresh) pullCrb()
+  }, [state, isCredit, id, pullCrb])
 
   if (state.status === 'loading') {
     return (
@@ -212,7 +248,15 @@ export function CasePage() {
             }
           />
           <AppraisalsPanel appraisals={appraisals} />
-          <CrbPanel reports={crbReports} provider={crbProvider} hasConsent={hasCrbConsent} canRun={isCredit} onRun={() => post('/crb', {}, 'Credit report added')} />
+          <CrbPanel
+            reports={crbReports}
+            provider={crbProvider}
+            hasConsent={hasCrbConsent}
+            canRun={isCredit}
+            pulling={crbPull.status === 'pulling'}
+            error={crbPull.status === 'error' ? crbPull.message : null}
+            onRun={() => pullCrb('Credit report added')}
+          />
           <LocationPanel points={locations} facts={prescreen?.facts} onLogVisit={(position) => post('/visits', position, 'Visit logged')} />
           <LmsPanel
             application={application}

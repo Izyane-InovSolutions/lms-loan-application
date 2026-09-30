@@ -13,7 +13,7 @@ const CHECKS = [
   ['email', 'Email', () => 'SMTP'],
   ['lms', 'Loan management system', (check) => (check.connected ? `Connected (${check.source})` : 'Not connected — running on its own')],
   ['ai', 'AI document checks', (check) => check.kind],
-  ['crb', 'Credit bureau', (check) => (check.kind === 'demo' ? 'Sample data' : check.kind)],
+  ['crb', 'Credit bureau', (check) => (check.kind === 'demo' ? 'Sample data' : check.missing?.length ? `${check.kind}, missing ${check.missing.join(', ')}` : check.kind)],
   ['sms', 'Text messages', () => null],
   ['virusScan', 'Virus scanning', () => 'ClamAV'],
   ['secretsKey', 'Credentials encryption key', () => 'LOS_SECRETS_KEY'],

@@ -64,7 +64,7 @@ isn't configured, the app falls back to a local stand-in:
 | AI document checks and reviews | *Settings → AI document checks* (Gemini, Mistral, Claude, OpenAI, Azure OpenAI, Vertex AI, Bedrock or self-hosted, plus an optional OCR step), or the variables in `.env.example` | Off. The AI notes are hidden. |
 | Frappe LMS | *Settings → LMS connection*, or `LMS_*` variables | Off. The workspace runs on its own. |
 | SMS to customers | *Settings → Notifications and SMS* | Off |
-| Credit bureau | `CRB_PROVIDER` | Off. `demo` gives sample scores marked as sample data. |
+| Credit bureau | `CRB_PROVIDER` (`product109` plus the `CRB_*` variables in `.env.example`) | Off. `demo` gives sample scores marked as sample data. |
 | Virus scanning | `CLAMAV_HOST` | Off |
 
 All local stores are gitignored. None of the fallbacks run on Vercel: a deployment
@@ -192,6 +192,20 @@ never shows them again.
 
 Every sign-in, every change and every staff read of an application goes into the audit
 log.
+
+### Credit bureau checks
+
+With `CRB_PROVIDER=product109`, **Run credit check** on the case page makes one
+Product 109 enquiry over the bureau's SOAP service (`api/_lib/crb/product109.js`),
+with the same operation and arguments as the existing Django adapter. The request goes
+only for the person the application is about (the applicant, or the applying director
+on a business loan), only if they consented, and only with an NRC in the 123456/78/9
+format. The officer waits for the answer, up to `CRB_TIMEOUT_SECONDS`. One pull runs at
+a time per case, and failed pulls are not retried, because each call is an enquiry the
+bureau records and bills. Every pull is kept on the case. A report whose NRC differs
+from the one requested is flagged. The score feeds the `crb_score` credit rule, and
+loan officers and admins see the full report. Agents and RMs see only the score and
+summary.
 
 ## Roles and what they see
 

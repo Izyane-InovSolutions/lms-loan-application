@@ -21,6 +21,7 @@ import { CONSENT_NOTICES } from '../../src/config/consent.js'
 import { checkOtp, consumeOtp } from '../_lib/otp.js'
 import { clientIp } from '../_lib/http.js'
 import { getCrb } from '../_lib/crb/index.js'
+import { CREDIT_ROLES } from '../_lib/workflow.js'
 import { currentConsentVersion } from '../_lib/legal.js'
 import { getSetting } from '../_lib/settings.js'
 import { creditStaffIds, notifyUsers } from '../_lib/notify.js'
@@ -410,8 +411,23 @@ const auditView = async (req, viewer, application) => {
 
 const publicDocument = ({ url, pathname, lmsFileUrl, ...document }) => ({ ...document, inLms: Boolean(lmsFileUrl) })
 
+/**
+ * A bureau report's accounts, addresses and profile are for credit staff. Agents and
+ * RMs following the case see the headline only. Without a viewer, the headline too.
+ * Earlier pulls keep their figures but not the full report, which can be large.
+ */
+const crbReportFor = (viewer) => (row, index) => {
+  if (CREDIT_ROLES.includes(viewer?.role)) {
+    if (index === 0 || !row.report?.reportData) return row
+    const { reportData, ...headline } = row.report
+    return { ...row, report: headline }
+  }
+  const { band, summary, sample, found, grade, testIdentity } = row.report || {}
+  return { ...row, report: { band, summary, sample, found, grade, testIdentity: testIdentity ? { nrc: testIdentity.nrc } : undefined, restricted: true } }
+}
+
 /** Everything the case page shows. Exported for the workflow handlers, which return it after each change. */
-export const loadCase = async (applicationId) => {
+export const loadCase = async (applicationId, viewer) => {
   const db = await getDb()
   const [[row], documents, events, [prescreen], appraisalRows, consentRows, points, crbRows] = await Promise.all([
     db
@@ -444,7 +460,7 @@ export const loadCase = async (applicationId) => {
     appraisals: appraisalRows,
     consents: consentRows,
     locations: points,
-    crbReports: crbRows,
+    crbReports: crbRows.map(crbReportFor(viewer)),
     lmsConfigured: Boolean(await getLms()),
     offersRequireAcceptance: (await getSetting('offers')).requireAcceptance,
     crbProvider: getCrb()?.name || null,
@@ -455,7 +471,7 @@ const getApplication = async (req, res, { params }) => {
   const viewer = await requireUser(req, { staff: true })
   const application = await findVisibleApplication(viewer, params.id)
   await auditView(req, viewer, application)
-  return loadCase(application.id)
+  return loadCase(application.id, viewer)
 }
 
 // Only these open inline; anything else downloads, so an uploaded HTML or SVG file can
@@ -511,7 +527,7 @@ const sendToLms = async (req, res, { params }) => {
   await db.update(applications).set({ lmsSyncStatus: 'pending' }).where(eq(applications.id, application.id))
   await recordAudit({ req, actor: viewer, action: 'application.lms_send', entityType: 'application', entityId: application.id })
   await syncApplicationToLms(application.id, { actor: viewer })
-  return loadCase(application.id)
+  return loadCase(application.id, viewer)
 }
 
 /**
@@ -538,7 +554,7 @@ const reconcileLms = async (req, res, { params }) => {
     message: found ? `Confirmed in the LMS as ${reference}` : 'Confirmed not in the LMS',
   })
   await recordAudit({ req, actor: viewer, action: 'application.lms_reconciled', entityType: 'application', entityId: application.id, detail: { found, reference: reference || null } })
-  return loadCase(application.id)
+  return loadCase(application.id, viewer)
 }
 
 // ---------------------------------------------------------------------------
