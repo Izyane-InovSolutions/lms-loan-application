@@ -4,7 +4,7 @@ import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxi
 import { ArrowDownRight, ArrowUpRight, Minus } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
-import { APPLICATION_STATUSES, CHANNELS, LOAN_TYPE_LABELS } from '@/config/applications'
+import { CHANNELS, LOAN_TYPE_LABELS, statusLabel } from '@/config/applications'
 import { roleLabel } from '@/config/roles'
 import { money } from '../components'
 
@@ -13,7 +13,11 @@ export const CHANNEL_SERIES = [
   { key: 'self', label: CHANNELS.self, color: 'var(--viz-1)' },
   { key: 'dsa', label: CHANNELS.dsa, color: 'var(--viz-2)' },
   { key: 'rm', label: CHANNELS.rm, color: 'var(--viz-3)' },
+  // Everyone else who brings business in: sales managers and roles an admin added.
+  { key: 'other', label: 'Other staff', color: 'hsl(262 40% 52%)' },
 ]
+
+const seriesFor = (channel) => (CHANNEL_SERIES.some((entry) => entry.key === channel) ? channel : 'other')
 
 const percent = (value) => (value === null || value === undefined ? '—' : `${Math.round(value * 100)}%`)
 const hours = (value) => {
@@ -130,20 +134,22 @@ export function SubmissionsTrend({ trend, days }) {
       date.setHours(12, 0, 0, 0)
       date.setDate(date.getDate() - offset)
       const key = date.toISOString().slice(0, 10)
-      byDay.set(key, { day: key, self: 0, dsa: 0, rm: 0 })
+      byDay.set(key, { day: key, ...Object.fromEntries(CHANNEL_SERIES.map((entry) => [entry.key, 0])) })
     }
     trend.forEach((row) => {
       const bucket = byDay.get(row.day)
-      if (bucket) bucket[row.channel] = row.count
+      if (bucket) bucket[seriesFor(row.channel)] += row.count
     })
     return [...byDay.values()]
   }, [trend, days])
-  const total = data.reduce((sum, row) => sum + row.self + row.dsa + row.rm, 0)
+  const total = data.reduce((sum, row) => sum + CHANNEL_SERIES.reduce((daySum, entry) => daySum + row[entry.key], 0), 0)
+  // "Other staff" only appears once someone outside the three usual channels brings business in.
+  const series = CHANNEL_SERIES.filter((entry) => entry.key !== 'other' || data.some((row) => row.other))
 
   return (
     <div>
       <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-        <Legend series={CHANNEL_SERIES} />
+        <Legend series={series} />
         <button type="button" onClick={() => setAsTable((value) => !value)} className="text-xs font-medium text-primary hover:underline">
           {asTable ? 'Show chart' : 'Show as table'}
         </button>
@@ -154,7 +160,7 @@ export function SubmissionsTrend({ trend, days }) {
             <thead>
               <tr className="text-left text-muted-foreground">
                 <th className="py-1 font-medium">Day</th>
-                {CHANNEL_SERIES.map((entry) => (
+                {series.map((entry) => (
                   <th key={entry.key} className="py-1 text-right font-medium">
                     {entry.label}
                   </th>
@@ -165,9 +171,11 @@ export function SubmissionsTrend({ trend, days }) {
               {data.map((row) => (
                 <tr key={row.day} className="border-t">
                   <td className="py-1">{row.day}</td>
-                  <td className="py-1 text-right">{row.self}</td>
-                  <td className="py-1 text-right">{row.dsa}</td>
-                  <td className="py-1 text-right">{row.rm}</td>
+                  {series.map((entry) => (
+                    <td key={entry.key} className="py-1 text-right">
+                      {row[entry.key]}
+                    </td>
+                  ))}
                 </tr>
               ))}
             </tbody>
@@ -188,7 +196,7 @@ export function SubmissionsTrend({ trend, days }) {
               />
               <YAxis allowDecimals={false} tickLine={false} axisLine={false} tick={{ fontSize: 11, fill: 'hsl(var(--muted-foreground))' }} />
               <Tooltip content={<TrendTooltip />} cursor={{ fill: 'hsl(var(--muted))', opacity: 0.6 }} />
-              {CHANNEL_SERIES.map((entry, index) => (
+              {series.map((entry, index) => (
                 <Bar
                   key={entry.key}
                   dataKey={entry.key}
@@ -197,7 +205,7 @@ export function SubmissionsTrend({ trend, days }) {
                   fill={entry.color}
                   stroke="hsl(var(--card))"
                   strokeWidth={1}
-                  radius={index === CHANNEL_SERIES.length - 1 ? [3, 3, 0, 0] : 0}
+                  radius={index === series.length - 1 ? [3, 3, 0, 0] : 0}
                   isAnimationActive={false}
                 />
               ))}
@@ -220,7 +228,7 @@ export function StageBreakdown({ funnel }) {
       {rows.map((row) => (
         <li key={row.status}>
           <Link to={`/admin/applications?status=${row.status}`} className="group grid grid-cols-[9.5rem_minmax(0,1fr)_4.5rem] items-center gap-3 rounded text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-            <span className="truncate text-muted-foreground group-hover:text-foreground">{APPLICATION_STATUSES[row.status].label}</span>
+            <span className="truncate text-muted-foreground group-hover:text-foreground">{statusLabel(row.status)}</span>
             <span className="h-2.5 rounded-full bg-muted">
               <span
                 className={cn('block h-full rounded-full', row.status === 'declined' ? 'bg-muted-foreground/50' : 'bg-[var(--viz-1)]')}

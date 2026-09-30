@@ -66,12 +66,17 @@ const ACTION_LABELS = {
   'system.maintenance_run': 'Ran the daily maintenance',
   'demo.seeded': 'Added sample applications',
   'demo.cleared': 'Removed sample applications',
+  'role.created': 'Added a role',
+  'role.updated': 'Changed a role',
+  'role.reset': 'Reset a role to its defaults',
+  'role.deleted': 'Deleted a role',
 }
 
 const CATEGORIES = [
   { value: 'all', label: 'All activity' },
   { value: 'auth.', label: 'Sign-ins and passwords' },
   { value: 'user.', label: 'Team changes' },
+  { value: 'role.', label: 'Roles and permissions' },
   { value: 'application.', label: 'Applications' },
   { value: 'rules.', label: 'Policy rules' },
   { value: 'settings.', label: 'Settings' },
@@ -94,6 +99,7 @@ export const describeAction = (entry) => {
   if (entry.action === 'user.invited' && detail.email) return `${base}: ${detail.email} as ${roleLabel(detail.role).toLowerCase()}`
   if (entry.action.startsWith('application.') && detail.reference) return `${base}: ${detail.reference}`
   if (entry.action === 'rules.published' && detail.version) return `${base} (version ${detail.version})`
+  if (entry.action.startsWith('role.') && (detail.after?.label || detail.label)) return `${base}: ${detail.after?.label || detail.label}`
   if (entry.action === 'user.updated' && detail.after) {
     const changes = Object.keys(detail.after).map((key) => (FIELD_LABELS[key] || key).toLowerCase())
     return `${base} (${changes.join(', ')})`

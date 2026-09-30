@@ -8,7 +8,7 @@ import { ROLES, roleLabel } from '@/config/roles'
 import { useAuth } from './auth'
 import { navFor } from './navigation'
 import { useWorkspaceTheme } from './theme'
-import { Initials, PageErrorBoundary, ROLE_TONES, useToast } from './components'
+import { Initials, PageErrorBoundary, roleTone, useToast } from './components'
 import { NotificationBell } from './NotificationBell'
 
 /**
@@ -103,7 +103,7 @@ export function Shell() {
 function Sidebar({ user, demoEnabled, theme, onToggleTheme }) {
   const { signOut } = useAuth()
   const navigate = useNavigate()
-  const sections = navFor(user.role)
+  const sections = navFor(user)
 
   const handleSignOut = async () => {
     await signOut()
@@ -169,7 +169,7 @@ function Sidebar({ user, demoEnabled, theme, onToggleTheme }) {
           <Initials name={user.name} className="bg-white/15 text-white" />
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-medium">{user.name}</p>
-            <p className="truncate text-xs text-white/55">{roleLabel(user.role)}</p>
+            <p className="truncate text-xs text-white/55">{user.roleLabel || roleLabel(user.role)}</p>
           </div>
         </Link>
         <div className="mt-1 flex gap-1">
@@ -243,7 +243,7 @@ function DemoSwitcher({ currentRole }) {
               )}
             >
               {/* The admin hue is the sidebar's own navy, so it gets a light ring to stay visible. */}
-              <span className={cn('size-1.5 rounded-full', ROLE_TONES[role].dot, role === 'admin' && 'ring-1 ring-white/70')} aria-hidden="true" />
+              <span className={cn('size-1.5 rounded-full', roleTone(role).dot, role === 'admin' && 'ring-1 ring-white/70')} aria-hidden="true" />
               {pending === role ? 'Switching…' : shortRole(role)}
             </button>
           )

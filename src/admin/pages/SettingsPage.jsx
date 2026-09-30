@@ -1,27 +1,32 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { AlertTriangle, Check, Database, Loader2, PlugZap, Rocket, Send, Trash2, Undo2 } from 'lucide-react'
+import { AlertTriangle, ArrowDown, ArrowUp, Check, Database, Loader2, PlugZap, Plus, Rocket, Send, Trash2, Undo2 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import { SimpleText } from '@/lib/simpleText'
-import { STAFF_ROLES, roleLabel } from '@/config/roles'
+import { PERMISSION_GROUPS, registeredRoles, roleLabel } from '@/config/roles'
+import { APPLICATION_STATUSES } from '@/config/applications'
+import { RENAMABLE_STATUSES, STAGE_PHASES } from '@/config/stages'
 import { describeFee, describeInterest, formatKwacha, priceLoan } from '@/config/loanProducts'
 import { AI_CONNECTIONS, AI_FIELDS, AI_MODEL_PROVIDERS, OCR_ENGINES, isServiceReady } from '@/config/aiProviders'
 import { api } from '../api'
 import { useAuth } from '../auth'
 import { Field, FormError, PageHeader, Panel, dateTime, useToast } from '../components'
+import { DocumentTemplatesTab } from './DocumentTemplatesTab'
 
 const TABS = [
   { id: 'workflow', label: 'Credit workflow' },
+  { id: 'stages', label: 'Stages' },
   { id: 'products', label: 'Loan products' },
   { id: 'lms', label: 'LMS connection' },
   { id: 'notifications', label: 'Notifications and SMS' },
   { id: 'ai', label: 'AI document checks' },
   { id: 'retention', label: 'Data retention' },
   { id: 'security', label: 'Security' },
+  { id: 'documents', label: 'Offer documents' },
   { id: 'legal', label: 'Terms and privacy' },
   { id: 'demo', label: 'Sample data', demoOnly: true },
 ]
@@ -135,12 +140,14 @@ export function SettingsPage() {
       ) : (
         <>
           {tab === 'workflow' ? <WorkflowTab settings={state.settings} notify={notify} /> : null}
+          {tab === 'stages' ? <StagesTab initial={state.settings.stages} notify={notify} /> : null}
           {tab === 'products' ? <ProductsTab initial={state.settings.products} notify={notify} /> : null}
           {tab === 'lms' ? <LmsTab settings={state.settings} integrations={state.integrations} notify={notify} onSaved={load} /> : null}
           {tab === 'notifications' ? <NotificationsTab settings={state.settings} integrations={state.integrations} notify={notify} /> : null}
           {tab === 'ai' ? <AiTab settings={state.settings} integrations={state.integrations} notify={notify} onSaved={load} /> : null}
           {tab === 'retention' ? <RetentionTab initial={state.settings.retention} notify={notify} /> : null}
           {tab === 'security' ? <SecurityTab initial={state.settings.security} notify={notify} /> : null}
+          {tab === 'documents' ? <DocumentTemplatesTab notify={notify} /> : null}
           {tab === 'legal' ? <LegalTab notify={notify} onPublished={load} /> : null}
           {tab === 'demo' && demoEnabled ? <SampleData notify={notify} /> : null}
         </>
@@ -190,6 +197,14 @@ function WorkflowTab({ settings, notify }) {
               checked={offers.value.requireAcceptance}
               onChange={(requireAcceptance) => offers.set({ requireAcceptance })}
             />
+            <Toggle
+              id="require-signature"
+              label="Accepting means signing"
+              description="The customer reads the offer letter and loan agreement, signs (drawn or typed) and confirms with an emailed code. Signed copies, with a signature record page, are kept with the case."
+              checked={offers.value.requireSignature !== false}
+              onChange={(requireSignature) => offers.set({ requireSignature })}
+              disabled={!offers.value.requireAcceptance}
+            />
             <Field id="offer-days" label="Days to accept" hint="An offer not accepted in time lapses and the customer is told.">
               <Input id="offer-days" type="number" min="1" max="90" value={offers.value.expiryDays} onChange={(event) => offers.set({ expiryDays: event.target.value })} disabled={!offers.value.requireAcceptance} />
             </Field>
@@ -214,6 +229,200 @@ function WorkflowTab({ settings, notify }) {
 }
 
 // ---------------------------------------------------------------------------
+
+// Starting points when adding a stage, so the common ones are a click away.
+const STAGE_SUGGESTIONS = {
+  review: ['Document check', 'Field verification', 'Employer confirmation'],
+  approval: ['Credit committee', 'Risk sign-off'],
+  closing: ['Security documents signed', 'Insurance in place'],
+}
+
+const permissionLabel = (key) => PERMISSION_GROUPS.flatMap((group) => group.permissions).find((permission) => permission.key === key)?.label || key
+
+const move = (list, index, by) => {
+  const next = [...list]
+  const target = index + by
+  if (target < 0 || target >= next.length) return next
+  ;[next[index], next[target]] = [next[target], next[index]]
+  return next
+}
+
+/**
+ * Settings → Stages: the processing flow around the fixed backbone. Staff names for the
+ * statuses, the verification checklist, and the workspace's own stages in each part of the
+ * flow (src/config/stages.js). The server re-checks all of it on save.
+ */
+function StagesTab({ initial, notify }) {
+  const { refresh } = useAuth()
+  const group = useSettingGroup('stages', initial, notify)
+  const value = group.value
+  const roles = registeredRoles()
+  const checklist = value.checklist || []
+
+  const setLabel = (status, label) => group.set({ labels: { ...(value.labels || {}), [status]: label } })
+  const setCheck = (index, changes) => group.set({ checklist: checklist.map((check, at) => (at === index ? { ...check, ...changes } : check)) })
+  const setStage = (phase, index, changes) => group.set({ [phase]: value[phase].map((stage, at) => (at === index ? { ...stage, ...changes } : stage)) })
+  const toggleIn = (list, item) => (list.includes(item) ? list.filter((entry) => entry !== item) : [...list, item])
+  const addStage = (phase, label = '') =>
+    group.set({ [phase]: [...(value[phase] || []), { label, description: '', roles: [], checks: [], products: [], differentPerson: phase === 'approval' }] })
+
+  const save = async () => {
+    if (await group.save()) await refresh()
+  }
+
+  return (
+    <div className="space-y-6">
+      <Panel title="Status names" description="What staff see on the pipeline, lists and cases. Leave a box empty to keep the usual name. Customers keep their own plain wording.">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {RENAMABLE_STATUSES.map((status) => (
+            <Field key={status} id={`label-${status}`} label={APPLICATION_STATUSES[status].label}>
+              <Input id={`label-${status}`} value={value.labels?.[status] || ''} maxLength={40} placeholder={APPLICATION_STATUSES[status].label} onChange={(event) => setLabel(status, event.target.value)} />
+            </Field>
+          ))}
+        </div>
+      </Panel>
+
+      <Panel title="Verification checklist" description="Officers tick these on each case, with a note of what they saw. Stages below can require them.">
+        <ul className="space-y-3">
+          {checklist.map((check, index) => (
+            <li key={check.key || `new-${index}`} className="grid gap-3 rounded-lg border p-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)_auto_auto] lg:items-center">
+              <Input aria-label="Checklist item" value={check.label} maxLength={80} onChange={(event) => setCheck(index, { label: event.target.value })} placeholder="What is checked" />
+              <Input aria-label="Guidance" value={check.hint || ''} maxLength={200} onChange={(event) => setCheck(index, { hint: event.target.value })} placeholder="Guidance for the officer (optional)" />
+              <label className="flex items-center gap-2 text-sm">
+                <input type="checkbox" checked={Boolean(check.requiredToApprove)} onChange={(event) => setCheck(index, { requiredToApprove: event.target.checked })} className="size-4 accent-[hsl(var(--primary))]" />
+                Needed to approve
+              </label>
+              <RowButtons onUp={() => group.set({ checklist: move(checklist, index, -1) })} onDown={() => group.set({ checklist: move(checklist, index, 1) })} onRemove={() => group.set({ checklist: checklist.filter((_, at) => at !== index) })} />
+            </li>
+          ))}
+        </ul>
+        <Button variant="outline" size="sm" className="mt-3" onClick={() => group.set({ checklist: [...checklist, { label: '', hint: '', requiredToApprove: false }] })}>
+          <Plus />
+          Add a checklist item
+        </Button>
+      </Panel>
+
+      {Object.entries(STAGE_PHASES).map(([phase, meta]) => (
+        <Panel key={phase} title={`Stages ${meta.label.toLowerCase()}`} description={meta.description}>
+          {(value[phase] || []).length ? (
+            <ol className="space-y-4">
+              {value[phase].map((stage, index) => (
+                <li key={stage.id || `new-${index}`} className="space-y-4 rounded-lg border p-4">
+                  <div className="flex items-start gap-3">
+                    <span className="mt-2 text-sm font-semibold tabular-nums text-muted-foreground">{index + 1}.</span>
+                    <div className="grid flex-1 gap-3 sm:grid-cols-2">
+                      <Input aria-label="Stage name" value={stage.label} maxLength={60} onChange={(event) => setStage(phase, index, { label: event.target.value })} placeholder="Stage name" />
+                      <Input aria-label="What happens" value={stage.description || ''} maxLength={300} onChange={(event) => setStage(phase, index, { description: event.target.value })} placeholder="What happens at this stage (optional)" />
+                    </div>
+                    <RowButtons
+                      onUp={() => group.set({ [phase]: move(value[phase], index, -1) })}
+                      onDown={() => group.set({ [phase]: move(value[phase], index, 1) })}
+                      onRemove={() => group.set({ [phase]: value[phase].filter((_, at) => at !== index) })}
+                    />
+                  </div>
+                  <div className="grid gap-4 lg:grid-cols-3">
+                    <fieldset>
+                      <legend className="text-xs font-medium text-muted-foreground">Who marks it done</legend>
+                      <div className="mt-1.5 space-y-1">
+                        {roles.filter((role) => role.key !== 'admin').map((role) => (
+                          <label key={role.key} className="flex items-center gap-2 text-sm">
+                            <input type="checkbox" checked={stage.roles.includes(role.key)} onChange={() => setStage(phase, index, { roles: toggleIn(stage.roles, role.key) })} className="size-4 accent-[hsl(var(--primary))]" />
+                            {roleLabel(role.key)}
+                          </label>
+                        ))}
+                      </div>
+                      <p className="mt-1.5 text-xs text-muted-foreground">
+                        {stage.roles.length ? 'Administrators can always do it too.' : `None ticked: anyone who can “${permissionLabel(meta.defaultPermission).toLowerCase()}”.`}
+                      </p>
+                    </fieldset>
+                    <fieldset>
+                      <legend className="text-xs font-medium text-muted-foreground">Checks ticked first</legend>
+                      <div className="mt-1.5 space-y-1">
+                        {checklist.filter((check) => check.key).map((check) => (
+                          <label key={check.key} className="flex items-center gap-2 text-sm">
+                            <input type="checkbox" checked={stage.checks.includes(check.key)} onChange={() => setStage(phase, index, { checks: toggleIn(stage.checks, check.key) })} className="size-4 accent-[hsl(var(--primary))]" />
+                            {check.label}
+                          </label>
+                        ))}
+                      </div>
+                    </fieldset>
+                    <fieldset>
+                      <legend className="text-xs font-medium text-muted-foreground">For which loans</legend>
+                      <div className="mt-1.5 space-y-1">
+                        {Object.entries(PRODUCT_NAMES).map(([product, name]) => (
+                          <label key={product} className="flex items-center gap-2 text-sm">
+                            <input
+                              type="checkbox"
+                              checked={!stage.products.length || stage.products.includes(product)}
+                              onChange={() => {
+                                const current = stage.products.length ? stage.products : Object.keys(PRODUCT_NAMES)
+                                setStage(phase, index, { products: toggleIn(current, product) })
+                              }}
+                              className="size-4 accent-[hsl(var(--primary))]"
+                            />
+                            {name}
+                          </label>
+                        ))}
+                      </div>
+                      {phase === 'approval' ? (
+                        <label className="mt-3 flex items-start gap-2 text-sm">
+                          <input type="checkbox" checked={stage.differentPerson !== false} onChange={(event) => setStage(phase, index, { differentPerson: event.target.checked })} className="mt-0.5 size-4 accent-[hsl(var(--primary))]" />
+                          <span>Not the recommender, or whoever brought the case in</span>
+                        </label>
+                      ) : null}
+                    </fieldset>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p className="text-sm text-muted-foreground">No stages here: cases move on as usual.</p>
+          )}
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" onClick={() => addStage(phase)}>
+              <Plus />
+              Add a stage
+            </Button>
+            {STAGE_SUGGESTIONS[phase]
+              .filter((label) => !(value[phase] || []).some((stage) => stage.label === label))
+              .map((label) => (
+                <Button key={label} variant="ghost" size="sm" onClick={() => addStage(phase, label)}>
+                  + {label}
+                </Button>
+              ))}
+          </div>
+        </Panel>
+      ))}
+
+      <div className="sticky bottom-0 rounded-lg border bg-background/95 p-4 shadow-lift backdrop-blur">
+        <FormError message={group.error} />
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-sm text-muted-foreground">Changes apply to open cases straight away. Stages a case already finished stay done.</p>
+          <Button size="sm" onClick={save} disabled={!group.dirty || group.saving}>
+            {group.saving ? <Loader2 className="animate-spin" /> : null}
+            Save the flow
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function RowButtons({ onUp, onDown, onRemove }) {
+  return (
+    <div className="flex shrink-0 gap-1">
+      <Button type="button" variant="ghost" size="icon" aria-label="Move up" onClick={onUp}>
+        <ArrowUp />
+      </Button>
+      <Button type="button" variant="ghost" size="icon" aria-label="Move down" onClick={onDown}>
+        <ArrowDown />
+      </Button>
+      <Button type="button" variant="ghost" size="icon" aria-label="Remove" onClick={onRemove}>
+        <Trash2 />
+      </Button>
+    </div>
+  )
+}
 
 const PRODUCT_NAMES = { personal: 'Personal loan', business: 'Business loan' }
 
@@ -783,7 +992,7 @@ function SecurityTab({ initial, notify }) {
   return (
     <Panel title="Two-step sign-in" description="Staff in these roles must use an authenticator app code as well as their password. Anyone without it set up is asked to do so before they can continue.">
       <div className="grid gap-2 sm:grid-cols-2">
-        {STAFF_ROLES.map((role) => (
+        {registeredRoles().map(({ key: role }) => (
           <label key={role} className="flex cursor-pointer items-center gap-3 rounded-lg border p-3 text-sm">
             <input type="checkbox" checked={roles.includes(role)} onChange={() => toggle(role)} className="size-4 accent-[hsl(var(--primary))]" />
             {roleLabel(role)}

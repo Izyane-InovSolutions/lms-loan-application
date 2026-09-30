@@ -10,6 +10,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { cn } from '@/lib/utils'
 import { FACTS, OPERATORS, OUTCOMES, PRODUCTS, PRODUCT_KEYS, describeCondition, factsForProduct, validatePolicies } from '@/config/creditRules'
 import { api } from '../api'
+import { hasPermission } from '@/config/roles'
 import { useAuth } from '../auth'
 import { FormError, PageHeader, Panel, dateTime, useToast } from '../components'
 
@@ -29,7 +30,7 @@ const blankPolicy = () => ({ id: nextId('p'), name: 'New policy', product: 'pers
 export function RulesPage() {
   const { user } = useAuth()
   const notify = useToast()
-  const canEdit = user.role === 'admin'
+  const canEdit = hasPermission(user, 'rules.manage')
   const [state, setState] = useState({ status: 'loading' })
   const [policies, setPolicies] = useState([])
   const [note, setNote] = useState('')

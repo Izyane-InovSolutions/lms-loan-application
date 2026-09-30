@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import http from 'node:http'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { createMemoryKv, client } from './helpers.js'
+import { createMemoryKv, client, signedAcceptance } from './helpers.js'
 
 const kv = createMemoryKv()
 vi.mock('../api/_lib/kv.js', () => ({ default: kv }))
@@ -165,7 +165,8 @@ describe('offers', () => {
     const customer = await customerFor('offer@example.com')
     const mine = (await customer.get(`/me/applications/${filed.id}`)).body.application
     expect(mine.offer.amount).toBe(4000)
-    expect((await customer.post(`/me/applications/${filed.id}/accept`)).status).toBe(200)
+    const accepted = await customer.post(`/me/applications/${filed.id}/accept`, await signedAcceptance(kv, 'offer@example.com'))
+    expect(accepted.status, JSON.stringify(accepted.body)).toBe(200)
 
     const detail = (await officer.get(`/applications/${filed.id}`)).body
     expect(detail.application.status).toBe('accepted')
@@ -264,7 +265,7 @@ describe('LMS connection from settings (against a stand-in Frappe)', () => {
     const customer = client(handler)
     await kv.set('otp:lms.customer@example.com', { code: '515151', attempts: 0, createdAt: Date.now() }, { ex: 600 })
     await customer.post('/auth/customer', { email: 'lms.customer@example.com', code: '515151' })
-    await customer.post(`/me/applications/${filed.id}/accept`)
+    await customer.post(`/me/applications/${filed.id}/accept`, await signedAcceptance(kv, 'lms.customer@example.com'))
 
     const synced = await (async () => {
       for (let attempt = 0; attempt < 60; attempt += 1) {

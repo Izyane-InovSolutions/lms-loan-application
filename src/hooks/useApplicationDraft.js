@@ -60,6 +60,14 @@ export function useApplicationDraft({
   setPersonalData,
   setBusinessData,
   setLoanData,
+  // Whether the applicant agreed on the first step that staff may see and follow up this
+  // draft (CONSENT_NOTICES.draft_contact). Saved with the draft; restored on resume.
+  contactConsent = false,
+  setContactConsent = () => {},
+  // An agent filling it in with the customer: the server credits the draft to them.
+  assisted = false,
+  // The agent's link the applicant came through, so the draft shows in their pipeline.
+  referralCode = null,
   skipLocalCheck = false,
 }) {
   const [localDraftSummary, setLocalDraftSummary] = useState(null)
@@ -100,8 +108,9 @@ export function useApplicationDraft({
     setPersonalData(localDraftSummary.personalData)
     setBusinessData(localDraftSummary.businessData)
     setLoanData(localDraftSummary.loanData)
+    setContactConsent(Boolean(localDraftSummary.contactConsent))
     setLocalDraftSummary(null)
-  }, [localDraftSummary, setSelectedLoanType, setCurrentStep, setPersonalData, setBusinessData, setLoanData])
+  }, [localDraftSummary, setSelectedLoanType, setCurrentStep, setPersonalData, setBusinessData, setLoanData, setContactConsent])
 
   const startFresh = useCallback(() => {
     setLocalDraftSummary(null)
@@ -121,18 +130,20 @@ export function useApplicationDraft({
       setPersonalData(draft.personalData)
       setBusinessData(draft.businessData)
       setLoanData(draft.loanData)
+      // The server keeps { at, version }; the local cache a plain flag.
+      setContactConsent(Boolean(draft.contactConsent))
       setLocalDraftSummary(null)
     },
-    [setSelectedLoanType, setCurrentStep, setPersonalData, setBusinessData, setLoanData]
+    [setSelectedLoanType, setCurrentStep, setPersonalData, setBusinessData, setLoanData, setContactConsent]
   )
 
   useEffect(() => {
     clearTimeout(localSaveTimer.current)
     localSaveTimer.current = setTimeout(() => {
-      saveLocalDraft({ loanType: selectedLoanType, currentStep, personalData, businessData, loanData, draftToken })
+      saveLocalDraft({ loanType: selectedLoanType, currentStep, personalData, businessData, loanData, draftToken, contactConsent })
     }, LOCAL_SAVE_DEBOUNCE_MS)
     return () => clearTimeout(localSaveTimer.current)
-  }, [selectedLoanType, currentStep, personalData, businessData, loanData, draftToken])
+  }, [selectedLoanType, currentStep, personalData, businessData, loanData, draftToken, contactConsent])
 
   const syncEmail = getEmail(selectedLoanType, personalData, businessData)
   const canSyncRemotely = Boolean(syncEmail) && EMAIL_PATTERN.test(syncEmail || '')
@@ -159,6 +170,9 @@ export function useApplicationDraft({
       personalData: extractFiles(personalData, 'personal').sanitized,
       businessData: extractFiles(businessData, 'business').sanitized,
       loanData,
+      contactConsent: Boolean(contactConsent),
+      ...(assisted ? { assisted: true } : {}),
+      ...(referralCode ? { referralCode } : {}),
     }
 
     try {
@@ -196,7 +210,7 @@ export function useApplicationDraft({
       setRemoteSyncError(extractDraftErrorMessage(error))
       return null
     }
-  }, [canSyncRemotely, syncEmail, selectedLoanType, currentStep, personalData, businessData, loanData, draftToken])
+  }, [canSyncRemotely, syncEmail, selectedLoanType, currentStep, personalData, businessData, loanData, draftToken, contactConsent, assisted, referralCode])
 
   useEffect(() => {
     if (!canSyncRemotely) return undefined
@@ -305,8 +319,9 @@ export function useApplicationDraft({
         businessData,
         loanData,
         draftToken,
+        contactConsent,
       }),
-    [selectedLoanType, currentStep, personalData, businessData, loanData, draftToken]
+    [selectedLoanType, currentStep, personalData, businessData, loanData, draftToken, contactConsent]
   )
 
   // `remote: false` after a successful submit: the server has already removed the draft.

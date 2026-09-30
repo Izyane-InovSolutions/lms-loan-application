@@ -66,7 +66,7 @@ const STATUS_MIX = ['submitted', 'submitted', 'in_review', 'in_review', 'info_re
 
 const seed = async (req) => {
   if (!demoEnabled()) fail(403, 'Sample data is only available where demo access is on.', 'demo_disabled')
-  const actor = await requireUser(req, { roles: ['admin'] })
+  const actor = await requireUser(req, { permission: 'settings.manage' })
   const db = await getDb()
   const random = rng(20260927)
   const pick = (list) => list[Math.floor(random() * list.length)]
@@ -286,7 +286,7 @@ const seed = async (req) => {
 
 const clear = async (req) => {
   if (!demoEnabled()) fail(403, 'Sample data is only available where demo access is on.', 'demo_disabled')
-  const actor = await requireUser(req, { roles: ['admin'] })
+  const actor = await requireUser(req, { permission: 'settings.manage' })
   const db = await getDb()
   const removed = await db.delete(applications).where(sql`${applications.data}->>'__demo' = 'true'`).returning({ id: applications.id })
   await db.delete(users).where(and(eq(users.isDemo, true), inArray(users.email, ['demo.dsa-2@demo.los.local'])))

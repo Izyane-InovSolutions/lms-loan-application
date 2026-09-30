@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils'
 import { formatKwacha } from '@/config/loanProducts'
 import { LOAN_TYPE_LABELS } from '@/config/applications'
 import { api } from '@/admin/api'
+import { SignaturePad } from '@/components/application/SignaturePad'
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -179,7 +180,7 @@ function Applications({ user, onSignOut }) {
     load()
   }, [load])
 
-  if (openId) return <ApplicationDetail id={openId} onBack={() => { setOpenId(null); load() }} />
+  if (openId) return <ApplicationDetail id={openId} email={user.email} onBack={() => { setOpenId(null); load() }} />
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -303,7 +304,7 @@ function Progress({ status }) {
   )
 }
 
-function ApplicationDetail({ id, onBack }) {
+function ApplicationDetail({ id, email, onBack }) {
   const [state, setState] = useState({ status: 'loading' })
 
   const load = useCallback(async () => {
@@ -344,7 +345,8 @@ function ApplicationDetail({ id, onBack }) {
           </div>
           <Progress status={state.application.status} />
 
-          {state.application.offer ? <OfferPanel application={state.application} onDone={load} /> : null}
+          {state.application.offer ? <OfferPanel application={state.application} documents={state.offerDocuments || []} email={email} onDone={load} /> : null}
+          {!state.application.offer && state.offerDocuments?.length ? <OfferDocuments documents={state.offerDocuments} applicationId={state.application.id} title="Your loan documents" /> : null}
           {state.application.infoRequest ? <RespondToRequest application={state.application} onDone={load} /> : null}
 
           <section className="mt-10">
@@ -387,10 +389,46 @@ function ApplicationDetail({ id, onBack }) {
   )
 }
 
-/** The approved offer: its terms, and accepting or turning it down. */
-function OfferPanel({ application, onDone }) {
+/** The offer letter and agreement (and, once signed, the signed copies), to open and keep. */
+function OfferDocuments({ documents, applicationId, title, opened = {}, onOpen }) {
+  return (
+    <section className="mt-6">
+      <h3 className="text-sm font-semibold">{title}</h3>
+      <ul className="mt-2 divide-y rounded-xl border bg-card">
+        {documents.map((document) => (
+          <li key={document.id} className="flex items-center gap-3 px-4 py-3 text-sm">
+            <FileText className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            <span className="min-w-0 flex-1 truncate">{document.label}</span>
+            {opened[document.id] ? <Check className="size-4 shrink-0 text-success" aria-label="Opened" /> : null}
+            <a
+              href={`/api/v1/applications/${applicationId}/documents/${document.id}`}
+              target="_blank"
+              rel="noreferrer"
+              onClick={() => onOpen?.(document.id)}
+              className="shrink-0 font-medium text-primary underline-offset-4 hover:underline"
+            >
+              {document.signed ? 'Download' : 'Read'}
+            </a>
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
+/**
+ * The approved offer: its terms, its documents, and accepting (by signing, where the
+ * lender requires it) or turning it down.
+ */
+function OfferPanel({ application, documents, email, onDone }) {
   const offer = application.offer
+  const signing = offer.requireSignature
   const [agreed, setAgreed] = useState(false)
+  const [opened, setOpened] = useState({})
+  const [name, setName] = useState('')
+  const [signature, setSignature] = useState(null)
+  const [code, setCode] = useState('')
+  const [codeState, setCodeState] = useState({ status: 'idle', message: '' })
   const [busy, setBusy] = useState(null)
   const [error, setError] = useState('')
   const [confirmDecline, setConfirmDecline] = useState(false)
@@ -406,6 +444,19 @@ function OfferPanel({ application, onDone }) {
       setBusy(null)
     }
   }
+
+  const sendCode = async () => {
+    setCodeState({ status: 'sending', message: '' })
+    const response = await fetch('/api/otp/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, purpose: 'sign' }) })
+    const result = await response.json().catch(() => ({}))
+    setCodeState(response.ok ? { status: 'sent', message: `We emailed a code to ${email}.` } : { status: 'error', message: result.message || 'The code could not be sent.' })
+  }
+
+  const allRead = documents.length > 0 && documents.every((document) => opened[document.id])
+  const ready = signing ? agreed && name.trim().length >= 3 && signature && code.length === 6 : agreed
+
+  const accept = () =>
+    run('accept', `/me/applications/${application.id}/accept`, signing ? { agreed: true, code, signature: { name: name.trim(), ...signature } } : { agreed: true })
 
   return (
     <section aria-labelledby="offer-title" className="mt-8 rounded-xl border border-success/40 bg-success/5 p-5">
@@ -431,19 +482,67 @@ function OfferPanel({ application, onDone }) {
       ) : null}
       {offer.conditions ? <p className="mt-3 text-sm"><span className="font-medium">Conditions: </span>{offer.conditions}</p> : null}
       <p className="mt-3 text-sm text-muted-foreground">Accept by {dateLabel(offer.expiresAt)}, or the offer lapses.</p>
-      <label className="mt-4 flex cursor-pointer items-start gap-3 text-sm">
+
+      {documents.length ? (
+        <OfferDocuments documents={documents} applicationId={application.id} title="Read before you accept" opened={opened} onOpen={(id) => setOpened((prev) => ({ ...prev, [id]: true }))} />
+      ) : signing ? (
+        <p className="mt-6 text-sm text-muted-foreground">Your offer letter and loan agreement are being prepared. Refresh in a minute.</p>
+      ) : null}
+
+      <label className="mt-5 flex cursor-pointer items-start gap-3 text-sm">
         <input type="checkbox" checked={agreed} onChange={(event) => setAgreed(event.target.checked)} className="mt-0.5 size-4 accent-[hsl(var(--primary))]" />
-        <span>I accept this loan on these terms, and agree to repay it in the monthly instalments shown.</span>
+        <span>
+          {signing
+            ? 'I have read the offer letter and loan agreement. I accept this loan on these terms, and agree to repay it in the monthly instalments shown.'
+            : 'I accept this loan on these terms, and agree to repay it in the monthly instalments shown.'}
+        </span>
       </label>
+      {signing && documents.length && !allRead ? <p className="ml-7 mt-1 text-xs text-muted-foreground">Open each document above to read it.</p> : null}
+
+      {signing ? (
+        <div className="mt-5 space-y-4 rounded-lg border bg-card p-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="sign-name">Your full name</Label>
+            <Input id="sign-name" value={name} maxLength={100} autoComplete="name" onChange={(event) => setName(event.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <p className="text-sm font-medium">Your signature</p>
+            <SignaturePad name={name} onChange={setSignature} />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="sign-code">Code from your email</Label>
+            <div className="flex flex-wrap items-center gap-2">
+              <Input
+                id="sign-code"
+                inputMode="numeric"
+                maxLength={6}
+                placeholder="6-digit code"
+                value={code}
+                onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                className="w-40 text-center font-semibold tracking-[0.3em]"
+              />
+              <Button type="button" variant="outline" size="sm" onClick={sendCode} disabled={codeState.status === 'sending'}>
+                {codeState.status === 'sending' ? <Loader2 className="animate-spin" /> : <MailCheck />}
+                {codeState.status === 'sent' ? 'Send another code' : 'Email me a code'}
+              </Button>
+            </div>
+            {codeState.message ? <p className={cn('text-xs', codeState.status === 'error' ? 'text-destructive' : 'text-muted-foreground')}>{codeState.message}</p> : null}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            Signing adds your signature, the time and a record of this device to signed copies of both documents, which you can download afterwards.
+          </p>
+        </div>
+      ) : null}
+
       {error ? (
         <p role="alert" className="mt-3 text-sm font-medium text-destructive">
           {error}
         </p>
       ) : null}
       <div className="mt-4 flex flex-wrap gap-2">
-        <Button onClick={() => run('accept', `/me/applications/${application.id}/accept`)} disabled={!agreed || Boolean(busy)}>
+        <Button onClick={accept} disabled={!ready || Boolean(busy)}>
           {busy === 'accept' ? <Loader2 className="animate-spin" /> : <Check />}
-          Accept the offer
+          {signing ? 'Sign and accept' : 'Accept the offer'}
         </Button>
         {confirmDecline ? (
           <Button variant="destructive" onClick={() => run('decline', `/me/applications/${application.id}/withdraw`, { reason: 'Turned down the offer' })} disabled={Boolean(busy)}>

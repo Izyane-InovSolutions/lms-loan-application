@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowDownToLine, ChevronLeft, ChevronRight, FilePlus2, FileStack, Loader2, Search } from 'lucide-react'
 
@@ -6,7 +6,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
-import { APPLICATION_STATUSES, CHANNELS, LOAN_TYPE_LABELS, OPEN_STATUSES, statusLabel } from '@/config/applications'
+import { APPLICATION_STATUSES, CHANNELS, LOAN_TYPE_LABELS, OPEN_STATUSES, channelLabel, renamedStatus, statusLabel } from '@/config/applications'
+import { hasPermission, registeredRoles } from '@/config/roles'
 import { applyPath } from '@/config/applicationSteps'
 import { setAssistedFlag } from '@/lib/assisted'
 import { api, toQuery } from '../api'
@@ -32,9 +33,16 @@ const TABS = [
 const DESCRIPTIONS = {
   admin: 'Every application in the workspace.',
   loan_officer: 'Every application. Take new ones from Open, and find yours under Assigned to me.',
-  sales_manager: 'Every application, to follow the team’s pipeline.',
+  sales_manager: 'Every application: follow the team’s pipeline, bring customers in and work cases.',
   rm: 'Applications from your customers and the agents who report to you.',
   dsa: 'Applications you referred or filled in for customers.',
+}
+
+// For roles an admin added, by what their scope lets them see.
+const SCOPE_DESCRIPTIONS = {
+  all: 'Every application in the workspace.',
+  team: 'Applications you and the people who report to you brought in or were assigned.',
+  own: 'Applications you brought in or were assigned.',
 }
 
 // Open cases older than this get an ageing badge.
@@ -59,8 +67,15 @@ export function ApplicationsPage() {
     q: params.get('q') || '',
     page: Number(params.get('page')) || 1,
   }
-  const isOfficer = ['loan_officer', 'admin'].includes(user.role)
-  const canStart = ['dsa', 'rm'].includes(user.role)
+  const isOfficer = hasPermission(user, 'cases.work')
+  const canStart = hasPermission(user, 'applications.assist')
+  // Team leads (RMs, by default) may fill in business loans too; agents do personal loans.
+  const choosesLoanType = canStart && hasPermission(user, 'team.lead')
+  // Every role that brings business in is a channel.
+  const channels = useMemo(
+    () => ({ self: CHANNELS.self, ...Object.fromEntries(registeredRoles().filter((role) => role.permissions.includes('applications.assist')).map((role) => [role.key, role.label])) }),
+    []
+  )
 
   const setFilter = useCallback(
     (key, value) => {
@@ -106,7 +121,7 @@ export function ApplicationsPage() {
   }
 
   const beginAssisted = () => {
-    if (user.role === 'rm') setChooseType(true)
+    if (choosesLoanType) setChooseType(true)
     else startAssisted()
   }
 
@@ -130,7 +145,7 @@ export function ApplicationsPage() {
           row.tenure,
           statusLabel(row.status),
           row.prescreenOutcome || '',
-          CHANNELS[row.channel],
+          channelLabel(row.channel),
           row.sourcedByName || '',
           row.assignedOfficerName || '',
           new Date(row.submittedAt).toISOString(),
@@ -151,7 +166,7 @@ export function ApplicationsPage() {
     <div className="space-y-6">
       <PageHeader
         title="Applications"
-        description={DESCRIPTIONS[user.role]}
+        description={DESCRIPTIONS[user.role] || SCOPE_DESCRIPTIONS[user.scope]}
         actions={
           <>
             <Button variant="outline" onClick={exportCsv} disabled={exporting || !result.total}>
@@ -182,7 +197,7 @@ export function ApplicationsPage() {
                 active ? 'bg-card text-foreground shadow-sm ring-1 ring-border' : 'text-muted-foreground hover:bg-card/60 hover:text-foreground'
               )}
             >
-              {tab.label}
+              {renamedStatus(tab.value) || tab.label}
               <span className={cn('rounded px-1.5 text-xs tabular-nums', active ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground')}>{tabCount(tab.value)}</span>
             </button>
           )
@@ -212,7 +227,7 @@ export function ApplicationsPage() {
           <div className="sm:w-44">
             <Select aria-label="Channel" value={filters.channel} onChange={(event) => setFilter('channel', event.target.value)} className="h-10 text-sm">
               <option value="all">All channels</option>
-              {Object.entries(CHANNELS).map(([value, label]) => (
+              {Object.entries(channels).map(([value, label]) => (
                 <option key={value} value={value}>
                   {label}
                 </option>
@@ -323,7 +338,7 @@ export function ApplicationsPage() {
                           <span className="font-medium text-foreground">{money(row.amount)}</span>
                           <span className="block text-xs text-muted-foreground">{row.tenure} mo</span>
                         </td>
-                        <td className="px-4 py-3 text-muted-foreground">{row.sourcedByName || CHANNELS[row.channel]}</td>
+                        <td className="px-4 py-3 text-muted-foreground">{row.sourcedByName || channelLabel(row.channel)}</td>
                         <td className="px-4 py-3">
                           <OutcomeMark outcome={row.prescreenOutcome} />
                         </td>
@@ -362,7 +377,7 @@ export function ApplicationsPage() {
           </div>
         </div>
       ) : null}
-      {user.role === 'rm' ? (
+      {choosesLoanType ? (
         <AssistedApplicationTypeDialog
           open={chooseType}
           onOpenChange={setChooseType}

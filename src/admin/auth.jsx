@@ -1,19 +1,38 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { api } from './api'
+import { isStaffRole, registerRoles } from '@/config/roles'
+import { registerStatusLabels } from '@/config/applications'
+import { DEFAULT_STAGES_CONFIG } from '@/config/stages'
 
 const AuthContext = createContext(null)
 
 /**
- * Who is signed in. Loaded once from /auth/me and refreshed after anything that changes
- * the session (sign-in, sign-out, demo role switch).
+ * Who is signed in, with their role's permissions (`user.permissions`). Loaded once from
+ * /auth/me and refreshed after anything that changes the session (sign-in, sign-out,
+ * demo role switch) or the roles themselves (Team → Roles).
+ *
+ * For staff, the workspace's roles and processing stages load too, so custom role names
+ * and renamed statuses show wherever roleLabel() and statusLabel() are used.
  */
 export function AuthProvider({ children }) {
-  const [state, setState] = useState({ status: 'loading', user: null, demoEnabled: false })
+  const [state, setState] = useState({ status: 'loading', user: null, demoEnabled: false, roles: [], stages: DEFAULT_STAGES_CONFIG, requireAcceptance: true })
 
   const refresh = useCallback(async () => {
     try {
       const { user, demoEnabled } = await api('/auth/me')
-      setState({ status: user ? 'signed-in' : 'signed-out', user, demoEnabled })
+      let roles = []
+      let flow = { stages: DEFAULT_STAGES_CONFIG, requireAcceptance: true }
+      if (user && isStaffRole(user.role)) {
+        const [loadedRoles, loadedFlow] = await Promise.all([
+          api('/roles').then((data) => data.roles).catch(() => []),
+          api('/stages').catch(() => flow),
+        ])
+        roles = loadedRoles
+        flow = loadedFlow
+        registerRoles(roles)
+        registerStatusLabels(flow.stages.labels)
+      }
+      setState({ status: user ? 'signed-in' : 'signed-out', user, demoEnabled, roles, stages: flow.stages, requireAcceptance: flow.requireAcceptance })
       return user
     } catch {
       setState((prev) => ({ ...prev, status: 'signed-out', user: null }))

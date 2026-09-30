@@ -5,34 +5,33 @@ import { fail } from './http.js'
 const { applications, applicationEvents, users } = schema
 
 /**
- * Row-level visibility of applications — the one place it is defined.
+ * Row-level visibility of applications — the one place it is defined. Staff see what
+ * their role's scope allows (roles.js; `viewer` comes from getSessionUser):
  *
- *   admin, loan officer, sales manager   every application
- *   RM                                   assigned to them, sourced by them, or sourced by
- *                                        an agent who reports to them
- *   DSA                                  sourced by them
- *   customer                             their own (by account or by email)
+ *   all    every application (admin, sales manager and loan officer by default)
+ *   team   brought in by or assigned to them, assigned to them as RM, or brought in by
+ *          someone who reports to them (RM by default)
+ *   own    brought in by or assigned to them (DSA by default)
  *
- * Returns a where-clause, or undefined for "no restriction".
+ * Customers see their own, by account or by email. Returns a where-clause, or undefined
+ * for "no restriction".
  */
 export const scopeApplications = (viewer) => {
-  switch (viewer.role) {
-    case 'admin':
-    case 'loan_officer':
-    case 'sales_manager':
+  if (viewer.role === 'customer') return or(eq(applications.customerId, viewer.id), eq(applications.applicantEmail, viewer.email))
+  const own = or(eq(applications.sourcedBy, viewer.id), eq(applications.assignedOfficer, viewer.id))
+  switch (viewer.scope) {
+    case 'all':
       return undefined
-    case 'rm':
+    case 'team':
       return or(
+        own,
         eq(applications.assignedRm, viewer.id),
-        eq(applications.sourcedBy, viewer.id),
         sql`${applications.sourcedBy} in (select ${users.id} from ${users} where ${users.managerId} = ${viewer.id})`
       )
-    case 'dsa':
-      return eq(applications.sourcedBy, viewer.id)
-    case 'customer':
-      return or(eq(applications.customerId, viewer.id), eq(applications.applicantEmail, viewer.email))
+    case 'own':
+      return own
     default:
-      // Unknown role: nothing.
+      // A role that no longer exists: nothing.
       return sql`false`
   }
 }

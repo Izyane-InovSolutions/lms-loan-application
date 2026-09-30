@@ -53,6 +53,7 @@ import {
   stepIndex,
 } from '@/config/applicationSteps'
 import { WizardStep } from './apply/WizardSteps'
+import { DraftContactConsent } from '@/components/application/DraftContactConsent'
 import { CRB_ENABLED, businessInitial, personalInitial } from './apply/formDefaults'
 
 /** The device's position for the location consent, or null if it is refused or unavailable. */
@@ -142,6 +143,8 @@ function DashboardPage() {
   const [validationErrors, setValidationErrors] = useState({})
   const [submittedApplication, setSubmittedApplication] = useState(null)
   const [shareLocation, setShareLocation] = useState(false)
+  // First step, self-service only: staff may see this draft and help finish it.
+  const [contactConsent, setContactConsent] = useState(false)
   const [allowCrb, setAllowCrb] = useState(false)
   // One key per application: a retried submit files it once (see api/_handlers/applications.js).
   const submissionKeyRef = useRef(newSubmissionKey())
@@ -154,7 +157,7 @@ function DashboardPage() {
   useEffect(() => {
     if (!isAssistedFlagSet()) return
     fetchSession().then((user) => {
-      if (user && ['dsa', 'rm'].includes(user.role)) setAssistedBy(user)
+      if (user?.permissions?.includes('applications.assist')) setAssistedBy(user)
       else clearAssistedFlag()
     })
   }, [])
@@ -190,6 +193,10 @@ function DashboardPage() {
     setPersonalData,
     setBusinessData,
     setLoanData,
+    contactConsent,
+    setContactConsent,
+    assisted: Boolean(assistedBy),
+    referralCode: assistedBy ? null : readReferral(),
     // Agents start every customer's application afresh on their device.
     skipLocalCheck: Boolean(resumedDraft || prefilledApplication || isAssistedFlagSet()),
   })
@@ -690,6 +697,11 @@ function DashboardPage() {
       }
     }
 
+    // With an agent, the customer agrees at submit, by code; on their own, up front.
+    if (currentStep === 0 && !assistedBy && !contactConsent) {
+      recordError('contactConsent', 'Please agree that we may help you finish your application.')
+    }
+
     if (selectedLoanType === 'personal') {
       if (currentStep === 0) {
         requiredField(personalData.personalInfo.firstName, 'personalInfo.firstName', 'First name is required.')
@@ -932,6 +944,12 @@ function DashboardPage() {
       // only exists on this device, so the applicant can retry rather than discover
       // on their phone that the application is unreachable.
       if (canSyncRemotely && !synced) return
+      // An agent goes back to their pipeline, where the draft now waits in the Draft column.
+      if (assistedBy) {
+        clearAssistedFlag()
+        navigate('/admin/pipeline')
+        return
+      }
       navigate('/')
     } finally {
       setExiting(false)
@@ -1218,6 +1236,17 @@ function DashboardPage() {
 
             <div className="grid gap-6">
               <ErrorSummary ref={errorSummaryRef} errors={validationErrors} />
+
+              {currentStep === 0 && !assistedBy ? (
+                <DraftContactConsent
+                  checked={contactConsent}
+                  onChange={(value) => {
+                    setContactConsent(value)
+                    if (value) setValidationError('contactConsent', '')
+                  }}
+                  error={validationErrors.contactConsent}
+                />
+              ) : null}
 
               <WizardStep
                 addDirector={addDirector}

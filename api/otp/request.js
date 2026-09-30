@@ -27,7 +27,8 @@ export default async function handler(req, res) {
 
   // "consent": an agent is filling in an application with this customer, who reads the
   // code back to confirm they agree. The wording has to say so, not "resume".
-  const purpose = ['consent', 'offer'].includes(req.body?.purpose) ? req.body.purpose : 'resume'
+  // "sign": the customer signing their offer themselves, on their applications page.
+  const purpose = ['consent', 'offer', 'sign'].includes(req.body?.purpose) ? req.body.purpose : 'resume'
   try {
     await sendOtpEmail(email, code, { purpose, agentName: String(req.body?.agentName || '').slice(0, 80) })
   } catch (error) {

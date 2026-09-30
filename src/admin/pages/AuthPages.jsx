@@ -9,7 +9,7 @@ import { cn } from '@/lib/utils'
 import { ROLES, roleLabel } from '@/config/roles'
 import { api } from '../api'
 import { useAuth } from '../auth'
-import { Field, FormError, ROLE_TONES } from '../components'
+import { Field, FormError, roleTone } from '../components'
 
 /** Two-panel frame for the signed-out pages: a navy brand panel and the form. */
 function AuthFrame({ title, description, children, footer }) {
@@ -167,7 +167,7 @@ export function LoginPage() {
                   disabled={Boolean(demoPending) || submitting}
                   className="group flex items-start gap-3 rounded-lg border bg-card p-3 text-left transition-colors hover:border-primary/40 hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
                 >
-                  <span className={cn('mt-1.5 size-2 shrink-0 rounded-full', ROLE_TONES[role].dot)} aria-hidden="true" />
+                  <span className={cn('mt-1.5 size-2 shrink-0 rounded-full', roleTone(role).dot)} aria-hidden="true" />
                   <span className="min-w-0">
                     <span className="flex items-center gap-2 text-sm font-medium text-foreground">
                       {roleLabel(role)}

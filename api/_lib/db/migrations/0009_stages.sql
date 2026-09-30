@@ -1,0 +1,1 @@
+ALTER TABLE "applications" ADD COLUMN "stage_progress" jsonb DEFAULT '{}'::jsonb NOT NULL;

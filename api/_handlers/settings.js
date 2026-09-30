@@ -10,7 +10,8 @@ import { parseServiceAccount } from '../_lib/ai/cloud/google.js'
 import { AI_CONNECTIONS, AI_FIELDS, AI_MODEL_PROVIDERS, OCR_ENGINES } from '../../src/config/aiProviders.js'
 import { getSms, toZambianE164 } from '../_lib/sms.js'
 import { LEGAL_KINDS, discardLegalDraft, getDraftLegal, getPublishedLegal, isPlaceholder, legalHistory, publishLegalDraft, saveLegalDraft } from '../_lib/legal.js'
-import { STAFF_ROLES } from '../../src/config/roles.js'
+import { listRoles } from '../_lib/roles.js'
+import { validateStagesConfig } from '../_lib/stages.js'
 import { clearTwoFactorCache } from '../_lib/auth/twoFactor.js'
 
 /*
@@ -131,6 +132,7 @@ const VALIDATORS = {
   }),
   offers: (value) => ({
     requireAcceptance: Boolean(value.requireAcceptance),
+    requireSignature: value.requireSignature !== false,
     expiryDays: number(value.expiryDays, { min: 1, max: 90, integer: true, label: 'The offer period' }),
   }),
   prescreen: (value) => ({ autoDecline: Boolean(value.autoDecline) }),
@@ -158,13 +160,15 @@ const VALIDATORS = {
       ...aiFieldValues(value),
     }
   },
-  security: (value) => ({
-    requireTwoFactorRoles: (Array.isArray(value.requireTwoFactorRoles) ? value.requireTwoFactorRoles : []).filter((role) => STAFF_ROLES.includes(role)),
-  }),
+  stages: (value) => validateStagesConfig(value),
+  security: async (value) => {
+    const known = new Set((await listRoles()).map((role) => role.key))
+    return { requireTwoFactorRoles: (Array.isArray(value.requireTwoFactorRoles) ? value.requireTwoFactorRoles : []).filter((role) => known.has(role)) }
+  },
 }
 
 const getSettings = async (req) => {
-  await requireUser(req, { roles: ['admin'] })
+  await requireUser(req, { permission: 'settings.manage' })
   const entries = await Promise.all(Object.keys(SETTING_DEFAULTS).map(async (key) => [key, await getPublicSetting(key)]))
   const [lms, terms, privacy] = await Promise.all([describeLms(), getPublishedLegal('terms'), getPublishedLegal('privacy')])
   return {
@@ -184,12 +188,12 @@ const getSettings = async (req) => {
 }
 
 const saveSetting = async (req, res, { params }) => {
-  const actor = await requireUser(req, { roles: ['admin'] })
+  const actor = await requireUser(req, { permission: 'settings.manage' })
   const validate = VALIDATORS[params.key]
   if (!validate) fail(404, 'Unknown setting.', 'not_found')
   let value
   try {
-    value = validate(req.body || {})
+    value = await validate(req.body || {})
   } catch (error) {
     fail(400, error.message, 'invalid_input')
   }
@@ -211,7 +215,7 @@ const saveSetting = async (req, res, { params }) => {
  * (secrets left blank fall back to the saved ones).
  */
 const testLms = async (req) => {
-  const actor = await requireUser(req, { roles: ['admin'] })
+  const actor = await requireUser(req, { permission: 'settings.manage' })
   let client
   if (req.body && Object.keys(req.body).length) {
     let form
@@ -238,7 +242,7 @@ const testLms = async (req) => {
 
 /** Sends a test text to the admin's number. */
 const testSms = async (req) => {
-  await requireUser(req, { roles: ['admin'] })
+  await requireUser(req, { permission: 'settings.manage' })
   const sms = await getSms()
   if (!sms) fail(400, 'Save an SMS provider first.', 'sms_not_configured')
   const to = toZambianE164(req.body?.phone)
@@ -256,7 +260,7 @@ const testSms = async (req) => {
  * back to the saved values, then the environment).
  */
 const testAi = async (req) => {
-  const actor = await requireUser(req, { roles: ['admin'] })
+  const actor = await requireUser(req, { permission: 'settings.manage' })
   const service = String(req.body?.service || '')
   let values
   try {
@@ -285,14 +289,14 @@ const publishedLegal = async (req, res, { params }) => {
 }
 
 const legalForAdmin = async (req, res, { params }) => {
-  await requireUser(req, { roles: ['admin'] })
+  await requireUser(req, { permission: 'settings.manage' })
   assertKind(params.kind)
   const [published, draft, history] = await Promise.all([getPublishedLegal(params.kind), getDraftLegal(params.kind), legalHistory(params.kind)])
   return { published, draft, history, placeholder: isPlaceholder(published) }
 }
 
 const saveLegal = async (req, res, { params }) => {
-  const actor = await requireUser(req, { roles: ['admin'] })
+  const actor = await requireUser(req, { permission: 'settings.manage' })
   assertKind(params.kind)
   const title = text(req.body?.title, 200)
   const body = String(req.body?.body || '').trim().slice(0, 50000)
@@ -303,7 +307,7 @@ const saveLegal = async (req, res, { params }) => {
 }
 
 const discardLegal = async (req, res, { params }) => {
-  const actor = await requireUser(req, { roles: ['admin'] })
+  const actor = await requireUser(req, { permission: 'settings.manage' })
   assertKind(params.kind)
   await discardLegalDraft(params.kind)
   await recordAudit({ req, actor, action: 'legal.draft_discarded', entityType: 'legal', entityId: params.kind })
@@ -311,7 +315,7 @@ const discardLegal = async (req, res, { params }) => {
 }
 
 const publishLegal = async (req, res, { params }) => {
-  const actor = await requireUser(req, { roles: ['admin'] })
+  const actor = await requireUser(req, { permission: 'settings.manage' })
   assertKind(params.kind)
   const published = await publishLegalDraft(params.kind, actor)
   if (!published) fail(400, 'Save a draft before publishing.', 'no_draft')
@@ -319,8 +323,15 @@ const publishLegal = async (req, res, { params }) => {
   return { published }
 }
 
+/** The processing flow, for every staff member's pipeline, case page and status names. */
+const stagesForStaff = async (req) => {
+  await requireUser(req, { staff: true })
+  return { stages: await getSetting('stages'), requireAcceptance: (await getSetting('offers')).requireAcceptance }
+}
+
 export const settingsRoutes = [
   ['GET', '/settings', getSettings],
+  ['GET', '/stages', stagesForStaff],
   ['PUT', '/settings/:key', saveSetting],
   ['POST', '/settings/lms/test', testLms],
   ['POST', '/settings/sms/test', testSms],

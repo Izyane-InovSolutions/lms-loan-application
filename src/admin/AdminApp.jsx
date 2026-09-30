@@ -2,7 +2,7 @@ import React, { lazy } from 'react'
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import { Loader2 } from 'lucide-react'
 
-import { can, isStaffRole } from '@/config/roles'
+import { hasPermission, isStaffRole } from '@/config/roles'
 import { AuthProvider, useAuth } from './auth'
 import { ToastProvider } from './components'
 import { Shell } from './Shell'
@@ -19,6 +19,7 @@ const SettingsPage = lazy(() => import('./pages/SettingsPage').then((module) => 
 const CasePage = lazy(() => import('./case/CasePage').then((module) => ({ default: module.CasePage })))
 const DataRequestsPage = lazy(() => import('./pages/DataRequestsPage').then((module) => ({ default: module.DataRequestsPage })))
 const HealthPage = lazy(() => import('./pages/HealthPage').then((module) => ({ default: module.HealthPage })))
+const RolesPage = lazy(() => import('./pages/RolesPage').then((module) => ({ default: module.RolesPage })))
 const ProfilePage = lazy(() => import('./pages/ProfilePage').then((module) => ({ default: module.ProfilePage })))
 
 /**
@@ -37,13 +38,14 @@ export default function AdminApp() {
             <Route index element={<HomePage />} />
             <Route path="applications" element={<ApplicationsPage />} />
             <Route path="applications/:id" element={<CasePage />} />
-            <Route path="pipeline" element={<RequireRoles roles={['dsa', 'rm', 'sales_manager', 'admin']}><PipelinePage /></RequireRoles>} />
-            <Route path="rules" element={<RequireRoles roles={['admin', 'loan_officer', 'sales_manager']}><RulesPage /></RequireRoles>} />
+            <Route path="pipeline" element={<RequirePermission permission="pipeline.view"><PipelinePage /></RequirePermission>} />
+            <Route path="rules" element={<RequirePermission permission={['rules.view', 'rules.manage']}><RulesPage /></RequirePermission>} />
             <Route path="settings" element={<RequirePermission permission="settings.manage"><SettingsPage /></RequirePermission>} />
             <Route path="users" element={<RequirePermission permission="users.view"><UsersPage /></RequirePermission>} />
+            <Route path="roles" element={<RequirePermission permission="roles.manage"><RolesPage /></RequirePermission>} />
             <Route path="profile" element={<ProfilePage />} />
-            <Route path="data-requests" element={<RequireRoles roles={['admin']}><DataRequestsPage /></RequireRoles>} />
-            <Route path="health" element={<RequireRoles roles={['admin']}><HealthPage /></RequireRoles>} />
+            <Route path="data-requests" element={<RequirePermission permission="privacy.manage"><DataRequestsPage /></RequirePermission>} />
+            <Route path="health" element={<RequirePermission permission="system.health"><HealthPage /></RequirePermission>} />
             <Route path="audit" element={<RequirePermission permission="audit.view"><AuditPage /></RequirePermission>} />
           </Route>
           <Route path="*" element={<Navigate to="/admin" replace />} />
@@ -73,15 +75,12 @@ function RequireStaff() {
   return <Shell />
 }
 
-function RequireRoles({ roles, children }) {
-  const { user } = useAuth()
-  if (!roles.includes(user.role)) return <Navigate to="/admin" replace />
-  return children
-}
-
-/** Sends people to their home page when their role cannot open a page (e.g. after a demo role switch). */
+/**
+ * Sends people to their home page when their role cannot open a page (e.g. after a demo
+ * role switch). `permission` may be a list: any one of them opens the page.
+ */
 function RequirePermission({ permission, children }) {
   const { user } = useAuth()
-  if (!can(user.role, permission)) return <Navigate to="/admin" replace />
+  if (![].concat(permission).some((key) => hasPermission(user, key))) return <Navigate to="/admin" replace />
   return children
 }

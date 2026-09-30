@@ -3,6 +3,7 @@ import { getDb, schema } from './db/client.js'
 import { decryptSecret, encryptSecret, isEncrypted } from './secrets.js'
 import { DEFAULT_PRICING } from '../../src/config/loanProducts.js'
 import { AI_FIELDS, AI_SECRET_FIELDS } from '../../src/config/aiProviders.js'
+import { DEFAULT_STAGES_CONFIG } from '../../src/config/stages.js'
 
 /*
  * Admin-editable configuration. Each key has a default here, so a fresh database
@@ -57,7 +58,13 @@ export const SETTING_DEFAULTS = {
     requireAcceptance: true,
     // An unaccepted offer lapses after this many days.
     expiryDays: 14,
+    // Accepting means signing the offer letter and agreement (drawn or typed, confirmed
+    // by an emailed code), stamped into signed copies kept with the case.
+    requireSignature: true,
   },
+  // The processing flow around the fixed backbone: renamed statuses, the checklist, and
+  // the workspace's own stages (src/config/stages.js). Empty stage lists: the flow as built.
+  stages: DEFAULT_STAGES_CONFIG,
   // Automatic decline on a failed rule. Off: rules recommend, people decide.
   prescreen: { autoDecline: false },
   products: DEFAULT_PRICING,

@@ -8,7 +8,8 @@ vi.mock('../api/_lib/kv.js', () => ({ default: kv }))
 const { default: handler } = await import('../api/v1/[...path].js')
 const { hashPassword, verifyPassword } = await import('../api/_lib/auth/password.js')
 const { createRouter, fail } = await import('../api/_lib/http.js')
-const { can } = await import('../src/config/roles.js')
+const { BUILT_IN_ROLES } = await import('../src/config/roles.js')
+const can = (role, permission) => BUILT_IN_ROLES[role]?.permissions.includes(permission) || false
 
 describe('passwords', () => {
   it('verifies the right password and rejects others', async () => {
@@ -55,7 +56,7 @@ describe('router', () => {
 })
 
 describe('role permissions', () => {
-  it('limits management to admins', () => {
+  it('limits management to admins by default', () => {
     expect(can('admin', 'users.manage')).toBe(true)
     expect(['loan_officer', 'sales_manager', 'rm', 'dsa', 'customer'].some((role) => can(role, 'users.manage'))).toBe(false)
     expect(can('rm', 'users.view')).toBe(true)

@@ -140,16 +140,20 @@ needed, and every change is recorded in the audit log.
 
 | Tab | What it controls |
 | --- | --- |
-| Credit workflow | Four-eyes approval, the officer approval limit, the target days to a decision, whether customers must accept offers (and for how many days), automatic decline |
+| Credit workflow | Four-eyes approval, the target days to a decision, whether customers must accept offers (and for how many days), whether accepting means signing, automatic decline |
+| Stages | The processing flow: staff names for each status, the verification checklist, and your own stages during review, before the decision and before payout (see [Configurable stages](#configurable-stages)) |
 | Loan products | For each product: whether it's offered, amount and tenure limits, interest rate (flat once, or per month), facility fee (fixed or a percentage). The website, wizard and server all price with these. |
 | LMS connection | The Frappe address, API key and secret (or username and password), method names, the field carrying our reference, which LMS statuses mean paid out, and when to hand over. *Test connection* checks it before you save. |
 | Notifications and SMS | Staff emails, customer texts, and the SMS provider (Africa's Talking) with a test message |
 | Data retention | How long declined, withdrawn and lapsed applications, paid-out loans and audit entries are kept before automatic deletion |
 | Security | Roles that must use two-step sign-in |
+| Offer documents | The offer letter and loan agreement every approved loan gets: written in the workspace with fields, or your own PDF uploaded (see [Offer letter, agreement and signature](#offer-letter-agreement-and-signature)) |
 | Terms and privacy | The terms and privacy notice applicants accept, edited and published as numbered versions. Each application records the versions its applicant accepted. |
 
 Also in the workspace:
 
+- **Roles** (`/admin/roles`): what each role can do and which applications it sees;
+  add your own roles (see [Roles and what they see](#roles-and-what-they-see)).
 - **Credit rules** (`/admin/rules`): edit the policy, try a draft on recent
   applications, publish a version.
 - **Data requests** (`/admin/data-requests`): export or erase one person's data. Loan
@@ -168,7 +172,8 @@ never shows them again.
 
 ```mermaid
 flowchart LR
-    A["Customer applies online<br/>or an agent / RM fills it in"] --> B["Credit rules prescreen<br/>pass · refer · decline"]
+    D["Draft<br/>saved as they go;<br/>pause and resume"] --> A
+    A["Customer submits online<br/>or an agent / RM fills it in"] --> B["Credit rules prescreen<br/>pass · refer · decline"]
     B --> C["Loan officer reviews<br/>checklist, requests, visits, CRB"]
     C --> D["Officer recommends"]
     D --> E["A second person decides<br/>(four-eyes)"]
@@ -191,7 +196,7 @@ flowchart TB
     end
     subgraph Credit["Credit team"]
         LO["Loan officer<br/>takes the case, works the checklist,<br/>asks the customer for more, recommends"]
-        AP["Approver: a different officer or an admin<br/>approves, declines or sends back,<br/>within their approval limit"]
+        AP["Approver: a different officer, the sales manager<br/>or an admin: approves, declines or sends back,<br/>within their approval limit"]
     end
     subgraph Close["Closing the loan"]
         OK["Customer accepts on /my-applications<br/>or staff record acceptance with the customer's emailed code"]
@@ -204,7 +209,7 @@ flowchart TB
     AP -->|send back| LO
     AP -->|approve| OK
     OK --> LMS
-    SM["Sales manager<br/>watches the whole pipeline<br/>and team performance"] -.-> Front
+    SM["Sales manager<br/>the overall boss: brings business in,<br/>works and decides cases"] -.-> Front
     SM -.-> Credit
 ```
 
@@ -221,7 +226,10 @@ stateDiagram-v2
     state "Offer accepted" as Accepted
     state "Offer expired" as Expired
 
-    [*] --> Submitted
+    [*] --> Draft: applicant or agent starts
+    Draft --> Draft: saved, paused, resumed
+    Draft --> Submitted: submitted
+    Draft --> [*]: discarded, or 7 days untouched
     Submitted --> InReview: officer starts review
     Submitted --> Declined: credit rules decline (auto-decline on)
     InReview --> InfoRequested: officer asks for more
@@ -250,6 +258,7 @@ This shows the default settings. Also:
 
 | Status | Customer sees | Meaning |
 | --- | --- | --- |
+| Draft | (their own form) | Started, not submitted. Saved as they go; deleted after 7 days without changes |
 | Submitted | Received | Waiting for a loan officer |
 | In review | Being reviewed | An officer is checking details and documents |
 | Information requested | We need something from you | The customer must answer on `/my-applications` |
@@ -261,6 +270,15 @@ This shows the default settings. Also:
 
 ### Step by step
 
+0. **Draft.** The wizard saves as the applicant (or an agent with them) types, so they can
+   stop and carry on later: with *Save & exit*, then *Resume an application* and an
+   emailed code on any device. Every draft is in the pipeline's **Draft** column for
+   roles with *See unfinished applications*, within their scope. A customer applying on
+   their own first agrees that staff may see the draft and contact them to help finish
+   it; drafts staff started are always listed. From the draft, staff can call or email
+   the customer, **email a reminder** (once a day at most), or **continue it with the
+   customer**. The draft keeps the credit of whoever started it or referred it. Drafts
+   untouched for 7 days are deleted.
 1. **Submitted.** Online (optionally through an agent's referral link, `/?ref=CODE`) or
    filled in by an agent or RM with the customer, who confirms with an emailed code.
    The server copies the documents out of the draft and records consent (and location,
@@ -272,23 +290,30 @@ This shows the default settings. Also:
    *decline*. The result guides the officer; a *decline* only closes the case by itself
    when **auto-decline** is switched on (off by default). The AI review explains the
    result and never changes it.
-3. **Reviewed.** A loan officer takes the case (or is assigned it), works through the
+3. **Reviewed.** Someone who reviews cases takes it (or is assigned it), works through the
    verification checklist, can ask the applicant for more (they answer on
    `/my-applications`), log field visits, and pull a credit report when a bureau is
    connected and the applicant consented. Officers only get cases inside their approval
    range.
 4. **Recommended and decided.** The officer recommends approve or decline, with a reason
    and, for an approval, the amount, tenure and any conditions. Required checklist items
-   must be done first. With **four-eyes** on (the default), a different officer or an
-   admin then approves, declines or sends the case back. Nobody can decide a case they
+   must be done first. With **four-eyes** on (the default), someone else whose role can
+   decide (another officer, the sales manager or an admin) then approves, declines or
+   sends the case back. Nobody can decide a case they
    recommended or brought in, and nobody can approve an amount outside their own
    approval limit. The applicant is emailed (and texted, if SMS is on) and never sees
    the internal rationale.
-5. **Accepted.** With acceptance on (the default), the customer reviews the offer (it
-   may differ from what they asked for) and accepts it, or staff record acceptance
-   using the customer's emailed code. Unaccepted offers lapse after the set number of
-   days (14 by default). Customers can withdraw at any point before acceptance.
-6. **Handed to the LMS and paid out.** If an LMS is connected, the loan goes to it (on
+5. **Offer documents made.** On approval, the workspace makes an **offer letter** and a
+   **loan agreement** from the published templates, filled in with the case, and keeps
+   them with it. Each records its template version and a SHA-256 fingerprint.
+6. **Accepted and signed.** With acceptance on (the default), the customer reads the offer
+   (it may differ from what they asked for) and both documents on `/my-applications`.
+   With signing on (the default), they type their name, draw or type a signature, and
+   enter a code we email them. Staff can take the same signature in person on their own
+   device. Each document gets a signed copy with the signature and a signature record
+   page. Unaccepted offers lapse after the set number of days (14 by default).
+   Customers can withdraw at any point before acceptance.
+7. **Handed to the LMS and paid out.** If an LMS is connected, the loan goes to it (on
    acceptance, or on submit if chosen). Every hand-off carries our reference, so a
    resend is matched instead of duplicated. A hand-off with no reply waits for someone
    to check the LMS. Loans the LMS reports as paid out are marked paid out here. With no
@@ -301,97 +326,190 @@ an out-of-date screen is refused with a prompt to refresh.
 The switches mentioned above (four-eyes, acceptance and its expiry, auto-decline, LMS
 hand-off timing) are in **Settings**. Approval limits are set per person in **Team**.
 
+## Configurable stages
+
+The backbone of the flow (submitted, in review, awaiting approval, approved, accepted,
+paid out) is fixed, because decisions, offers and the LMS depend on it. Around it,
+**Settings → Stages** lets you shape the process without code:
+
+- **Status names.** Call *In review* "Assessment", say. Staff see the new name on the
+  pipeline, lists and cases; customers keep their own plain wording.
+- **The verification checklist.** Add, rename, reorder or remove items, and choose which
+  are needed before approval.
+- **Your own stages**, in three places:
+
+| Where | When | Blocks until done |
+| --- | --- | --- |
+| During review | While the case is in review | Recommending |
+| Before the decision | After the recommendation | Approving or declining |
+| Before payout | After the customer accepts | Marking it paid out, and the LMS hand-off |
+
+Each stage is done in order and can:
+
+- require checklist items first, for example *Field verification* needing *Site visit*;
+- be limited to some roles. With none ticked, anyone who can review (during review),
+  decide (before the decision) or pay out (before payout) can do it, and admins always
+  can;
+- apply to personal loans, business loans or both;
+- before the decision only: need someone other than the recommender or whoever brought
+  the case in, as a credit committee would.
+
+```mermaid
+flowchart TB
+    S[Submitted] --> R1["In review:<br/>Document check"] --> R2["In review:<br/>Field verification"] --> REC{{Recommend}}
+    REC --> A1["Awaiting approval:<br/>Credit committee"] --> DEC{{Decide}}
+    DEC -->|approve| OFF[Offer made] --> ACC["Accepted:<br/>Security documents signed"] --> PAY[Paid out]
+    DEC -->|send back| R2
+```
+
+A stage is marked done from the case page (*Stages* panel), with an optional note, and
+shows on the timeline. It can be reopened while its part of the flow is still open, which
+reopens every later stage in that part too. A case sent back from the decision goes
+through the *before the decision* stages again. On the pipeline, a status with stages
+becomes a column per stage, plus "ready to recommend", "ready for a decision" or "ready
+to pay out".
+
+## Offer letter, agreement and signature
+
+**Settings → Offer documents** holds the two documents every approved loan gets. For
+each, choose how it is made:
+
+- **Write it here.** Plain text, printed as typed: a blank line starts a paragraph, `## `
+  a heading, `- ` a bullet. Click a field to insert it, for example `{{customer_name}}`,
+  `{{amount}}`, `{{monthly_instalment}}`, `{{conditions}}`, `{{offer_expiry_date}}` or
+  `{{lender_name}}`. A line whose fields are all empty is left out.
+- **Upload a PDF.** Your own document. If it has fillable form fields named after the
+  fields (`customer_name` or `{{customer_name}}`), they are filled for each loan and the
+  form is flattened. A field named `customer_signature` is where the signature is drawn.
+  A PDF with no fields we recognise is used as it is, with a page of the loan's terms
+  added at the end.
+
+Drafts can be previewed with sample values before you publish them. Only a published
+version is used, and every generated document records the version it came from. The
+starting wording is a placeholder: replace it with your approved text. Set the lender's
+name with `LENDER_NAME`.
+
+**Signing**, when *Accepting means signing* is on (Settings → Credit workflow):
+
+```mermaid
+sequenceDiagram
+    participant C as Customer
+    participant W as Workspace
+    C->>W: Opens the offer on /my-applications
+    W-->>C: Offer letter and loan agreement (PDF)
+    C->>W: Ticks "I have read…", types name, draws or types a signature
+    W-->>C: Emails a one-time code
+    C->>W: Enters the code, "Sign and accept"
+    W->>W: Checks the documents are unchanged (SHA-256)
+    W->>W: Makes signed copies: signature + signature record page
+    W-->>C: Offer accepted, signed copies to download
+```
+
+The signature record page and the case's *Signature* panel show who signed, when (Lusaka
+time), how (drawn or typed), the emailed-code confirmation, the IP address and device,
+the staff member present for an in-person signing, and each document's fingerprint
+before and after signing. If the acceptance itself fails, the signed copies are removed.
+This is a built-in electronic signature, not a qualified digital certificate from a
+certification authority. Check with your legal adviser that it meets your requirements
+under the Electronic Communications and Transactions Act.
+
 ## Roles and what they see
 
-Permissions are defined in `src/config/roles.js`. Which applications each role can see
-is defined in one place: `scopeApplications` in `api/_lib/applications.js`. The server
-enforces both on every request.
+A role is a name, a **scope** (which applications its members see) and a set of
+**permissions** (what they can do). The six built-in roles below start with sensible
+defaults. Administrators change them, and add their own, under **People → Roles**. A
+change applies straight away to everyone with that role, without signing anyone out.
+
+The permissions and defaults are in `src/config/roles.js`; the workspace's changes are
+in the `roles` table (`api/_lib/roles.js`). Which applications a scope covers is defined
+in one place, `scopeApplications` in `api/_lib/applications.js`. The server checks the
+permission behind every action, whatever the role is called.
 
 ### How the roles fit together
 
 ```mermaid
 flowchart TB
-    ADM["Administrator<br/>users, rules, settings, audit"]
+    ADM["Administrator<br/>users, roles, rules, settings, audit"]
+    SM["Sales manager<br/>the overall boss: everything an RM<br/>and a loan officer can do"]
     subgraph CreditTeam["Credit (decides loans)"]
         LO["Loan officers<br/>review, recommend, approve within limit"]
     end
     subgraph SalesTeam["Sales (brings loans in)"]
-        SM["Sales manager<br/>oversees all of sales"]
         RM["Relationship managers<br/>own customers and a team of agents"]
         DSA["Direct sales agents<br/>refer and fill in applications"]
         RM -->|manages| DSA
     end
     CUS["Customers<br/>apply, answer requests, accept offers"]
-    ADM --> CreditTeam
-    ADM --> SalesTeam
-    SM -.->|oversees| RM
-    SM -.->|oversees| DSA
+    ADM --> SM
+    SM -->|leads| SalesTeam
+    SM -->|works alongside| CreditTeam
     DSA -->|bring in| CUS
     RM -->|bring in| CUS
     CUS -->|applications| LO
 ```
 
-Sales and credit are kept apart on purpose: the people who bring a loan in can follow
-it, but can't decide it.
+Four-eyes still keeps selling and deciding apart for everyone, the sales manager
+included: nobody can decide a case they recommended or brought in.
 
-### What each role can do
+### What each role can do (defaults)
 
 | Role | Sees | Can |
 | --- | --- | --- |
-| Admin | Everything | Manage users, rules, settings, audit log, data requests and system health; review and decide any case (within their own approval limit, if one is set) |
-| Loan officer | All applications | Take, review and recommend cases; approve or decline others' recommendations within their approval limit; send to the LMS; mark payouts |
-| Sales manager | All applications, all staff | Follow the pipeline, dashboards and team; read the credit rules; add notes, documents and field visits; record acceptance or withdrawal for a customer |
-| Relationship manager | Their own, plus their agents' applications | Refer customers, fill in applications, record acceptance, view their team |
-| Direct sales agent | Applications they brought in | Refer customers, fill in applications, record acceptance |
-| Customer | Their own applications | Follow progress, answer requests, accept or turn down offers, withdraw |
+| Admin | Everything | Everything, always: users, roles, rules, settings, audit log, data requests, system health, and every case action (within their own approval limit, if one is set). This role can't be changed, so nobody can be locked out. |
+| Sales manager | All applications, all staff | Everything an RM and a loan officer can do: bring customers in, lead a team, review, recommend, approve or decline within their limit, send to the LMS, mark payouts; plus the pipeline, team performance and the credit rules (read-only) |
+| Loan officer | All applications | Take, review and recommend cases; assign them; approve or decline others' recommendations within their approval limit; send to the LMS; mark payouts; read the credit rules |
+| Relationship manager | Their own, plus their agents' applications | Refer customers, fill in applications, lead a team of agents, record acceptance, see the pipeline and team performance |
+| Direct sales agent | Applications they brought in | Refer customers, fill in applications, record acceptance, see their pipeline |
+| Customer | Their own applications | Follow progress, answer requests, accept or turn down offers, withdraw (not configurable) |
+
+### The permissions
+
+| Group | Permission | What it allows |
+| --- | --- | --- |
+| Bringing business in | Fill in applications for customers | Start and submit applications with a customer; a referral link. Applications are credited to them. |
+| | Lead a team of agents | Can be an agent's manager; with the *team* scope, sees the team's applications |
+| Working cases | Add notes, documents and field visits | On the cases they can see |
+| | Record acceptance or withdrawal | With the code emailed to the customer |
+| | Review cases | Take cases, checklist, information requests, credit checks, re-run the prescreen |
+| | Assign cases to someone else | Hand a case to another reviewer |
+| | Recommend approval or decline | |
+| | Approve or decline | Within their approval limit (Team → their profile) |
+| | Send to the LMS and record payouts | |
+| | See unfinished applications | Drafts in the pipeline, within their scope; continue one with the customer or email a reminder |
+| Oversight | Pipeline board, team performance, credit rules (read), team directory | |
+| Administration | Edit credit rules, manage staff, change roles, change settings, audit log, data requests, system health | |
+
+**Scopes:** *every application*; *their own and their team's* (brought in by or assigned
+to them, or brought in by someone who reports to them); *only their own*.
 
 ### The sales manager
 
-The sales manager runs the sales side: the RMs and DSAs who bring customers in. It is a
-**watch and support** role, not a credit role.
+The sales manager is the overall boss of the lending operation. By default they can do
+everything a relationship manager and a loan officer can, across every application:
 
-**What they get:**
+- **Sales:** fill in applications with customers and share a referral link, lead agents,
+  follow the pipeline and team performance, see the whole team directory.
+- **Credit:** take and review cases, request information, run credit checks, assign cases
+  to officers, recommend, and approve or decline within their approval limit. Set that
+  limit on their profile in *Team*.
+- **Closing:** record a customer's acceptance or withdrawal, send loans to the LMS and
+  mark payouts.
 
-- **Every application.** The same full view as a loan officer, to follow how the team's
-  business is moving.
-- **The whole pipeline, by stage** (*Pipeline* page). Where cases are piling up, such as
-  many waiting on customers under *Information requested*.
-- **Team performance on the dashboard.** A leaderboard of agents and RMs by applications
-  brought in, approvals, conversion rate and approved value, plus volume, channel and
-  loan-type trends.
-- **The team directory** (*Team* page). All staff, to see who reports to which RM. They
-  can't invite or change anyone; that's the admin's job.
-- **The credit rules, read-only** (*Policy rules*). They know why applications are
-  referred or declined, and can coach agents on what to collect.
+They can't change settings, roles or users, or read the audit log; those stay with the
+administrator. Four-eyes applies to them like anyone else.
 
-**What they can do on a case:** add notes, add documents collected from the customer,
-log field visits, and record a customer's acceptance (with the customer's emailed code)
-or withdrawal.
+### Adding a role
 
-**What they can't do:** take, review, recommend, approve or decline cases, re-run the
-prescreen, send to the LMS or mark payouts. They also can't fill in applications or
-share a referral link; business is credited to the DSA or RM who brought it in. Settings,
-the audit log and user management stay with the admin.
+1. Open **People → Roles** and click **New role**.
+2. Name it and pick a role to start from (for example *Credit analyst*, from *Loan
+   officer*).
+3. Untick what it shouldn't do (say, *Recommend* and *Approve or decline*), choose which
+   applications it sees, and save.
+4. Invite people with it from **Team**. It appears in the role list straight away.
 
-**Typical day:** check the dashboard for this week's submissions and conversion, open
-the pipeline to find cases stuck on customer information, and ask the RM or agent
-concerned to chase the customer.
-
-### Relationship manager and direct sales agent
-
-- A **DSA** brings customers in: shares their referral link or code, or fills in the
-  application with the customer (who confirms with an emailed code). They see only the
-  applications they brought in, can add notes and documents, and record acceptance.
-- An **RM** does the same, and also manages a team of DSAs (set by the admin in *Team*).
-  They see their own applications, their agents' applications, and customers assigned
-  to them.
-
-### Loan officer
-
-Takes or is assigned cases within their approval range, works the checklist, requests
-information, logs visits and credit checks, and recommends. With four-eyes on, a
-colleague or admin decides. An officer can also decide a colleague's recommendation, as
-long as the amount is inside their own limit.
+Built-in roles can be renamed and changed, and **Reset to defaults** undoes that. A
+custom role can be deleted once nobody holds it. Every change is in the audit log under
+*Roles and permissions*.
 
 ### Sign-in
 

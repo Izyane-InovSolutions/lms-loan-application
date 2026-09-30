@@ -3,6 +3,7 @@ import { getDb, schema } from '../db/client.js'
 import { parseCookies, clientIp } from '../http.js'
 import { newToken, hashToken } from './tokens.js'
 import { isStaffRole } from '../../../src/config/roles.js'
+import { withPermissions } from '../roles.js'
 
 const { sessions, users } = schema
 
@@ -50,6 +51,8 @@ export const publicUser = (user) => ({
   createdAt: user.createdAt,
   notificationPrefs: user.notificationPrefs || {},
   twoFactorEnabled: Boolean(user.totpEnabledAt),
+  // Present when the user came from getSessionUser.
+  ...(user.permissions ? { permissions: user.permissions, scope: user.scope, roleLabel: user.roleLabel } : {}),
 })
 
 export const createSession = async (req, res, user) => {
@@ -67,7 +70,10 @@ export const createSession = async (req, res, user) => {
   res.setHeader('Set-Cookie', serializeCookie(token, Math.floor(absoluteMs / 1000)))
 }
 
-/** The signed-in user for this request, or null. Expired and idle sessions are removed as they are found. */
+/**
+ * The signed-in user for this request, or null, with their role resolved (`permissions`,
+ * `scope`, `roleLabel`; see roles.js). Expired and idle sessions are removed as they are found.
+ */
 export const getSessionUser = async (req) => {
   const token = parseCookies(req)[SESSION_COOKIE]
   if (!token) return null
@@ -93,7 +99,7 @@ export const getSessionUser = async (req) => {
   if (now - row.session.lastSeenAt.getTime() > TOUCH_INTERVAL_MS) {
     await db.update(sessions).set({ lastSeenAt: new Date(now) }).where(eq(sessions.id, id))
   }
-  return row.user
+  return withPermissions(row.user)
 }
 
 export const destroySession = async (req, res) => {

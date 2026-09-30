@@ -36,7 +36,7 @@ const clientError = async (req) => {
 
 /** Admin → System health: connections, the daily job, and grouped errors. */
 const health = async (req, res, { query }) => {
-  await requireUser(req, { roles: ['admin'] })
+  await requireUser(req, { permission: 'system.health' })
   const db = await getDb()
   const showResolved = query.get('resolved') === '1'
   const started = Date.now()
@@ -81,7 +81,7 @@ const health = async (req, res, { query }) => {
 }
 
 const resolveError = async (req, res, { params }) => {
-  const actor = await requireUser(req, { roles: ['admin'] })
+  const actor = await requireUser(req, { permission: 'system.health' })
   const id = Number(params.id)
   if (!Number.isInteger(id)) fail(404, 'Not found.', 'not_found')
   const db = await getDb()
@@ -91,7 +91,7 @@ const resolveError = async (req, res, { params }) => {
 
 /** Runs the daily maintenance now (it otherwise runs on Vercel's cron). */
 const runMaintenance = async (req) => {
-  const actor = await requireUser(req, { roles: ['admin'] })
+  const actor = await requireUser(req, { permission: 'system.health' })
   const summary = await runDailyMaintenance(appOrigin(req))
   await recordAudit({ req, actor, action: 'system.maintenance_run', detail: summary })
   return summary

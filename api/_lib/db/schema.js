@@ -28,7 +28,7 @@ const timestamps = {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 }
 
-/** Staff and customers alike; `role` is one of ROLES in src/config/roles.js. */
+/** Staff and customers alike; `role` is a built-in role (src/config/roles.js), a custom one from `roles`, or customer. */
 export const users = pgTable(
   'users',
   {
@@ -69,6 +69,22 @@ export const users = pgTable(
     index('users_manager_idx').on(table.managerId),
   ]
 )
+
+/**
+ * Roles as the workspace has configured them. A built-in role (src/config/roles.js) has a
+ * row only once an admin changes it; deleting that row restores its defaults. Custom roles
+ * exist only here. `permissions` is a list of keys from PERMISSION_GROUPS.
+ */
+export const roles = pgTable('roles', {
+  key: text('key').primaryKey(),
+  label: text('label').notNull(),
+  description: text('description'),
+  // all | team | own — which applications members see (SCOPES).
+  scope: text('scope').notNull().default('own'),
+  permissions: jsonb('permissions').notNull().default(sql`'[]'::jsonb`),
+  updatedBy: uuid('updated_by'),
+  ...timestamps,
+})
 
 /** Signed-in browsers. `id` is the SHA-256 of the cookie token, so a database leak yields no usable sessions. */
 export const sessions = pgTable(
@@ -192,6 +208,8 @@ export const applications = pgTable(
     infoRequest: jsonb('info_request'),
     // Verification checklist: { identity: { done, note, by, at }, documents: …, income: …, crb: … }
     checks: jsonb('checks').notNull().default(sql`'{}'::jsonb`),
+    // Configurable stages done so far (Settings → Stages): { [stageId]: { done, note, by, byName, at } }
+    stageProgress: jsonb('stage_progress').notNull().default(sql`'{}'::jsonb`),
     // What was approved, when it differs from what was asked for.
     approvedAmount: money('approved_amount'),
     approvedTenure: integer('approved_tenure'),
@@ -227,6 +245,48 @@ export const applications = pgTable(
 )
 
 /**
+ * A started, not yet submitted application, for the pipeline's Draft column. The draft
+ * itself (every field, the attachments) stays in Redis where the wizard saves it; this is
+ * the searchable summary, written on every save and removed on submit, discard or expiry.
+ *
+ * Customers' own drafts are listed for staff only once they agreed up front that staff may
+ * contact them about it (`contactConsentAt`); drafts staff started are always listed.
+ */
+export const applicationDrafts = pgTable(
+  'application_drafts',
+  {
+    // The id kept in the Redis draft record.
+    id: uuid('id').primaryKey(),
+    email: text('email').notNull(),
+    loanType: text('loan_type').notNull(),
+    applicantName: text('applicant_name'),
+    applicantPhone: text('applicant_phone'),
+    companyName: text('company_name'),
+    amount: money('amount'),
+    tenure: integer('tenure'),
+    // Zero-based wizard step the applicant last reached, and how many there are.
+    currentStep: integer('current_step').notNull().default(0),
+    stepCount: integer('step_count').notNull().default(5),
+    documentCount: integer('document_count').notNull().default(0),
+    channel: text('channel').notNull().default('self'),
+    sourcedBy: uuid('sourced_by').references(() => users.id, { onDelete: 'set null' }),
+    assignedRm: uuid('assigned_rm').references(() => users.id, { onDelete: 'set null' }),
+    startedByStaff: boolean('started_by_staff').notNull().default(false),
+    contactConsentAt: timestamp('contact_consent_at', { withTimezone: true }),
+    contactConsentVersion: text('contact_consent_version'),
+    remindedAt: timestamp('reminded_at', { withTimezone: true }),
+    lastSavedAt: timestamp('last_saved_at', { withTimezone: true }).notNull().defaultNow(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    ...timestamps,
+  },
+  (table) => [
+    index('application_drafts_email_idx').on(table.email),
+    index('application_drafts_sourced_by_idx').on(table.sourcedBy),
+    index('application_drafts_expires_at_idx').on(table.expiresAt),
+  ]
+)
+
+/**
  * One attached file. `slot` is the wizard's field key (payslips, director.0.nrc, …);
  * the file lives in Blob storage at `pathname`, copied out of the draft on submit.
  */
@@ -245,12 +305,15 @@ export const applicationDocuments = pgTable(
     filename: text('filename').notNull(),
     contentType: text('content_type'),
     size: integer('size'),
-    // applicant (the wizard), staff (added by an officer), info_response (sent after a request)
+    // applicant (the wizard), staff (added by an officer), info_response (sent after a request),
+    // system (an offer letter or agreement the workspace generated, and their signed copies)
     source: text('source').notNull().default('applicant'),
     // The AI document check, as recorded by the server when the file was analysed.
     aiAnalysis: jsonb('ai_analysis'),
     // Set once uploaded to Frappe, so a retried sync does not upload it again.
     lmsFileUrl: text('lms_file_url'),
+    // Generated documents (source "system"): { kind, templateVersion, sha256, signed }.
+    meta: jsonb('meta').notNull().default(sql`'{}'::jsonb`),
     uploadedBy: uuid('uploaded_by'),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
@@ -464,6 +527,65 @@ export const legalDocuments = pgTable(
     ...timestamps,
   },
   (table) => [index('legal_documents_kind_idx').on(table.kind, table.status), uniqueIndex('legal_documents_version_key').on(table.kind, table.version)]
+)
+
+/**
+ * The offer letter and loan agreement templates (Settings → Documents), versioned like the
+ * terms: one draft and one published version per kind; publishing retires the last one.
+ * `source` is text (written in the workspace, `body` with {{fields}}) or pdf (uploaded;
+ * `pdfPathname` in storage, `fields` the form field names found in it).
+ */
+export const documentTemplates = pgTable(
+  'document_templates',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    kind: text('kind').notNull(),
+    version: integer('version').notNull(),
+    // draft | published | retired
+    status: text('status').notNull(),
+    source: text('source').notNull().default('text'),
+    title: text('title').notNull(),
+    body: text('body'),
+    pdfPathname: text('pdf_pathname'),
+    pdfUrl: text('pdf_url'),
+    pdfFilename: text('pdf_filename'),
+    fields: jsonb('fields').notNull().default(sql`'[]'::jsonb`),
+    createdBy: uuid('created_by'),
+    publishedBy: uuid('published_by'),
+    publishedAt: timestamp('published_at', { withTimezone: true }),
+    ...timestamps,
+  },
+  (table) => [uniqueIndex('document_templates_kind_version_key').on(table.kind, table.version), index('document_templates_kind_status_idx').on(table.kind, table.status)]
+)
+
+/**
+ * A customer's signature on their offer: who, how, when, from where, and a SHA-256 of each
+ * document before and after it was signed, so a signed copy can later be shown to be the
+ * one they saw. `image` is the drawn (or typed-and-rendered) signature as a PNG data URL.
+ */
+export const signatures = pgTable(
+  'signatures',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    applicationId: uuid('application_id')
+      .notNull()
+      .references(() => applications.id, { onDelete: 'cascade' }),
+    signerName: text('signer_name').notNull(),
+    signerEmail: text('signer_email').notNull(),
+    // drawn | typed
+    method: text('method').notNull(),
+    image: text('image').notNull(),
+    // The emailed code the customer entered to confirm it was them.
+    codeVerified: boolean('code_verified').notNull().default(false),
+    // Staff member present, for an acceptance recorded in person.
+    capturedBy: uuid('captured_by').references(() => users.id, { onDelete: 'set null' }),
+    ip: text('ip'),
+    userAgent: text('user_agent'),
+    // [{ kind, label, documentId, sha256, signedDocumentId, signedSha256, templateVersion }]
+    documents: jsonb('documents').notNull().default(sql`'[]'::jsonb`),
+    signedAt: timestamp('signed_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index('signatures_application_idx').on(table.applicationId)]
 )
 
 /** Server and browser errors, for the System health page. Grouped by fingerprint. */

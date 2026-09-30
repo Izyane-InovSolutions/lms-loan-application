@@ -76,6 +76,7 @@ export async function saveLocalDraft({
   businessData,
   loanData,
   draftToken,
+  contactConsent = false,
 }) {
   const personal = extractFiles(personalData, 'personal')
   const business = extractFiles(businessData, 'business')
@@ -88,6 +89,7 @@ export async function saveLocalDraft({
     businessData: business.sanitized,
     loanData,
     draftToken: draftToken || null,
+    contactConsent: Boolean(contactConsent),
     savedAt: Date.now(),
   }
 

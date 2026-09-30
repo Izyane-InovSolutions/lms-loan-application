@@ -11,6 +11,9 @@ import { settingsRoutes } from '../_handlers/settings.js'
 import { privacyRoutes } from '../_handlers/privacy.js'
 import { notificationRoutes } from '../_handlers/notifications.js'
 import { healthRoutes } from '../_handlers/health.js'
+import { roleRoutes } from '../_handlers/roles.js'
+import { draftRoutes } from '../_handlers/drafts.js'
+import { templateRoutes } from '../_handlers/templates.js'
 
 /*
  * Every /api/v1 endpoint, behind one Vercel function.
@@ -32,4 +35,8 @@ export default createRouter([
   ...privacyRoutes,
   ...notificationRoutes,
   ...healthRoutes,
+  ...roleRoutes,
+  ...templateRoutes,
+  // Last: /drafts/:id must not shadow GET /drafts/file in applicationRoutes.
+  ...draftRoutes,
 ])

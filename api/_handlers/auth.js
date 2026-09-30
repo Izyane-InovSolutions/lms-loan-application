@@ -1,5 +1,5 @@
 import crypto from 'node:crypto'
-import { and, desc, eq, gt, inArray, isNull } from 'drizzle-orm'
+import { and, desc, eq, gt, inArray, isNull, ne } from 'drizzle-orm'
 import kv from '../_lib/kv.js'
 import { getDb, schema } from '../_lib/db/client.js'
 import { fail, text, email as parseEmail, appOrigin, parseCookies } from '../_lib/http.js'
@@ -20,7 +20,7 @@ import {
 import { checkOtp, consumeOtp } from '../_lib/otp.js'
 import { sendPasswordLinkEmail } from '../_lib/email.js'
 import { recordAudit } from '../_lib/audit.js'
-import { ROLES, STAFF_ROLES, isStaffRole, roleLabel } from '../../src/config/roles.js'
+import { ROLES, isStaffRole, roleLabel } from '../../src/config/roles.js'
 
 const { users, passwordTokens, sessions } = schema
 
@@ -57,7 +57,7 @@ const bootstrapAdmin = async (db) => {
   const [existing] = await db
     .select({ id: users.id })
     .from(users)
-    .where(and(inArray(users.role, STAFF_ROLES), eq(users.isDemo, false)))
+    .where(and(ne(users.role, 'customer'), eq(users.isDemo, false)))
     .limit(1)
   if (existing) return
   let passwordHash

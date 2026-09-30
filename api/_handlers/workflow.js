@@ -1,14 +1,16 @@
 import { and, asc, desc, eq, inArray, lt } from 'drizzle-orm'
 import { getDb, schema } from '../_lib/db/client.js'
 import { appOrigin, clientIp as clientIpOf, fail, text } from '../_lib/http.js'
-import { requireUser } from '../_lib/rbac.js'
+import { requirePermission, requireUser } from '../_lib/rbac.js'
+import { discardSignature, parseSignature, signOfferDocuments } from '../_lib/signing.js'
 import { recordAudit } from '../_lib/audit.js'
 import { putBlob } from '../_lib/blob.js'
 import { readSingleUpload } from '../_lib/upload.js'
 import { afterResponse } from '../_lib/after.js'
 import { sendApplicationUpdateEmail } from '../_lib/email.js'
 import { addEvent, findVisibleApplication } from '../_lib/applications.js'
-import { applyAction, CREDIT_ROLES } from '../_lib/workflow.js'
+import { applyAction } from '../_lib/workflow.js'
+import { rolesWith } from '../_lib/roles.js'
 import { queueLmsSyncIfDue, syncApplicationToLms } from '../_lib/lms/sync.js'
 import { runPrescreen, loadFactInputs } from '../_lib/prescreen/run.js'
 import { computeFacts } from '../_lib/prescreen/facts.js'
@@ -16,10 +18,12 @@ import { getDraftRuleset, getPublishedRuleset, listRulesetHistory, publishDraftR
 import { getSetting } from '../_lib/settings.js'
 import { getCrb } from '../_lib/crb/index.js'
 import { loadCase } from './applications.js'
-import { consumeOtp } from '../_lib/otp.js'
+import { checkOtp, consumeOtp } from '../_lib/otp.js'
 import { creditStaffIds, followerIds, notifyUsers } from '../_lib/notify.js'
 import { textCustomer } from '../_lib/sms.js'
 import { WITHDRAWABLE_STATUSES } from '../../src/config/applications.js'
+import { pendingStages } from '../../src/config/stages.js'
+import { ensureOfferDocuments } from '../_lib/offerDocuments.js'
 import { FACTS, evaluateRules, flattenPolicies, rulesToPolicies, validatePolicies } from '../../src/config/creditRules.js'
 
 const { applications, applicationDocuments, prescreens, users, locations, crbReports, consents } = schema
@@ -27,6 +31,9 @@ const { applications, applicationDocuments, prescreens, users, locations, crbRep
 // ---------------------------------------------------------------------------
 // Case actions
 // ---------------------------------------------------------------------------
+
+/** Whether stages before payout still stand between this case and the LMS. */
+const closingStagesPending = async (application) => pendingStages(await getSetting('stages'), 'closing', application).length > 0
 
 const notifyCustomer = (req, application, notify) =>
   afterResponse('customer email', async () => {
@@ -50,7 +57,7 @@ const notifyStaffAbout = (req, viewer, action, input, application) =>
       await notifyUsers([application.assignedOfficer], { ...base, type: 'assigned', title: `${application.reference} was assigned to you`, body: `${who}, by ${viewer.name}` }, { origin })
     }
     if (action === 'recommend' && application.status === 'pending_approval') {
-      await notifyUsers(await creditStaffIds({ except: viewer.id }), { ...base, type: 'awaiting_decision', title: `${application.reference} is waiting for a decision`, body: `${viewer.name} recommended it. ${who}` }, { origin })
+      await notifyUsers(await creditStaffIds({ except: viewer.id, permission: 'cases.decide' }), { ...base, type: 'awaiting_decision', title: `${application.reference} is waiting for a decision`, body: `${viewer.name} recommended it. ${who}` }, { origin })
     }
     if ((action === 'decide' || action === 'recommend') && ['approved', 'declined'].includes(application.status)) {
       const outcome = application.status === 'approved' ? 'approved' : 'declined'
@@ -61,40 +68,71 @@ const notifyStaffAbout = (req, viewer, action, input, application) =>
     }
   })
 
+/**
+ * In-person acceptance with signing on: the customer signs on the staff member's device
+ * and reads back their emailed code. The documents are signed first, outside the
+ * acceptance's transaction; if the acceptance then fails, the signed copies are removed.
+ */
+const signInPerson = async (req, viewer, application, input) => {
+  requirePermission(viewer, 'offers.record', 'Your role can’t record acceptances.')
+  if (application.status !== 'approved') fail(409, 'There is no offer waiting to be accepted.', 'invalid_state')
+  if (application.offerExpiresAt && new Date(application.offerExpiresAt) < new Date()) fail(409, 'This offer has expired.', 'offer_expired')
+  const code = text(input.code, 12)
+  if (!code) fail(400, 'Enter the code the customer received by email.', 'invalid_input')
+  const otpError = await checkOtp(application.applicantEmail, code)
+  if (otpError) fail(otpError.status, otpError.message.replace('The code entered', 'The customer’s code'), 'invalid_code')
+  return signOfferDocuments({ application, signature: parseSignature(input.signature), req, capturedBy: viewer })
+}
+
 const act = async (req, res, { params }) => {
   const viewer = await requireUser(req, { staff: true })
   const application = await findVisibleApplication(viewer, params.id)
-  const input = req.body || {}
-  const { application: updated, result } = await applyAction(viewer, application.id, input)
+  const input = { ...(req.body || {}) }
+  const { requireSignature } = await getSetting('offers')
+  const signed = input.action === 'record_acceptance' && requireSignature ? await signInPerson(req, viewer, application, input) : null
+  if (signed) input.signatureId = signed.id
+  let outcome
+  try {
+    outcome = await applyAction(viewer, application.id, input)
+  } catch (error) {
+    await discardSignature(signed)
+    throw error
+  }
+  const { application: updated, result } = outcome
   await recordAudit({ req, actor: viewer, action: `application.${input.action}`, entityType: 'application', entityId: application.id, detail: { reference: application.reference, status: updated.status } })
 
   if (result.consumeOtpFor) await consumeOtp(result.consumeOtpFor)
+  // The offer letter and agreement are made from the published templates straight away.
+  if (result.approved) afterResponse('offer documents', () => ensureOfferDocuments(updated.id))
   notifyStaffAbout(req, viewer, input.action, input, updated)
   if (result.notify) notifyCustomer(req, updated, result.notify)
-  // An approval reaches the LMS straight away unless the customer must accept it first.
+  // An approval reaches the LMS straight away unless the customer must accept it first,
+  // and never while stages before payout (Settings → Stages) are still open.
   const { requireAcceptance } = await getSetting('offers')
-  const handOff = result.accepted || (result.approved && !requireAcceptance)
+  const ready = (result.accepted || (result.approved && !requireAcceptance)) && !(await closingStagesPending(updated))
+  const handOff = ready || result.closingDone
   if (handOff && (await queueLmsSyncIfDue(updated, 'approval'))) {
     afterResponse('LMS hand-off', () => syncApplicationToLms(updated.id, { actor: viewer }))
   }
   return loadCase(application.id)
 }
 
-/** Credit staff for the "assign to" picker. */
+/** Everyone who reviews cases, for the "assign to" picker. */
 const listOfficers = async (req) => {
   await requireUser(req, { staff: true })
   const db = await getDb()
+  const reviewerRoles = await rolesWith('cases.work')
   const officers = await db
     .select({ id: users.id, name: users.name, role: users.role, approvalMin: users.approvalMin, approvalMax: users.approvalMax })
     .from(users)
-    .where(and(inArray(users.role, CREDIT_ROLES), eq(users.status, 'active')))
+    .where(and(inArray(users.role, reviewerRoles), eq(users.status, 'active')))
     .orderBy(asc(users.name))
   return { officers }
 }
 
 /** Staff add a document to a case (collected in person, or a better copy). */
 const addStaffDocument = async (req, res, { params }) => {
-  const viewer = await requireUser(req, { staff: true })
+  const viewer = await requireUser(req, { permission: 'applications.note' })
   const application = await findVisibleApplication(viewer, params.id)
   const { fields, file } = await readSingleUpload(req)
   const label = text(fields.label, 120) || file.filename
@@ -119,7 +157,7 @@ const addStaffDocument = async (req, res, { params }) => {
 }
 
 const rerunPrescreen = async (req, res, { params }) => {
-  const viewer = await requireUser(req, { roles: CREDIT_ROLES })
+  const viewer = await requireUser(req, { permission: 'cases.work' })
   const application = await findVisibleApplication(viewer, params.id)
   await runPrescreen(application.id, { actor: viewer })
   await recordAudit({ req, actor: viewer, action: 'application.prescreen_rerun', entityType: 'application', entityId: application.id })
@@ -128,7 +166,7 @@ const rerunPrescreen = async (req, res, { params }) => {
 
 /** A field visit: where the staff member is now, with a note. Needs their device's location. */
 const logVisit = async (req, res, { params }) => {
-  const viewer = await requireUser(req, { staff: true })
+  const viewer = await requireUser(req, { permission: 'applications.note' })
   const application = await findVisibleApplication(viewer, params.id)
   const latitude = Number(req.body?.latitude)
   const longitude = Number(req.body?.longitude)
@@ -155,7 +193,7 @@ const logVisit = async (req, res, { params }) => {
 
 /** Pulls a credit bureau report, only with the applicant's recorded consent. */
 const runCreditCheck = async (req, res, { params }) => {
-  const viewer = await requireUser(req, { roles: CREDIT_ROLES })
+  const viewer = await requireUser(req, { permission: 'cases.work' })
   const application = await findVisibleApplication(viewer, params.id)
   const crb = getCrb()
   if (!crb) fail(400, 'No credit bureau is connected.', 'crb_not_configured')
@@ -267,23 +305,51 @@ const acceptOffer = async (req, res, { params }) => {
   const application = await findVisibleApplication(viewer, params.id)
   if (application.status !== 'approved') fail(409, 'There is no offer waiting for you on this application.', 'invalid_state')
   if (application.offerExpiresAt && new Date(application.offerExpiresAt) < new Date()) fail(409, 'This offer has expired. You are welcome to apply again.', 'offer_expired')
+
+  // With signing on: they have read the documents, signed, and entered the code we emailed.
+  const { requireSignature } = await getSetting('offers')
+  let signed = null
+  if (requireSignature) {
+    if (req.body?.agreed !== true) fail(400, 'Confirm that you have read the offer letter and loan agreement.', 'agreement_required')
+    const signature = parseSignature(req.body?.signature)
+    const code = text(req.body?.code, 12)
+    if (!code) fail(400, 'Enter the code we emailed you.', 'code_required')
+    const otpError = await checkOtp(application.applicantEmail, code)
+    if (otpError) fail(otpError.status, otpError.message, 'invalid_code')
+    signed = await signOfferDocuments({ application, signature, req })
+  }
+
   const db = await getDb()
-  await db.transaction(async (tx) => {
-    const [updated] = await tx
-      .update(applications)
-      .set({ status: 'accepted', acceptedAt: new Date(), version: application.version + 1, updatedAt: new Date() })
-      .where(and(eq(applications.id, application.id), eq(applications.status, 'approved')))
-      .returning()
-    if (!updated) fail(409, 'This offer changed. Refresh the page.', 'stale')
-    await tx.insert(consents).values({ applicationId: application.id, type: 'offer', granted: true, noticeVersion: offerTerms(application), method: 'applicant_checkbox', capturedBy: viewer.id, ip: clientIpOf(req) })
-    await addEvent(tx, { applicationId: application.id, actor: viewer, type: 'status', fromStatus: 'approved', toStatus: 'accepted', message: 'Offer accepted', visibleToCustomer: true })
-  })
-  await recordAudit({ req, actor: viewer, action: 'application.offer_accepted', entityType: 'application', entityId: application.id, detail: { reference: application.reference } })
+  try {
+    await db.transaction(async (tx) => {
+      const [updated] = await tx
+        .update(applications)
+        .set({ status: 'accepted', acceptedAt: new Date(), version: application.version + 1, updatedAt: new Date() })
+        .where(and(eq(applications.id, application.id), eq(applications.status, 'approved')))
+        .returning()
+      if (!updated) fail(409, 'This offer changed. Refresh the page.', 'stale')
+      await tx.insert(consents).values({
+        applicationId: application.id,
+        type: 'offer',
+        granted: true,
+        noticeVersion: signed ? `${offerTerms(application)}:signature ${signed.id}` : offerTerms(application),
+        method: signed ? 'signature_and_code' : 'applicant_checkbox',
+        capturedBy: viewer.id,
+        ip: clientIpOf(req),
+      })
+      await addEvent(tx, { applicationId: application.id, actor: viewer, type: 'status', fromStatus: 'approved', toStatus: 'accepted', message: signed ? `Offer accepted and signed by ${signed.signerName}` : 'Offer accepted', visibleToCustomer: true })
+    })
+  } catch (error) {
+    await discardSignature(signed)
+    throw error
+  }
+  if (signed) await consumeOtp(application.applicantEmail)
+  await recordAudit({ req, actor: viewer, action: 'application.offer_accepted', entityType: 'application', entityId: application.id, detail: { reference: application.reference, signature: signed?.id ?? null } })
   afterResponse('staff notifications', async () =>
     notifyUsers(followerIds(application).length ? followerIds(application) : await creditStaffIds(), { type: 'offer_accepted', title: `${application.reference}: offer accepted`, body: 'Ready for payout.', applicationId: application.id }, { origin: appOrigin(req) })
   )
   const [fresh] = await db.select().from(applications).where(eq(applications.id, application.id))
-  if (await queueLmsSyncIfDue(fresh, 'approval')) afterResponse('LMS hand-off', () => syncApplicationToLms(fresh.id))
+  if (!(await closingStagesPending(fresh)) && (await queueLmsSyncIfDue(fresh, 'approval'))) afterResponse('LMS hand-off', () => syncApplicationToLms(fresh.id))
   return { ok: true }
 }
 
@@ -338,7 +404,7 @@ export const expireOffers = async (origin) => {
 // ---------------------------------------------------------------------------
 
 const getRules = async (req) => {
-  await requireUser(req, { roles: ['admin', 'loan_officer', 'sales_manager'] })
+  await requireUser(req, { anyPermission: ['rules.view', 'rules.manage'] })
   const [published, draft, history] = await Promise.all([getPublishedRuleset(), getDraftRuleset(), listRulesetHistory()])
   return {
     published: { version: published.version, policies: rulesToPolicies(published.rules), publishedAt: published.publishedAt, note: published.note },
@@ -349,7 +415,7 @@ const getRules = async (req) => {
 }
 
 const saveDraft = async (req) => {
-  const actor = await requireUser(req, { roles: ['admin'] })
+  const actor = await requireUser(req, { permission: 'rules.manage' })
   let policies
   try {
     policies = validatePolicies(req.body?.policies)
@@ -362,7 +428,7 @@ const saveDraft = async (req) => {
 }
 
 const discardDraft = async (req) => {
-  const actor = await requireUser(req, { roles: ['admin'] })
+  const actor = await requireUser(req, { permission: 'rules.manage' })
   const draft = await getDraftRuleset()
   if (draft) {
     const db = await getDb()
@@ -379,7 +445,7 @@ const SIMULATION_SAMPLE = 300
  * outcomes would change before publishing. Uses the facts recorded at prescreen time.
  */
 const simulate = async (req) => {
-  await requireUser(req, { roles: ['admin'] })
+  await requireUser(req, { permission: 'rules.manage' })
   let rules
   try {
     rules = flattenPolicies(validatePolicies(req.body?.policies))
@@ -412,7 +478,7 @@ const simulate = async (req) => {
 }
 
 const publish = async (req) => {
-  const actor = await requireUser(req, { roles: ['admin'] })
+  const actor = await requireUser(req, { permission: 'rules.manage' })
   const published = await publishDraftRuleset(actor, text(req.body?.note, 300) || null)
   if (!published) fail(400, 'There is no draft to publish.', 'no_draft')
   await recordAudit({ req, actor, action: 'rules.published', entityType: 'ruleset', entityId: published.id, detail: { version: published.version } })
@@ -421,7 +487,7 @@ const publish = async (req) => {
 
 /** Facts for an application, recomputed now — for the "why" panel when no prescreen exists yet. */
 const previewFacts = async (req, res, { params }) => {
-  const viewer = await requireUser(req, { roles: CREDIT_ROLES })
+  const viewer = await requireUser(req, { permission: 'cases.work' })
   const application = await findVisibleApplication(viewer, params.id)
   const { documents, points, crb } = await loadFactInputs(application.id)
   return { facts: computeFacts(application, documents, { locations: points, crbScore: crb?.score ?? null }) }

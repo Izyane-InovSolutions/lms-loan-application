@@ -1,6 +1,7 @@
 import formidable from 'formidable'
 import fs from 'node:fs/promises'
 import kv from '../_lib/kv.js'
+import { indexDraft } from '../_lib/drafts.js'
 import { putBlob } from '../_lib/blob.js'
 import { checkUpload } from '../_lib/fileChecks.js'
 
@@ -78,6 +79,8 @@ export default async function handler(req, res) {
   draft.documents = { ...(draft.documents || {}), [fieldKey]: documentRef }
   draft.savedAt = Date.now()
   await kv.set(`draft:${email}`, draft, { ex: DRAFT_TTL_SECONDS })
+  // The pipeline shows how many documents are in.
+  await indexDraft(draft, email)
 
   return res.status(200).json({ fieldKey, ...documentRef })
 }

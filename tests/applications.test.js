@@ -1,6 +1,6 @@
 import crypto from 'node:crypto'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
-import { createMemoryKv, client } from './helpers.js'
+import { createMemoryKv, client, draftPreparer } from './helpers.js'
 
 const kv = createMemoryKv()
 vi.mock('../api/_lib/kv.js', () => ({ default: kv }))
@@ -9,44 +9,7 @@ const { default: handler } = await import('../api/v1/[...path].js')
 const { putBlob } = await import('../api/_lib/blob.js')
 const { evaluateRules, DEFAULT_RULES } = await import('../src/config/creditRules.js')
 
-const PDF = Buffer.from('%PDF-1.4\n% test\n')
-
-/** Puts a ready-to-submit draft in place, as the wizard would have: files in storage, record in Redis. */
-const prepareDraft = async (email, { withNrc = true } = {}) => {
-  const token = crypto.randomBytes(12).toString('hex')
-  const slots = ['payslips', 'bankStatements', 'passportPhoto', 'tpin', ...(withNrc ? ['nrcCopy'] : [])]
-  const documents = {}
-  const dataDocuments = {}
-  for (const slot of slots) {
-    const path = `personal.documents.${slot}`
-    const stored = await putBlob(`drafts/${email}/${slot}-file.pdf`, PDF, { contentType: 'application/pdf' })
-    documents[path] = { ...stored, filename: `${slot}.pdf`, contentType: 'application/pdf', size: PDF.length }
-    dataDocuments[slot] = { __draftFile__: path }
-  }
-  await kv.set(`draft:${email}`, { documents })
-  await kv.set(`draftToken:${token}`, email)
-  // The server's own AI result for the payslip: net pay makes debt-to-income computable.
-  await kv.set(`aiAnalysis:${email}:payslips`, {
-    analysis: { docType: 'payslips', matchesExpectedType: true, legibility: 'clear', extracted: { holderName: 'Ada Banda', netPay: '10000' }, issues: [], authenticityConcerns: [] },
-    filename: 'payslips.pdf',
-    size: PDF.length,
-  })
-  return {
-    token,
-    body: {
-      submissionKey: crypto.randomUUID(),
-      loanType: 'personal',
-      loanData: { amount: 5000, tenure: 6 },
-      consents: { dataProcessing: true, location: true, crb: true },
-      location: { latitude: -15.41, longitude: 28.28, accuracy: 20 },
-      data: {
-        personalInfo: { firstName: 'Ada', middleName: '', surname: 'Banda', phone: '971234567', email, nrc: '123456/78/9', birthDate: '1990-05-01' },
-        employmentInfo: { residentialAddress: 'Lusaka', occupation: 'Teacher', employerName: 'MoE' },
-        documents: dataDocuments,
-      },
-    },
-  }
-}
+const prepareDraft = draftPreparer(kv, putBlob)
 
 const waitFor = async (check, attempts = 50) => {
   for (let index = 0; index < attempts; index += 1) {
@@ -331,7 +294,7 @@ describe('application lifecycle', () => {
 
   it('shows staff their referral banner and never leaks the full name', async () => {
     const { body } = await client(handler).get('/referrals/DEMODSA')
-    expect(body.referrer).toEqual({ firstName: 'Kelvin', role: 'dsa', code: 'DEMODSA' })
+    expect(body.referrer).toEqual({ firstName: 'Kelvin', role: 'dsa', roleLabel: 'Direct sales agent', code: 'DEMODSA' })
   })
 
   it('seeds and clears sample data', async () => {

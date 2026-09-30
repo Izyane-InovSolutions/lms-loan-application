@@ -18,8 +18,10 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
-import { CHANNELS, LOAN_TYPE_LABELS, statusLabel } from '@/config/applications'
-import { roleLabel } from '@/config/roles'
+import { LOAN_TYPE_LABELS, channelLabel, statusLabel } from '@/config/applications'
+import { hasPermission, roleLabel } from '@/config/roles'
+import { SignaturePad } from '@/components/application/SignaturePad'
+import { pendingStages } from '@/config/stages'
 import { findFormMismatches } from '@/utils/documentChecks'
 import { api } from '../api'
 import { useAuth } from '../auth'
@@ -35,10 +37,11 @@ import {
   LmsPanel,
   LocationPanel,
   RulesPanel,
+  SignaturesPanel,
+  StagesPanel,
 } from './CasePanels'
 import { sectionsFor } from './fields'
 
-const CREDIT_ROLES = ['admin', 'loan_officer']
 const withinAssignmentRange = (person, amount) =>
   Number(amount) >= (person.approvalMin ?? 0) && (person.approvalMax == null || Number(amount) <= person.approvalMax)
 
@@ -71,11 +74,23 @@ export function CasePage() {
     return () => clearTimeout(timer)
   }, [state, load])
 
-  const isCredit = CREDIT_ROLES.includes(user.role)
+  // What this person's role lets them do here (Team → Roles); the server checks each again.
+  const may = useMemo(
+    () => ({
+      work: hasPermission(user, 'cases.work'),
+      assign: hasPermission(user, 'cases.assign'),
+      recommend: hasPermission(user, 'cases.recommend'),
+      decide: hasPermission(user, 'cases.decide'),
+      disburse: hasPermission(user, 'cases.disburse'),
+      record: hasPermission(user, 'offers.record'),
+      note: hasPermission(user, 'applications.note'),
+    }),
+    [user]
+  )
   useEffect(() => {
-    if (!isCredit) return
+    if (!may.assign) return
     api('/officers').then(({ officers: list }) => setOfficers(list)).catch(() => {})
-  }, [isCredit])
+  }, [may.assign])
 
   /** Posts a workflow action against the version on screen; a stale screen is told to refresh. */
   const act = useCallback(
@@ -118,13 +133,13 @@ export function CasePage() {
     )
   }
 
-  const { application, documents, events, prescreen, appraisals, consents, locations, crbReports, lmsConfigured, crbProvider, offersRequireAcceptance } = state
+  const { application, documents, events, prescreen, appraisals, consents, locations, crbReports, lmsConfigured, crbProvider, offersRequireAcceptance, offersRequireSignature, signatures, stages } = state
   const eligibleOfficers = officers.filter((officer) => withinAssignmentRange(officer, application.amount))
   const canTake = withinAssignmentRange(user, application.amount)
   const lastRecommendation = appraisals.find((appraisal) => appraisal.kind === 'recommendation')
   const recommendedByMe = lastRecommendation?.officerId === user.id
   const hasCrbConsent = consents.some((consent) => consent.type === 'crb' && consent.granted)
-  const checklistEditable = isCredit && ['submitted', 'in_review', 'info_requested'].includes(application.status)
+  const checklistEditable = may.work && ['submitted', 'in_review', 'info_requested'].includes(application.status)
 
   return (
     <div className="space-y-6">
@@ -144,7 +159,7 @@ export function CasePage() {
             <Fact label="Asked for" value={`${money(application.amount)} over ${application.tenure} months`} />
             {application.approvedAmount ? <Fact label="Approved" value={`${money(application.approvedAmount)} over ${application.approvedTenure} months`} /> : null}
             <Fact label="Monthly instalment" value={money(application.monthlyInstalment)} />
-            <Fact label="Brought in by" value={application.sourcedByName ? `${application.sourcedByName} (${roleLabel(application.sourcedByRole).toLowerCase()})` : CHANNELS[application.channel]} />
+            <Fact label="Brought in by" value={application.sourcedByName ? `${application.sourcedByName} (${roleLabel(application.sourcedByRole).toLowerCase()})` : channelLabel(application.channel)} />
             <Fact label="Officer" value={application.assignedOfficerName || 'Unassigned'} />
             {application.status === 'approved' && application.offerExpiresAt ? (
               <Fact label="Offer" value={`Waiting for the customer, until ${dateTime(application.offerExpiresAt)}`} />
@@ -155,7 +170,8 @@ export function CasePage() {
         <CaseActions
           application={application}
           offersRequireAcceptance={offersRequireAcceptance}
-          isCredit={isCredit}
+          may={may}
+          stages={stages}
           canTake={canTake}
           hasEligibleOfficers={eligibleOfficers.length > 0}
           recommendedByMe={recommendedByMe}
@@ -201,32 +217,43 @@ export function CasePage() {
           </nav>
           {tab === 'details' ? <Details application={application} /> : null}
           {tab === 'documents' ? (
-            <Documents application={application} documents={documents} onUpload={(form) => uploadStaffDocument(id, form, setState, notify)} />
+            <Documents application={application} documents={documents} onUpload={may.note ? (form) => uploadStaffDocument(id, form, setState, notify) : null} />
           ) : null}
-          {tab === 'timeline' ? <Timeline events={events} onNote={(message) => act('note', { message }, 'Note added')} /> : null}
+          {tab === 'timeline' ? <Timeline events={events} onNote={may.note ? (message) => act('note', { message }, 'Note added') : null} /> : null}
         </div>
 
         <aside className="space-y-4">
-          <RulesPanel prescreen={prescreen} canRerun={isCredit} onRerun={() => post('/prescreen', {}, 'Policy rules run again')} />
+          <RulesPanel prescreen={prescreen} canRerun={may.work} onRerun={() => post('/prescreen', {}, 'Policy rules run again')} />
           <AffordabilityPanel application={application} prescreen={prescreen} />
-          {isCredit ? <AiReviewPanel prescreen={prescreen} /> : null}
+          {may.work || may.decide ? <AiReviewPanel prescreen={prescreen} /> : null}
+          <StagesPanel
+            application={application}
+            stages={stages}
+            user={user}
+            requireAcceptance={offersRequireAcceptance}
+            canReopen={may.work}
+            onComplete={(stage) => setDialog({ type: 'complete_stage', stage })}
+            onReopen={(stage) => setDialog({ type: 'reopen_stage', stage })}
+          />
           <ChecklistPanel
             application={application}
+            stages={stages}
             editable={checklistEditable}
             onToggle={(check, done) =>
               done ? setDialog({ type: 'check', check }) : act('check', { check, done: false }, 'Check reopened').catch((error) => notify(error.message, { tone: 'error' }))
             }
           />
           <AppraisalsPanel appraisals={appraisals} />
-          <CrbPanel reports={crbReports} provider={crbProvider} hasConsent={hasCrbConsent} canRun={isCredit} onRun={() => post('/crb', {}, 'Credit report added')} />
-          <LocationPanel points={locations} facts={prescreen?.facts} onLogVisit={(position) => post('/visits', position, 'Visit logged')} />
+          <CrbPanel reports={crbReports} provider={crbProvider} hasConsent={hasCrbConsent} canRun={may.work} onRun={() => post('/crb', {}, 'Credit report added')} />
+          <LocationPanel points={locations} facts={prescreen?.facts} onLogVisit={may.note ? (position) => post('/visits', position, 'Visit logged') : null} />
           <LmsPanel
             application={application}
             lmsConfigured={lmsConfigured}
-            canAct={isCredit}
+            canAct={may.disburse}
             onSend={() => post('/lms/send', {}, 'Sent to the LMS').catch((error) => notify(error.message, { tone: 'error' }))}
             onReconcile={() => setDialog({ type: 'reconcile' })}
           />
+          <SignaturesPanel signatures={signatures} applicationId={application.id} />
           <ConsentPanel consents={consents} />
         </aside>
       </div>
@@ -240,25 +267,30 @@ export function CasePage() {
         user={user}
         act={act}
         post={post}
+        requireSignature={offersRequireSignature}
       />
     </div>
   )
 }
 
 /** Accepting the offer in person: the customer reads back the code emailed to them. */
-function AcceptOfferDialog({ open, onOpenChange, application, user, act }) {
+function AcceptOfferDialog({ open, onOpenChange, application, user, act, requireSignature }) {
   const [code, setCode] = useState('')
   const [sent, setSent] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [name, setName] = useState('')
+  const [signature, setSignature] = useState(null)
 
   useEffect(() => {
     if (open) {
       setCode('')
       setSent(false)
       setError('')
+      setName(application.applicantName || '')
+      setSignature(null)
     }
-  }, [open])
+  }, [open, application.applicantName])
 
   const sendCode = async () => {
     setError('')
@@ -273,7 +305,7 @@ function AcceptOfferDialog({ open, onOpenChange, application, user, act }) {
     setBusy(true)
     setError('')
     try {
-      await act('record_acceptance', { code }, 'Offer accepted')
+      await act('record_acceptance', requireSignature ? { code, signature: { name: name.trim(), ...signature } } : { code }, requireSignature ? 'Offer signed and accepted' : 'Offer accepted')
       onOpenChange(false)
     } catch (submitError) {
       setError(submitError.message)
@@ -286,13 +318,24 @@ function AcceptOfferDialog({ open, onOpenChange, application, user, act }) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Record the customer’s acceptance</DialogTitle>
+          <DialogTitle>{requireSignature ? 'The customer signs and accepts' : 'Record the customer’s acceptance'}</DialogTitle>
           <DialogDescription>
             {money(application.approvedAmount ?? application.amount)} over {application.approvedTenure ?? application.tenure} months, {money(application.monthlyInstalment)} a month, {money(application.totalRepayable)} in total.
-            We email the customer a code; when they read it to you, enter it here.
+            {requireSignature
+              ? ' Go through the offer letter and agreement with the customer (Documents tab). They sign below on this device, then read back the code we email them.'
+              : ' We email the customer a code; when they read it to you, enter it here.'}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
+          {requireSignature ? (
+            <div className="space-y-3 rounded-lg border p-3">
+              <label htmlFor="accept-signer" className="text-sm font-medium text-foreground">
+                The customer’s full name
+              </label>
+              <Input id="accept-signer" value={name} maxLength={100} onChange={(event) => setName(event.target.value)} />
+              <SignaturePad name={name} onChange={setSignature} />
+            </div>
+          ) : null}
           <Button type="button" variant="outline" size="sm" onClick={sendCode}>
             {sent ? 'Send another code' : `Email the code to ${application.applicantEmail}`}
           </Button>
@@ -310,9 +353,9 @@ function AcceptOfferDialog({ open, onOpenChange, application, user, act }) {
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={code.length < 6 || busy}>
+            <Button type="submit" disabled={code.length < 6 || busy || (requireSignature && (!signature || name.trim().length < 3))}>
               {busy ? <Loader2 className="animate-spin" /> : null}
-              Record acceptance
+              {requireSignature ? 'Sign and accept' : 'Record acceptance'}
             </Button>
           </DialogFooter>
         </form>
@@ -348,7 +391,7 @@ function Fact({ label, value }) {
 }
 
 /** The actions that make sense for this case, this person and this moment. */
-function CaseActions({ application, offersRequireAcceptance, isCredit, canTake, hasEligibleOfficers, recommendedByMe, onOpen, onStart, onTake }) {
+function CaseActions({ application, offersRequireAcceptance, may, stages, canTake, hasEligibleOfficers, recommendedByMe, onOpen, onStart, onTake }) {
   const [busy, setBusy] = useState(null)
   const notify = useToast()
   const run = (key, fn) => async () => {
@@ -363,31 +406,24 @@ function CaseActions({ application, offersRequireAcceptance, isCredit, canTake, 
   }
   const { status } = application
   const unassigned = !application.assignedOfficer
-  const withdrawable = ['submitted', 'in_review', 'info_requested', 'pending_approval', 'approved'].includes(status)
+  const open = ['submitted', 'in_review', 'info_requested', 'pending_approval'].includes(status)
+  const withdrawable = [...['submitted', 'in_review', 'info_requested', 'pending_approval'], 'approved'].includes(status)
   const payable = offersRequireAcceptance ? status === 'accepted' : ['approved', 'accepted'].includes(status)
-
-  // Agents and RMs can record a customer's acceptance or withdrawal; the rest is credit staff.
-  if (!isCredit) {
-    return (
-      <div className="flex shrink-0 flex-wrap gap-2">
-        {withdrawable ? (
-          <Button variant="ghost" onClick={() => onOpen({ type: 'withdraw' })}>
-            Withdraw
-          </Button>
-        ) : null}
-        {status === 'approved' && offersRequireAcceptance ? <Button onClick={() => onOpen({ type: 'accept' })}>Record acceptance</Button> : null}
-      </div>
-    )
+  // The workspace's own stages still to do before each step (Settings → Stages).
+  const waitingOn = (phase) => pendingStages(stages, phase, application)
+  const stageHint = (phase) => {
+    const pending = waitingOn(phase)
+    return pending.length ? <p className="max-w-xs self-center text-sm text-muted-foreground">Next: {pending[0].label}</p> : null
   }
 
   return (
     <div className="flex shrink-0 flex-wrap gap-2">
-      {withdrawable ? (
+      {may.record && withdrawable ? (
         <Button variant="ghost" onClick={() => onOpen({ type: 'withdraw' })}>
           Withdraw
         </Button>
       ) : null}
-      {['submitted', 'in_review', 'info_requested', 'pending_approval'].includes(status) && unassigned ? (
+      {may.work && open && unassigned ? (
         canTake ? (
           <Button variant="outline" onClick={run('take', onTake)} disabled={Boolean(busy)}>
             {busy === 'take' ? <Loader2 className="animate-spin" /> : <UserPlus />}
@@ -397,40 +433,45 @@ function CaseActions({ application, offersRequireAcceptance, isCredit, canTake, 
           <p className="self-center text-sm text-muted-foreground">This amount is outside your assignment range.</p>
         )
       ) : null}
-      {['submitted', 'in_review', 'info_requested', 'pending_approval'].includes(status) && !unassigned ? (
+      {may.assign && open ? (
         hasEligibleOfficers ? (
           <Button variant="ghost" onClick={() => onOpen({ type: 'assign' })}>
-            Reassign
+            {unassigned ? 'Assign' : 'Reassign'}
           </Button>
         ) : (
           <p className="self-center text-sm text-muted-foreground">No active loan officers match this amount.</p>
         )
       ) : null}
-      {['submitted', 'in_review'].includes(status) ? (
+      {may.work && ['submitted', 'in_review'].includes(status) ? (
         <Button variant="outline" onClick={() => onOpen({ type: 'request_info' })}>
           Ask the applicant
         </Button>
       ) : null}
-      {status === 'submitted' ? (
+      {may.work && status === 'submitted' ? (
         <Button onClick={run('start', onStart)} disabled={Boolean(busy)}>
           {busy === 'start' ? <Loader2 className="animate-spin" /> : null}
           Start review
         </Button>
       ) : null}
-      {status === 'in_review' ? <Button onClick={() => onOpen({ type: 'recommend' })}>Recommend</Button> : null}
-      {status === 'pending_approval' ? (
-        recommendedByMe ? (
+      {may.recommend && status === 'in_review' ? (
+        waitingOn('review').length ? stageHint('review') : <Button onClick={() => onOpen({ type: 'recommend' })}>Recommend</Button>
+      ) : null}
+      {may.decide && status === 'pending_approval' ? (
+        waitingOn('approval').length ? (
+          stageHint('approval')
+        ) : recommendedByMe ? (
           <p className="max-w-xs self-center text-sm text-muted-foreground">You recommended this case, so a colleague makes the decision.</p>
         ) : (
           <Button onClick={() => onOpen({ type: 'decide' })}>Decide</Button>
         )
       ) : null}
-      {status === 'approved' && offersRequireAcceptance ? (
+      {may.record && status === 'approved' && offersRequireAcceptance ? (
         <Button variant="outline" onClick={() => onOpen({ type: 'accept' })}>
           Record acceptance
         </Button>
       ) : null}
-      {payable ? (
+      {may.disburse && payable && waitingOn('closing').length ? stageHint('closing') : null}
+      {may.disburse && payable && !waitingOn('closing').length ? (
         <Button variant="outline" onClick={() => onOpen({ type: 'disbursed' })}>
           <CheckCircle2 />
           Mark as paid out
@@ -440,7 +481,7 @@ function CaseActions({ application, offersRequireAcceptance, isCredit, canTake, 
   )
 }
 
-function CaseDialogs({ dialog, onClose, application, lastRecommendation, officers, user, act, post }) {
+function CaseDialogs({ dialog, onClose, application, lastRecommendation, officers, user, act, post, requireSignature }) {
   const open = (type) => dialog?.type === type
   const common = (type) => ({ open: open(type), onOpenChange: (value) => !value && onClose() })
   return (
@@ -460,6 +501,22 @@ function CaseDialogs({ dialog, onClose, application, lastRecommendation, officer
         fields={[{ name: 'note', label: 'What did you check?', type: 'textarea', hint: 'For example: NRC original seen, matches photo.' }]}
         submitLabel="Mark as done"
         onSubmit={(values) => act('check', { check: dialog?.check, done: true, note: values.note }, 'Check recorded')}
+      />
+      <ActionDialog
+        {...common('complete_stage')}
+        title={`Mark “${dialog?.stage?.label || ''}” as done`}
+        description={dialog?.stage?.description || 'Recorded with your name and the time, on the case timeline.'}
+        fields={[{ name: 'note', label: 'Note (optional)', type: 'textarea', rows: 3, optional: true, hint: 'For example: committee minutes reference, who you spoke to.' }]}
+        submitLabel="Mark as done"
+        onSubmit={(values) => act('complete_stage', { stage: dialog?.stage?.id, note: values.note }, `${dialog?.stage?.label} done`)}
+      />
+      <ActionDialog
+        {...common('reopen_stage')}
+        title={`Reopen “${dialog?.stage?.label || ''}”?`}
+        description="It, and any later stage in the same part of the flow, will need doing again."
+        fields={[{ name: 'reason', label: 'Why?', type: 'textarea', rows: 3 }]}
+        submitLabel="Reopen"
+        onSubmit={(values) => act('reopen_stage', { stage: dialog?.stage?.id, reason: values.reason }, 'Stage reopened')}
       />
       <ActionDialog
         {...common('recommend')}
@@ -540,7 +597,7 @@ function CaseDialogs({ dialog, onClose, application, lastRecommendation, officer
         tone="destructive"
         onSubmit={(values) => act('withdraw', values, 'Withdrawn')}
       />
-      <AcceptOfferDialog open={open('accept')} onOpenChange={(value) => !value && onClose()} application={application} user={user} act={act} />
+      <AcceptOfferDialog open={open('accept')} onOpenChange={(value) => !value && onClose()} application={application} user={user} act={act} requireSignature={requireSignature} />
       <ActionDialog
         {...common('reconcile')}
         title="Is it in the LMS?"
@@ -635,7 +692,7 @@ function Documents({ application, documents, onUpload }) {
                   <FileText className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-foreground">{document.label}</span>
-                    <span className="block text-xs text-muted-foreground">{document.source === 'applicant' ? 'From the application' : document.source === 'info_response' ? 'Sent after a request' : 'Added by staff'}</span>
+                    <span className="block text-xs text-muted-foreground">{document.source === 'applicant' ? 'From the application' : document.source === 'info_response' ? 'Sent after a request' : document.source === 'system' ? (document.meta?.signed ? 'Signed by the customer' : `Generated, template version ${document.meta?.templateVersion ?? '?'}`) : 'Added by staff'}</span>
                   </span>
                   {flagged ? <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" aria-label="Has findings" /> : null}
                 </button>
@@ -643,12 +700,16 @@ function Documents({ application, documents, onUpload }) {
             )
           })}
         </ul>
-        <input ref={input} type="file" accept=".pdf,image/*" className="sr-only" onChange={upload} aria-label="Add a document" />
-        <Button variant="outline" size="sm" className="w-full" onClick={() => input.current?.click()} disabled={uploading}>
-          {uploading ? <Loader2 className="animate-spin" /> : <Paperclip />}
-          Add a document
-        </Button>
-        {error ? <p className="text-xs text-destructive">{error}</p> : null}
+        {onUpload ? (
+          <>
+            <input ref={input} type="file" accept=".pdf,image/*" className="sr-only" onChange={upload} aria-label="Add a document" />
+            <Button variant="outline" size="sm" className="w-full" onClick={() => input.current?.click()} disabled={uploading}>
+              {uploading ? <Loader2 className="animate-spin" /> : <Paperclip />}
+              Add a document
+            </Button>
+            {error ? <p className="text-xs text-destructive">{error}</p> : null}
+          </>
+        ) : null}
       </div>
 
       {selected ? (
@@ -777,7 +838,7 @@ function Timeline({ events, onNote }) {
 
   return (
     <div className="space-y-5">
-      <form onSubmit={submit} className="rounded-xl border bg-card p-4">
+      {onNote ? <form onSubmit={submit} className="rounded-xl border bg-card p-4">
         <label htmlFor="case-note" className="text-sm font-medium text-foreground">
           Add an internal note
         </label>
@@ -796,7 +857,7 @@ function Timeline({ events, onNote }) {
             Add note
           </Button>
         </div>
-      </form>
+      </form> : null}
       <ol className="relative space-y-5 before:absolute before:inset-y-2 before:left-[5px] before:w-px before:bg-border">
         {events.map((event) => {
           const Icon = EVENT_ICONS[event.type]

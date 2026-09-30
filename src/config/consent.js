@@ -16,6 +16,13 @@ export const CONSENT_NOTICES = {
       'Share my current location with this application. It helps prevent someone applying in my name and is only seen by ' +
       'staff reviewing it. This is optional.',
   },
+  // Asked on the first step, before anything is saved to our servers.
+  draft_contact: {
+    version: 'draft-2026-09',
+    text:
+      'I agree that the iZyane team may see this application while I fill it in, and contact me by phone or email to ' +
+      'help me finish it. We save your progress as you go; an unfinished application is deleted after 7 days without changes.',
+  },
   crb: {
     version: 'crb-2026-09',
     text:

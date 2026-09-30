@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { acceptTermsAndSubmit, attachAll, choose, customerSignIn, fill, next, signInAs, typeDate } from './helpers.js'
+import { acceptTermsAndSubmit, attachAll, choose, customerSignIn, emailedCode, fill, next, signInAs, typeDate } from './helpers.js'
 
 /*
  * The whole life of a personal loan, as people use it: an applicant arrives through an
@@ -32,6 +32,10 @@ test('a referred personal loan goes from application to payout', async ({ browse
   await choose(applicant, 'personalInfo.gender')
   await choose(applicant, 'personalInfo.maritalStatus')
   await typeDate(applicant, '05011990')
+  // Without agreeing to be helped, the first step doesn't go on.
+  await applicant.getByRole('button', { name: /^Continue/ }).click()
+  await expect(applicant.getByText('Please agree that we may help you finish your application.').first()).toBeVisible()
+  await applicant.getByLabel(/help me finish it/).check()
   await next(applicant)
 
   await fill(applicant, 'employmentInfo.residentialAddress', 'Plot 12, Kabulonga, Lusaka')
@@ -47,6 +51,20 @@ test('a referred personal loan goes from application to payout', async ({ browse
 
   await attachAll(applicant)
   await next(applicant)
+
+  // Unfinished, it is already on the referring agent's pipeline as a draft.
+  const agent = await browser.newPage()
+  await signInAs(agent, 'Direct sales agent')
+  await agent.goto('/admin/pipeline')
+  await expect(async () => {
+    await agent.reload()
+    await expect(agent.getByRole('button', { name: /Ada Banda/ })).toBeVisible({ timeout: 2000 })
+  }).toPass({ timeout: 30000 })
+  await agent.getByRole('button', { name: /Ada Banda/ }).click()
+  await expect(agent.getByRole('dialog').getByText(/Agreed to be contacted/)).toBeVisible()
+  await expect(agent.getByRole('button', { name: 'Continue with the customer' })).toBeVisible()
+  await agent.close()
+
   await next(applicant)
 
   await applicant.getByLabel(/Share my location/).check()
@@ -100,12 +118,30 @@ test('a referred personal loan goes from application to payout', async ({ browse
   await applicant.goto('/my-applications')
   await applicant.getByRole('button', { name: /K4,000 personal loan/ }).click()
   await expect(applicant.getByRole('heading', { name: 'Your loan offer' })).toBeVisible()
-  await applicant.getByLabel(/I accept this loan/).check()
-  await applicant.getByRole('button', { name: 'Accept the offer' }).click()
+  // They read the generated offer letter and agreement, then sign and confirm with a code.
+  await expect(applicant.getByText('Offer letter', { exact: true })).toBeVisible()
+  await expect(applicant.getByText('Loan agreement', { exact: true })).toBeVisible()
+  await applicant.getByLabel(/I have read the offer letter/).check()
+  await applicant.locator('#sign-name').fill('Ada Banda')
+  const padBox = applicant.getByRole('img', { name: /Sign here/ })
+  await padBox.scrollIntoViewIfNeeded()
+  const pad = await padBox.boundingBox()
+  await applicant.mouse.move(pad.x + 40, pad.y + pad.height * 0.6)
+  await applicant.mouse.down()
+  for (let step = 1; step <= 12; step += 1) await applicant.mouse.move(pad.x + 40 + step * 25, pad.y + pad.height * (0.6 - Math.sin(step / 2) * 0.25))
+  await applicant.mouse.up()
+  await applicant.getByRole('button', { name: 'Email me a code' }).click()
+  await applicant.locator('#sign-code').fill(await emailedCode(EMAIL))
+  await applicant.screenshot({ path: 'test-results/offer-signing.png', fullPage: true })
+  await applicant.getByRole('button', { name: 'Sign and accept' }).click()
   await expect(applicant.getByText('Offer accepted').first()).toBeVisible()
+  await expect(applicant.getByText('Loan agreement (signed)')).toBeVisible()
+
+  // The case keeps the signature and the signed copies.
+  await approver.reload()
+  await expect(approver.getByRole('img', { name: 'Signature of Ada Banda' })).toBeVisible()
 
   // And it is paid out.
-  await approver.reload()
   await approver.getByRole('button', { name: 'Mark as paid out' }).click()
   await approver.getByRole('dialog').getByRole('button', { name: 'Mark as paid out' }).click()
   await expect(approver.getByText('Disbursed').first()).toBeVisible()
