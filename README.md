@@ -164,26 +164,131 @@ never shows them again.
 
 ## How an application moves
 
+### The journey at a glance
+
+```mermaid
+flowchart LR
+    A["Customer applies online<br/>or an agent / RM fills it in"] --> B["Credit rules prescreen<br/>pass · refer · decline"]
+    B --> C["Loan officer reviews<br/>checklist, requests, visits, CRB"]
+    C --> D["Officer recommends"]
+    D --> E["A second person decides<br/>(four-eyes)"]
+    E -->|Approved| F["Customer accepts<br/>the offer"]
+    E -->|Declined| X(["Closed: declined"])
+    F --> G["Handed to the LMS"]
+    G --> H(["Paid out"])
+```
+
+### Who does what at each step
+
+```mermaid
+flowchart TB
+    subgraph Front["Bringing the application in"]
+        CU["Customer<br/>applies on /apply"]
+        AG["DSA or RM<br/>refers a customer (/?ref=CODE)<br/>or fills in the application with them"]
+    end
+    subgraph Sys["System"]
+        PS["Prescreen with the published credit rules<br/>+ AI notes (never change the result)"]
+    end
+    subgraph Credit["Credit team"]
+        LO["Loan officer<br/>takes the case, works the checklist,<br/>asks the customer for more, recommends"]
+        AP["Approver: a different officer or an admin<br/>approves, declines or sends back,<br/>within their approval limit"]
+    end
+    subgraph Close["Closing the loan"]
+        OK["Customer accepts on /my-applications<br/>or staff record acceptance with the customer's emailed code"]
+        LMS["LMS pays out, or an officer<br/>marks the payout"]
+    end
+    CU --> PS
+    AG --> PS
+    PS --> LO
+    LO --> AP
+    AP -->|send back| LO
+    AP -->|approve| OK
+    OK --> LMS
+    SM["Sales manager<br/>watches the whole pipeline<br/>and team performance"] -.-> Front
+    SM -.-> Credit
+```
+
+### Statuses
+
+Each application is always in one of these statuses. The customer sees a simpler label,
+shown in brackets.
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    state "In review" as InReview
+    state "Information requested" as InfoRequested
+    state "Awaiting approval" as PendingApproval
+    state "Offer accepted" as Accepted
+    state "Offer expired" as Expired
+    [*] --> Submitted: customer or agent submits
+    Submitted --> Declined: credit rules decline<br/>(only if auto-decline is on)
+    Submitted --> InReview: officer starts the review
+    Submitted --> InfoRequested: officer asks for more
+    InReview --> InfoRequested: officer asks for more
+    InfoRequested --> InReview: customer answers<br/>(case already has an officer)
+    InfoRequested --> Submitted: customer answers<br/>(no officer yet)
+    InReview --> PendingApproval: officer recommends<br/>(four-eyes on)
+    InReview --> Approved: officer decides<br/>(four-eyes off)
+    InReview --> Declined: officer decides<br/>(four-eyes off)
+    PendingApproval --> InReview: approver sends it back
+    PendingApproval --> Approved: approver approves
+    PendingApproval --> Declined: approver declines
+    Approved --> Accepted: customer accepts
+    Approved --> Expired: not accepted in time
+    Approved --> Disbursed: paid out<br/>(acceptance off)
+    Accepted --> Disbursed: LMS or officer<br/>records the payout
+    Submitted --> Withdrawn
+    InReview --> Withdrawn
+    InfoRequested --> Withdrawn
+    PendingApproval --> Withdrawn
+    Approved --> Withdrawn: customer turns<br/>the offer down
+    Declined --> [*]
+    Withdrawn --> [*]
+    Expired --> [*]
+    Disbursed --> [*]
+```
+
+| Status | Customer sees | Meaning |
+| --- | --- | --- |
+| Submitted | Received | Waiting for a loan officer |
+| In review | Being reviewed | An officer is checking details and documents |
+| Information requested | We need something from you | The customer must answer on `/my-applications` |
+| Awaiting approval | Being reviewed | Recommended, waiting for a second person's decision |
+| Approved | Approved | An offer is waiting for the customer (14 days by default) |
+| Offer accepted | Offer accepted | Ready to pay out |
+| Disbursed | Paid out | Done |
+| Declined, Withdrawn, Offer expired | Not approved, Withdrawn, Offer expired | Closed |
+
+### Step by step
+
 1. **Submitted.** Online (optionally through an agent's referral link, `/?ref=CODE`) or
    filled in by an agent or RM with the customer, who confirms with an emailed code.
    The server copies the documents out of the draft and records consent (and location,
-   if shared). It replies with a reference, and a retried submit never files twice.
-   Officers are notified.
+   if shared). It replies with a reference such as `LOS-2026-000123`, and a retried
+   submit never files twice. Officers are notified.
 2. **Prescreened.** The server computes facts from the application and its own
    document checks: debt-to-income, business age, loan-to-order, name and NRC
    mismatches, and so on. The published **credit rules** give *pass*, *refer* or
-   *decline*. The AI review explains the result and never changes it.
-3. **Reviewed.** A loan officer takes the case, works through the verification
-   checklist, can ask the applicant for more (they answer on `/my-applications`), log
-   field visits, and pull a credit report when a bureau is connected and the applicant
-   consented.
-4. **Decided.** The officer recommends; with four-eyes on (the default) a different
-   person approves or declines, within the officer approval limit. The applicant is
-   emailed (and texted, if SMS is on) and never sees the internal rationale.
+   *decline*. The result guides the officer; a *decline* only closes the case by itself
+   when **auto-decline** is switched on (off by default). The AI review explains the
+   result and never changes it.
+3. **Reviewed.** A loan officer takes the case (or is assigned it), works through the
+   verification checklist, can ask the applicant for more (they answer on
+   `/my-applications`), log field visits, and pull a credit report when a bureau is
+   connected and the applicant consented. Officers only get cases inside their approval
+   range.
+4. **Recommended and decided.** The officer recommends approve or decline, with a reason
+   and, for an approval, the amount, tenure and any conditions. Required checklist items
+   must be done first. With **four-eyes** on (the default), a different officer or an
+   admin then approves, declines or sends the case back. Nobody can decide a case they
+   recommended or brought in, and nobody can approve an amount outside their own
+   approval limit. The applicant is emailed (and texted, if SMS is on) and never sees
+   the internal rationale.
 5. **Accepted.** With acceptance on (the default), the customer reviews the offer (it
    may differ from what they asked for) and accepts it, or staff record acceptance
    using the customer's emailed code. Unaccepted offers lapse after the set number of
-   days. Customers can withdraw at any point before this.
+   days (14 by default). Customers can withdraw at any point before acceptance.
 6. **Handed to the LMS and paid out.** If an LMS is connected, the loan goes to it (on
    acceptance, or on submit if chosen). Every hand-off carries our reference, so a
    resend is matched instead of duplicated. A hand-off with no reply waits for someone
@@ -191,7 +296,11 @@ never shows them again.
    LMS, an officer marks the payout.
 
 Every sign-in, every change and every staff read of an application goes into the audit
-log.
+log. Two people working on the same case can't overwrite each other: an action taken on
+an out-of-date screen is refused with a prompt to refresh.
+
+The switches mentioned above (four-eyes, acceptance and its expiry, auto-decline, LMS
+hand-off timing) are in **Settings**. Approval limits are set per person in **Team**.
 
 ## Roles and what they see
 
@@ -199,14 +308,93 @@ Permissions are defined in `src/config/roles.js`. Which applications each role c
 is defined in one place: `scopeApplications` in `api/_lib/applications.js`. The server
 enforces both on every request.
 
+### How the roles fit together
+
+```mermaid
+flowchart TB
+    ADM["Administrator<br/>users, rules, settings, audit"]
+    subgraph CreditTeam["Credit (decides loans)"]
+        LO["Loan officers<br/>review, recommend, approve within limit"]
+    end
+    subgraph SalesTeam["Sales (brings loans in)"]
+        SM["Sales manager<br/>oversees all of sales"]
+        RM["Relationship managers<br/>own customers and a team of agents"]
+        DSA["Direct sales agents<br/>refer and fill in applications"]
+        RM -->|manages| DSA
+    end
+    CUS["Customers<br/>apply, answer requests, accept offers"]
+    ADM --> CreditTeam
+    ADM --> SalesTeam
+    SM -.->|oversees| RM
+    SM -.->|oversees| DSA
+    DSA -->|bring in| CUS
+    RM -->|bring in| CUS
+    CUS -->|applications| LO
+```
+
+Sales and credit are kept apart on purpose: the people who bring a loan in can follow
+it, but can't decide it.
+
+### What each role can do
+
 | Role | Sees | Can |
 | --- | --- | --- |
-| Admin | Everything | Manage users, rules, settings and data requests; decide any amount |
-| Loan officer | All applications | Take, review and recommend cases; decide up to the approval limit |
-| Sales manager | All applications | Read the pipeline, dashboards and rules |
+| Admin | Everything | Manage users, rules, settings, audit log, data requests and system health; review and decide any case (within their own approval limit, if one is set) |
+| Loan officer | All applications | Take, review and recommend cases; approve or decline others' recommendations within their approval limit; send to the LMS; mark payouts |
+| Sales manager | All applications, all staff | Follow the pipeline, dashboards and team; read the credit rules; add notes, documents and field visits; record acceptance or withdrawal for a customer |
 | Relationship manager | Their own, plus their agents' applications | Refer customers, fill in applications, record acceptance, view their team |
 | Direct sales agent | Applications they brought in | Refer customers, fill in applications, record acceptance |
 | Customer | Their own applications | Follow progress, answer requests, accept or turn down offers, withdraw |
+
+### The sales manager
+
+The sales manager runs the sales side: the RMs and DSAs who bring customers in. It is a
+**watch and support** role, not a credit role.
+
+**What they get:**
+
+- **Every application.** The same full view as a loan officer, to follow how the team's
+  business is moving.
+- **The whole pipeline, by stage** (*Pipeline* page). Where cases are piling up, such as
+  many waiting on customers under *Information requested*.
+- **Team performance on the dashboard.** A leaderboard of agents and RMs by applications
+  brought in, approvals, conversion rate and approved value, plus volume, channel and
+  loan-type trends.
+- **The team directory** (*Team* page). All staff, to see who reports to which RM. They
+  can't invite or change anyone; that's the admin's job.
+- **The credit rules, read-only** (*Policy rules*). They know why applications are
+  referred or declined, and can coach agents on what to collect.
+
+**What they can do on a case:** add notes, add documents collected from the customer,
+log field visits, and record a customer's acceptance (with the customer's emailed code)
+or withdrawal.
+
+**What they can't do:** take, review, recommend, approve or decline cases, re-run the
+prescreen, send to the LMS or mark payouts. They also can't fill in applications or
+share a referral link; business is credited to the DSA or RM who brought it in. Settings,
+the audit log and user management stay with the admin.
+
+**Typical day:** check the dashboard for this week's submissions and conversion, open
+the pipeline to find cases stuck on customer information, and ask the RM or agent
+concerned to chase the customer.
+
+### Relationship manager and direct sales agent
+
+- A **DSA** brings customers in: shares their referral link or code, or fills in the
+  application with the customer (who confirms with an emailed code). They see only the
+  applications they brought in, can add notes and documents, and record acceptance.
+- An **RM** does the same, and also manages a team of DSAs (set by the admin in *Team*).
+  They see their own applications, their agents' applications, and customers assigned
+  to them.
+
+### Loan officer
+
+Takes or is assigned cases within their approval range, works the checklist, requests
+information, logs visits and credit checks, and recommends. With four-eyes on, a
+colleague or admin decides. An officer can also decide a colleague's recommendation, as
+long as the amount is inside their own limit.
+
+### Sign-in
 
 Staff sign in with email and password, optionally with two-step sign-in (an
 authenticator app, plus one-time recovery codes). Accounts are created only by admin
