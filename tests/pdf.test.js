@@ -25,7 +25,7 @@ describe('templates', () => {
 
   it('renders a written template across pages, whatever characters it contains', async () => {
     const body = `Dear {{customer_name}},\n\n## The loan\n- Amount: {{amount}}\n\n${'word '.repeat(900)}\nEmoji 🙂, 中文, “quotes” – dashes.`
-    const { bytes } = await renderTextTemplate({ title: 'Loan offer', body, values: SAMPLE_VALUES, footer: 'iZyane · LOS-1' })
+    const { bytes } = await renderTextTemplate({ title: 'Loan offer', body, values: SAMPLE_VALUES, footer: 'Loan Origination · LOS-1' })
     expect(await pages(bytes)).toBeGreaterThan(1)
   })
 })

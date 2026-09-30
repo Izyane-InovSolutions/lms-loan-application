@@ -117,7 +117,7 @@ function Sidebar({ user, demoEnabled, theme, onToggleTheme }) {
           <Logo size="sm" showWordmark={false} />
           <span className="leading-tight">
             <span className="block text-[0.95rem] font-semibold">Loan workspace</span>
-            <span className="block text-xs text-white/55">iZyane origination</span>
+            <span className="block text-xs text-white/55">Loan Origination</span>
           </span>
         </Link>
         <span className="hidden lg:block">

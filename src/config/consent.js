@@ -5,9 +5,9 @@
  */
 export const CONSENT_NOTICES = {
   data_processing: {
-    version: 'dp-2026-09',
+    version: 'dp-2026-09b',
     text:
-      'I agree that iZyane may use the information and documents in this application to assess it, verify my identity and ' +
+      'I agree that Loan Origination may use the information and documents in this application to assess it, verify my identity and ' +
       'income, and manage any loan that follows, as described in the terms. Staff access is recorded.',
   },
   location: {
@@ -18,14 +18,14 @@ export const CONSENT_NOTICES = {
   },
   // Asked on the first step, before anything is saved to our servers.
   draft_contact: {
-    version: 'draft-2026-09',
+    version: 'draft-2026-09b',
     text:
-      'I agree that the iZyane team may see this application while I fill it in, and contact me by phone or email to ' +
+      'I agree that the Loan Origination team may see this application while I fill it in, and contact me by phone or email to ' +
       'help me finish it. We save your progress as you go; an unfinished application is deleted after 7 days without changes.',
   },
   crb: {
-    version: 'crb-2026-09',
+    version: 'crb-2026-09b',
     text:
-      'I authorise iZyane to request my credit report from a licensed credit reference bureau to assess this application.',
+      'I authorise Loan Origination to request my credit report from a licensed credit reference bureau to assess this application.',
   },
 }

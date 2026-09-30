@@ -16,7 +16,7 @@ export function SiteHeader({ onApply, onResume }) {
       <div className="container flex h-16 items-center justify-between gap-6">
         <a href="#top" className="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
           <Logo />
-          <span className="sr-only">iZyane Loan Portal — back to top</span>
+          <span className="sr-only">Loan Origination — back to top</span>
         </a>
 
         <nav aria-label="Primary" className="hidden items-center gap-1 lg:flex">

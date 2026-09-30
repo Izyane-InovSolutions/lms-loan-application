@@ -46,7 +46,7 @@ export default function MyApplicationsPage() {
         <div className="container flex h-16 items-center justify-between">
           <Link to="/" className="flex items-center gap-2.5 font-semibold">
             <Logo size="sm" showWordmark={false} />
-            iZyane loans
+            Loan Origination
           </Link>
           <Button asChild variant="ghost" size="sm">
             <Link to="/">Home</Link>

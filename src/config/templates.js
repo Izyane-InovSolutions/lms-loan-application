@@ -42,7 +42,7 @@ export const MERGE_FIELDS = [
   { key: 'offer_expiry_date', label: 'Date the offer lapses', sample: '14 October 2026' },
   { key: 'decision_date', label: 'Date approved', sample: '30 September 2026' },
   { key: 'approved_by', label: 'Who approved it', sample: 'Mwila Sakala' },
-  { key: 'lender_name', label: 'Lender’s name', sample: 'iZyane' },
+  { key: 'lender_name', label: 'Lender’s name', sample: 'Loan Origination' },
   { key: 'today', label: 'Today’s date', sample: '30 September 2026' },
 ]
 

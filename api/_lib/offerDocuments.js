@@ -19,7 +19,7 @@ const { applications, applicationDocuments, appraisals } = schema
  * stored file, fingerprinted with SHA-256.
  */
 
-export const LENDER_NAME = () => (process.env.LENDER_NAME || 'iZyane').trim()
+export const LENDER_NAME = () => (process.env.LENDER_NAME || 'Loan Origination').trim()
 
 const kwacha = (value) =>
   `K${Number(value || 0).toLocaleString('en-ZM', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`

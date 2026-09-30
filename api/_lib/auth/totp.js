@@ -64,7 +64,7 @@ export const verifyTotp = (secret, code, now = Date.now()) => {
   return [-1, 0, 1].some((drift) => crypto.timingSafeEqual(Buffer.from(codeAt(secret, counter + drift)), Buffer.from(candidate)))
 }
 
-export const otpauthUrl = ({ secret, email, issuer = 'iZyane loans' }) =>
+export const otpauthUrl = ({ secret, email, issuer = 'Loan Origination' }) =>
   `otpauth://totp/${encodeURIComponent(`${issuer}:${email}`)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=${DIGITS}&period=${STEP_SECONDS}`
 
 const hashCode = (code) => crypto.createHash('sha256').update(code.replace(/-/g, '').toUpperCase()).digest('hex')

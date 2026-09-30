@@ -21,7 +21,7 @@ export function Logo({ className, showWordmark = true, size = 'default' }) {
       </span>
       {/* {showWordmark ? (
         <span className="flex flex-col leading-none">
-          <span className={cn('font-semibold tracking-tight', size === 'sm' ? 'text-sm' : 'text-base')}>iZyane</span>
+          <span className={cn('font-semibold tracking-tight', size === 'sm' ? 'text-sm' : 'text-base')}>Loan Origination</span>
           <span className="mt-1 text-[0.68rem] font-medium uppercase tracking-[0.14em] text-muted-foreground">
             Loan Portal
           </span>

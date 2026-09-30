@@ -1,4 +1,4 @@
-# iZyane Loan Origination
+# Loan Origination
 
 A loan origination system for personal and business loans in Zambia. Customers apply
 online, or an agent fills in the application with them. The credit rules prescreen every

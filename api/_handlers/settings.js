@@ -248,7 +248,7 @@ const testSms = async (req) => {
   const to = toZambianE164(req.body?.phone)
   if (!to) fail(400, 'Enter a Zambian mobile number, e.g. 0971234567.', 'invalid_input')
   try {
-    await sms.send(to, 'Test message from the iZyane loan workspace.')
+    await sms.send(to, 'Test message from the Loan Origination workspace.')
     return { ok: true, message: `Sent to ${to}.` }
   } catch (error) {
     return { ok: false, message: error.message }

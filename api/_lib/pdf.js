@@ -172,7 +172,7 @@ const addFooters = (doc, font, label) => {
 export const renderTextTemplate = async ({ title, body, values, footer }) => {
   const doc = await PDFDocument.create()
   doc.setTitle(fillPlaceholders(title, values))
-  doc.setProducer('iZyane loan workspace')
+  doc.setProducer('Loan Origination workspace')
   const writer = await createWriter(doc)
   writer.newPage()
   writer.title(fillPlaceholders(title, values))
