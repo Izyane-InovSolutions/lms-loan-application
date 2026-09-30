@@ -56,13 +56,20 @@ const codeAt = (secret, counter) => {
 
 export const totpCode = (secret, now = Date.now()) => codeAt(secret, Math.floor(now / 1000 / STEP_SECONDS))
 
-/** True if `code` is valid now, or one step either side (clock drift). */
-export const verifyTotp = (secret, code, now = Date.now()) => {
+/**
+ * The time step `code` belongs to if it is valid now, or one step either side (clock
+ * drift); null otherwise. Sign-in remembers the step so the same code can't be used twice.
+ */
+export const matchTotp = (secret, code, now = Date.now()) => {
   const candidate = String(code || '').replace(/\s+/g, '')
-  if (!/^\d{6}$/.test(candidate)) return false
+  if (!/^\d{6}$/.test(candidate)) return null
   const counter = Math.floor(now / 1000 / STEP_SECONDS)
-  return [-1, 0, 1].some((drift) => crypto.timingSafeEqual(Buffer.from(codeAt(secret, counter + drift)), Buffer.from(candidate)))
+  const drift = [-1, 0, 1].find((step) => crypto.timingSafeEqual(Buffer.from(codeAt(secret, counter + step)), Buffer.from(candidate)))
+  return drift === undefined ? null : counter + drift
 }
+
+/** True if `code` is valid now, or one step either side (clock drift). */
+export const verifyTotp = (secret, code, now = Date.now()) => matchTotp(secret, code, now) !== null
 
 export const otpauthUrl = ({ secret, email, issuer = 'Loan Origination' }) =>
   `otpauth://totp/${encodeURIComponent(`${issuer}:${email}`)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=${DIGITS}&period=${STEP_SECONDS}`

@@ -61,8 +61,9 @@ export function LoginPage() {
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [demoPending, setDemoPending] = useState(null)
-  // Set after a correct password when the account uses two-step sign-in.
-  const [challenge, setChallenge] = useState(null)
+  // Set after a correct password when the account uses two-step sign-in — or handed over
+  // by the set-password page, since a reset link alone doesn't sign such an account in.
+  const [challenge, setChallenge] = useState(location.state?.challenge || null)
   const [code, setCode] = useState('')
 
   const destination = location.state?.from || '/admin'
@@ -108,7 +109,10 @@ export function LoginPage() {
 
   if (challenge) {
     return (
-      <AuthFrame title="Enter your code" description="Open your authenticator app and enter the six-digit code for the loan workspace. Lost your phone? Enter one of your recovery codes.">
+      <AuthFrame
+        title="Enter your code"
+        description={`${location.state?.challenge ? 'Your new password is saved. ' : ''}Open your authenticator app and enter the six-digit code for the loan workspace. Lost your phone? Enter one of your recovery codes.`}
+      >
         <form onSubmit={handleCode} className="space-y-5" noValidate>
           <Field id="login-code" label="Code">
             <Input
@@ -304,7 +308,11 @@ export function SetPasswordPage() {
     setError('')
     setSubmitting(true)
     try {
-      await api('/auth/password/set', { method: 'POST', body: { token, password } })
+      const result = await api('/auth/password/set', { method: 'POST', body: { token, password } })
+      if (result?.twoFactorRequired) {
+        navigate('/admin/login', { replace: true, state: { challenge: result.challenge } })
+        return
+      }
       await acceptSession()
       navigate('/admin', { replace: true })
     } catch (submitError) {

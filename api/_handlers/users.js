@@ -259,7 +259,10 @@ const sendPasswordLink = async (req, res, { params }) => {
     entityId: user.id,
     detail: { emailed: link.emailed },
   })
-  return { emailed: link.emailed, purpose, inviteUrl: link.emailed ? undefined : link.url }
+  // Only an unused invite is handed back when the email fails. A reset link for an account
+  // in use would let whoever holds it take the account over and act as that person — a
+  // second approver, say — so it only ever goes to the person's own mailbox.
+  return { emailed: link.emailed, purpose, inviteUrl: link.emailed || purpose !== 'invite' ? undefined : link.url }
 }
 
 /** Active team leads, for the "reports to" picker. */

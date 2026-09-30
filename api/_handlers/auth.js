@@ -1,11 +1,11 @@
-import crypto from 'node:crypto'
 import { and, desc, eq, gt, inArray, isNull, ne } from 'drizzle-orm'
 import kv from '../_lib/kv.js'
 import { getDb, schema } from '../_lib/db/client.js'
 import { fail, text, email as parseEmail, appOrigin, parseCookies } from '../_lib/http.js'
+import { countAttempt, ipOf, rateKey, underLimit } from '../_lib/rateLimit.js'
 import { requireUser } from '../_lib/rbac.js'
 import { decryptSecret, encryptSecret } from '../_lib/secrets.js'
-import { newRecoveryCodes, newTotpSecret, otpauthUrl, useRecoveryCode, verifyTotp } from '../_lib/auth/totp.js'
+import { matchTotp, newRecoveryCodes, newTotpSecret, otpauthUrl, useRecoveryCode, verifyTotp } from '../_lib/auth/totp.js'
 import { needsTwoFactorSetup } from '../_lib/auth/twoFactor.js'
 import { hashPassword, verifyPassword, verifyAgainstDummy, validatePassword } from '../_lib/auth/password.js'
 import { newToken, hashToken } from '../_lib/auth/tokens.js'
@@ -36,14 +36,18 @@ export const demoEnabled = () =>
   process.env.LOS_DEMO_ENABLED === 'true' ||
   (!process.env.VERCEL && process.env.NODE_ENV !== 'production' && process.env.LOS_DEMO_ENABLED !== 'false')
 
-const rateKey = (scope, value) => `los:${scope}:${crypto.createHash('sha256').update(value).digest('hex')}`
-
-/** Counts an attempt; true while under the limit. Fixed window, keyed by the email so one account cannot be brute-forced. */
-const underLimit = async (key, max, windowSeconds) => {
-  const count = await kv.incr(key)
-  if (count === 1) await kv.expire(key, windowSeconds)
-  return count <= max
-}
+/*
+ * Sign-in limits. Failures are counted per account *and address*, so guessing one
+ * account's password is slow, yet a stranger elsewhere can't lock its owner out; a
+ * separate per-address ceiling stops one client working through many accounts.
+ */
+const loginKey = (req, email) => rateKey('login', `${email}|${ipOf(req)}`)
+const MAX_LOGIN_FAILURES_PER_IP = 50
+// Wrong second-step codes per account, across challenges: a correct password starts a new
+// challenge each time, so the per-challenge limit alone would never run out.
+const MAX_TWO_FACTOR_FAILURES = 10
+const twoFactorFailuresKey = (userId) => rateKey('2fa-fail', userId)
+const usedTotpKey = (userId) => `los:totp-used:${userId}`
 
 /*
  * The first administrator. With no staff accounts yet there is nobody to send an
@@ -97,7 +101,10 @@ const login = async (req, res) => {
   const password = req.body?.password
   if (!email || typeof password !== 'string' || !password) fail(400, 'Enter your email and password.', 'invalid_input')
 
-  if (!(await underLimit(rateKey('login', email), MAX_LOGIN_FAILURES, LOGIN_WINDOW_SECONDS))) {
+  if (
+    !(await underLimit(loginKey(req, email), MAX_LOGIN_FAILURES, LOGIN_WINDOW_SECONDS)) ||
+    !(await underLimit(rateKey('login-ip', ipOf(req)), MAX_LOGIN_FAILURES_PER_IP, LOGIN_WINDOW_SECONDS))
+  ) {
     fail(429, 'Too many sign-in attempts. Try again in 15 minutes.', 'rate_limited')
   }
 
@@ -118,18 +125,21 @@ const login = async (req, res) => {
   }
   if (user.status !== 'active') invalid()
 
-  await kv.del(rateKey('login', email))
+  // Two-step sign-in: the password is right, but the session waits for the code. The
+  // attempt count is only cleared once both steps succeed (verifyLogin).
+  if (user.totpEnabledAt) return startTwoFactorChallenge(user, loginKey(req, email))
 
-  // Two-step sign-in: the password is right, but the session waits for the code.
-  if (user.totpEnabledAt) {
-    const challenge = newToken()
-    await kv.set(challengeKey(challenge), { userId: user.id, attempts: 0 }, { ex: TWO_FACTOR_CHALLENGE_SECONDS })
-    return { twoFactorRequired: true, challenge }
-  }
-
+  await kv.del(loginKey(req, email))
   await createSession(req, res, user)
   await recordAudit({ req, actor: user, action: 'auth.login', entityType: 'user', entityId: user.id })
   return { user: publicUser(user) }
+}
+
+/** A pending second step for `user`; `loginRateKey` is cleared once it succeeds. */
+const startTwoFactorChallenge = async (user, loginRateKey = null) => {
+  const challenge = newToken()
+  await kv.set(challengeKey(challenge), { userId: user.id, loginRateKey }, { ex: TWO_FACTOR_CHALLENGE_SECONDS })
+  return { twoFactorRequired: true, challenge }
 }
 
 /** Second step: the authenticator code, or one of the recovery codes. */
@@ -138,9 +148,12 @@ const verifyLogin = async (req, res) => {
   const code = text(req.body?.code, 20)
   const stored = challenge ? await kv.get(challengeKey(challenge)) : null
   if (!stored) fail(401, 'That sign-in has expired. Enter your password again.', 'challenge_expired')
-  if (stored.attempts >= 5) {
+  // Counted before the check, atomically, so parallel guesses can't share one attempt.
+  const attempts = await countAttempt(`${challengeKey(challenge)}:attempts`, TWO_FACTOR_CHALLENGE_SECONDS)
+  const accountFailures = Number(await kv.get(twoFactorFailuresKey(stored.userId))) || 0
+  if (attempts > 5 || accountFailures >= MAX_TWO_FACTOR_FAILURES) {
     await kv.del(challengeKey(challenge))
-    fail(429, 'Too many wrong codes. Enter your password again.', 'rate_limited')
+    fail(429, 'Too many wrong codes. Wait 15 minutes, then enter your password again.', 'rate_limited')
   }
 
   const db = await getDb()
@@ -148,17 +161,24 @@ const verifyLogin = async (req, res) => {
   if (!user || user.status !== 'active' || !user.totpEnabledAt) fail(401, 'That sign-in has expired. Enter your password again.', 'challenge_expired')
 
   const secret = decryptSecret(user.totpSecret)
+  const step = secret ? matchTotp(secret, code) : null
+  // A code already used to sign in (it stays valid for up to 90 seconds) is refused.
+  const replayed = step !== null && Number(await kv.get(usedTotpKey(user.id))) >= step
   let usedRecovery = false
-  if (!secret || !verifyTotp(secret, code)) {
+  if (step === null || replayed) {
     const remaining = useRecoveryCode(user.recoveryCodes, code)
     if (!remaining) {
-      await kv.set(challengeKey(challenge), { ...stored, attempts: stored.attempts + 1 }, { keepTtl: true })
+      await countAttempt(twoFactorFailuresKey(user.id), LOGIN_WINDOW_SECONDS)
       fail(400, 'That code isn’t right. Check your authenticator app and try again.', 'invalid_code')
     }
     await db.update(users).set({ recoveryCodes: remaining }).where(eq(users.id, user.id))
     usedRecovery = true
+  } else {
+    await kv.set(usedTotpKey(user.id), step, { ex: 5 * 60 })
   }
   await kv.del(challengeKey(challenge))
+  await kv.del(twoFactorFailuresKey(user.id))
+  if (stored.loginRateKey) await kv.del(stored.loginRateKey)
   await createSession(req, res, user)
   await recordAudit({ req, actor: user, action: usedRecovery ? 'auth.login_recovery_code' : 'auth.login', entityType: 'user', entityId: user.id })
   return { user: publicUser(user), usedRecoveryCode: usedRecovery }
@@ -329,7 +349,6 @@ const setPassword = async (req, res) => {
 
   // Anyone holding an old session loses it when the password changes.
   await destroyUserSessions(user.id)
-  await createSession(req, res, user)
   await recordAudit({
     req,
     actor: user,
@@ -337,6 +356,10 @@ const setPassword = async (req, res) => {
     entityType: 'user',
     entityId: user.id,
   })
+  // The link proves control of the mailbox only. With two-step sign-in on, the session
+  // still waits for the authenticator code, as at a normal sign-in.
+  if (user.totpEnabledAt) return startTwoFactorChallenge(user)
+  await createSession(req, res, user)
   return { user: publicUser(user) }
 }
 

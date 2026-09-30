@@ -113,3 +113,46 @@ describe('emailed codes', () => {
     expect((await client(handler).post('/auth/customer', { email: 'patient@example.com', code: '135790' })).status).toBe(429)
   })
 })
+
+describe('two-step sign-in', () => {
+  let officerId
+  let secret
+
+  it('is still asked for after a password reset', async () => {
+    const invite = await admin.post('/users', { name: 'Reset Officer', email: 'reset.officer@example.com', role: 'loan_officer' })
+    officerId = invite.body.user.id
+    const person = client(handler)
+    const inviteToken = decodeURIComponent(sentLinks.at(-1).url.split('token=')[1])
+    await person.post('/auth/password/set', { token: inviteToken, password: 'reset-officer-pass' })
+    ;({ secret } = (await person.post('/auth/2fa/setup')).body)
+    await person.post('/auth/2fa/enable', { code: totpCode(secret) })
+
+    await client(handler).post('/auth/password/forgot', { email: 'reset.officer@example.com' })
+    const resetToken = decodeURIComponent(sentLinks.at(-1).url.split('token=')[1])
+    const browser = client(handler)
+    const reset = await browser.post('/auth/password/set', { token: resetToken, password: 'a-brand-new-pass' })
+    expect(reset.body.twoFactorRequired).toBe(true)
+    expect(reset.body.user).toBeUndefined()
+    expect(browser.cookie).toBe('')
+    expect((await browser.get('/auth/me')).body.user).toBeFalsy()
+  })
+
+  it('won’t take the same authenticator code twice', async () => {
+    const code = totpCode(secret)
+    const first = client(handler)
+    const challenge = (await first.post('/auth/login', { email: 'reset.officer@example.com', password: 'a-brand-new-pass' })).body.challenge
+    expect((await first.post('/auth/login/verify', { challenge, code })).status).toBe(200)
+
+    const second = client(handler)
+    const again = (await second.post('/auth/login', { email: 'reset.officer@example.com', password: 'a-brand-new-pass' })).body.challenge
+    expect((await second.post('/auth/login/verify', { challenge: again, code })).status).toBe(400)
+  })
+
+  it('hands back an unused invite link, never a reset link, when the email fails', async () => {
+    const { sendPasswordLinkEmail } = await import('../api/_lib/email.js')
+    sendPasswordLinkEmail.mockRejectedValueOnce(new Error('mail server down'))
+    const sent = await admin.post(`/users/${officerId}/password-link`)
+    expect(sent.body).toMatchObject({ emailed: false, purpose: 'reset' })
+    expect(sent.body.inviteUrl).toBeUndefined()
+  })
+})

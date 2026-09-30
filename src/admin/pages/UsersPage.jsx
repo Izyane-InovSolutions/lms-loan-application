@@ -453,8 +453,11 @@ function EditDialog({ person, viewer, managers, onClose, onSaved }) {
       const result = await api(`/users/${person.id}/password-link`, { method: 'POST' })
       if (result.emailed) {
         notify(result.purpose === 'invite' ? 'Invitation sent again' : 'Password reset link sent')
-      } else {
+      } else if (result.inviteUrl) {
         setManualUrl(result.inviteUrl)
+      } else {
+        // Reset links only ever go to the person's own mailbox, so there is nothing to copy.
+        setError('The reset link couldn’t be emailed. Check the email settings, or ask them to use “Forgot password” once email works.')
       }
     } catch (linkError) {
       setError(linkError.message)
