@@ -215,39 +215,38 @@ shown in brackets.
 
 ```mermaid
 stateDiagram-v2
-    direction LR
     state "In review" as InReview
     state "Information requested" as InfoRequested
     state "Awaiting approval" as PendingApproval
     state "Offer accepted" as Accepted
     state "Offer expired" as Expired
-    [*] --> Submitted: customer or agent submits
-    Submitted --> Declined: credit rules decline<br/>(only if auto-decline is on)
-    Submitted --> InReview: officer starts the review
-    Submitted --> InfoRequested: officer asks for more
+
+    [*] --> Submitted
+    Submitted --> InReview: officer starts review
+    Submitted --> Declined: credit rules decline (auto-decline on)
     InReview --> InfoRequested: officer asks for more
-    InfoRequested --> InReview: customer answers<br/>(case already has an officer)
-    InfoRequested --> Submitted: customer answers<br/>(no officer yet)
-    InReview --> PendingApproval: officer recommends<br/>(four-eyes on)
-    InReview --> Approved: officer decides<br/>(four-eyes off)
-    InReview --> Declined: officer decides<br/>(four-eyes off)
-    PendingApproval --> InReview: approver sends it back
+    InfoRequested --> InReview: customer answers
+    InReview --> PendingApproval: officer recommends
+    PendingApproval --> InReview: approver sends back
     PendingApproval --> Approved: approver approves
     PendingApproval --> Declined: approver declines
     Approved --> Accepted: customer accepts
     Approved --> Expired: not accepted in time
-    Approved --> Disbursed: paid out<br/>(acceptance off)
-    Accepted --> Disbursed: LMS or officer<br/>records the payout
-    Submitted --> Withdrawn
-    InReview --> Withdrawn
-    InfoRequested --> Withdrawn
-    PendingApproval --> Withdrawn
-    Approved --> Withdrawn: customer turns<br/>the offer down
+    Accepted --> Disbursed: LMS or officer records payout
     Declined --> [*]
-    Withdrawn --> [*]
     Expired --> [*]
     Disbursed --> [*]
 ```
+
+This shows the default settings. Also:
+
+- **Withdrawn:** the customer can withdraw from any status up to *Approved* (turning the
+  offer down counts as withdrawing).
+- **Four-eyes off:** the officer's recommendation is the decision, so *In review* goes
+  straight to *Approved* or *Declined*.
+- **Acceptance off:** *Approved* goes straight to *Disbursed*.
+- **Information requested** can also be set on a *Submitted* case. When the customer
+  answers, the case returns to *In review* if an officer has it, else to *Submitted*.
 
 | Status | Customer sees | Meaning |
 | --- | --- | --- |
