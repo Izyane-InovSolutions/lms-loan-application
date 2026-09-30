@@ -71,6 +71,24 @@ export const rolesWith = async (permission) => (await listRoles()).filter((role)
 
 export const roleHas = async (key, permission) => Boolean((await getRole(key))?.permissions.includes(permission))
 
+const SCOPE_RANK = { own: 0, team: 1, all: 2 }
+
+/**
+ * True when `role` gives nothing `actor` lacks: each of its permissions, and a scope no
+ * wider than theirs. Holding users.manage or roles.manage lets someone share what they
+ * have, never hand out (to themselves or anyone) more — administrators, who hold
+ * everything, remain the only way to grant anything.
+ */
+export const roleWithin = (actor, role) =>
+  Boolean(actor && role) &&
+  role.permissions.every((permission) => actor.permissions?.includes(permission)) &&
+  (SCOPE_RANK[role.scope] ?? 0) <= (SCOPE_RANK[actor.scope] ?? 0)
+
+/** Throws a 403 unless `roleWithin(actor, role)`. */
+export const assertRoleWithin = (actor, role, message = 'You can only manage roles that have no more access than your own.') => {
+  if (!roleWithin(actor, role)) fail(403, message, 'beyond_own_access')
+}
+
 /**
  * A user with their role resolved: `permissions`, `scope` and `roleLabel`. Customers have
  * no staff permissions; a staff member whose role no longer exists has none either.
@@ -120,6 +138,7 @@ const slugFor = (label) =>
 /** Adds a custom role. Its key is made from the name and never changes. */
 export const createRole = async (input, actor) => {
   const values = parseRoleInput(input)
+  assertRoleWithin(actor, values, 'A new role can’t have more access than your own.')
   const existing = await listRoles()
   const base = slugFor(values.label)
   let key = base
@@ -135,8 +154,10 @@ export const updateRole = async (key, input, actor) => {
   const current = await getRole(key)
   if (!current) fail(404, 'Role not found.', 'not_found')
   if (current.locked) fail(403, 'The administrator role always has every permission.', 'locked_role')
+  assertRoleWithin(actor, current)
   const changes = parseRoleInput(input, { partial: true })
   const next = { label: current.label, description: current.description || null, scope: current.scope, permissions: current.permissions, ...changes }
+  assertRoleWithin(actor, next, 'A role can’t be given more access than your own.')
   const db = await getDb()
   await db
     .insert(roles)
@@ -147,10 +168,12 @@ export const updateRole = async (key, input, actor) => {
 }
 
 /** Restores a built-in role's defaults. */
-export const resetRole = async (key) => {
+export const resetRole = async (key, actor) => {
   const current = await getRole(key)
   if (!current?.builtIn) fail(404, 'Only built-in roles can be reset.', 'not_found')
   if (current.locked) fail(403, 'The administrator role always has every permission.', 'locked_role')
+  assertRoleWithin(actor, current)
+  assertRoleWithin(actor, fromBuiltIn(key, null), 'This role’s defaults have more access than your own, so only an administrator can reset it.')
   const db = await getDb()
   await db.delete(roles).where(eq(roles.key, key))
   clearRolesCache()
@@ -158,9 +181,10 @@ export const resetRole = async (key) => {
 }
 
 /** Removes a custom role nobody holds. */
-export const deleteRole = async (key) => {
+export const deleteRole = async (key, actor) => {
   const current = await getRole(key)
   if (!current) fail(404, 'Role not found.', 'not_found')
+  assertRoleWithin(actor, current)
   if (current.builtIn) fail(400, 'Built-in roles can’t be deleted. You can change what they may do, or reset them.', 'built_in_role')
   const db = await getDb()
   const [{ count }] = await db.select({ count: sql`count(*)::int` }).from(users).where(eq(users.role, key))

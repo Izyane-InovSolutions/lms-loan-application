@@ -33,14 +33,14 @@ const update = async (req, res, { params }) => {
 
 const reset = async (req, res, { params }) => {
   const actor = await requireUser(req, { permission: 'roles.manage' })
-  const { before, after } = await resetRole(params.key)
+  const { before, after } = await resetRole(params.key, actor)
   await recordAudit({ req, actor, action: 'role.reset', entityType: 'role', entityId: null, detail: { key: params.key, before: summary(before), after: summary(after) } })
   return { role: after }
 }
 
 const remove = async (req, res, { params }) => {
   const actor = await requireUser(req, { permission: 'roles.manage' })
-  const removed = await deleteRole(params.key)
+  const removed = await deleteRole(params.key, actor)
   await recordAudit({ req, actor, action: 'role.deleted', entityType: 'role', entityId: null, detail: { key: params.key, ...summary(removed) } })
   return { ok: true }
 }

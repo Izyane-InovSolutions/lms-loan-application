@@ -9,7 +9,7 @@ import { newReferralCode } from '../_lib/auth/tokens.js'
 import { issuePasswordLink } from './auth.js'
 import { isStaffRole } from '../../src/config/roles.js'
 import { can } from '../_lib/rbac.js'
-import { getRole, roleHas, rolesWith } from '../_lib/roles.js'
+import { assertRoleWithin, getRole, roleHas, rolesWith } from '../_lib/roles.js'
 
 const { users } = schema
 const manager = alias(users, 'manager')
@@ -24,6 +24,13 @@ const takesManager = async (role) => (await refers(role)) && !(await roleHas(rol
 const assertStaffRole = async (role) => {
   if (!isStaffRole(role) || !(await getRole(role))) fail(400, 'Choose a staff role.', 'invalid_input')
 }
+
+/**
+ * Throws unless `actor` may give out `role`, or manage someone holding it: it must give
+ * nothing beyond their own access. So only administrators can make or change
+ * administrators, and a delegated users.manage can't be used to climb.
+ */
+const assertMayManageRole = async (actor, role, message) => assertRoleWithin(actor, await getRole(role), message)
 
 /**
  * The band of loan amounts a person may finally approve. A blank maximum means no upper
@@ -123,6 +130,7 @@ const inviteUser = async (req) => {
   if (name.length < 2) fail(400, 'Enter the person’s full name.', 'invalid_input')
   if (!email) fail(400, 'Enter a valid email address.', 'invalid_input')
   await assertStaffRole(role)
+  await assertMayManageRole(actor, role, 'You can’t invite someone to a role with more access than your own.')
   const managerId = (await takesManager(role)) ? req.body?.managerId || null : null
   if (managerId) await assertManager(db, managerId)
 
@@ -177,6 +185,9 @@ const updateUser = async (req, res, { params }) => {
   const db = await getDb()
   const [target] = await db.select().from(users).where(eq(users.id, params.id)).limit(1)
   if (!target) fail(404, 'User not found.', 'not_found')
+  if (isStaffRole(target.role) && target.id !== actor.id) {
+    await assertMayManageRole(actor, target.role, 'This person’s role has more access than your own, so only an administrator can change their account.')
+  }
 
   const body = req.body || {}
   const changes = {}
@@ -197,6 +208,7 @@ const updateUser = async (req, res, { params }) => {
     if (!isStaffRole(target.role)) fail(400, 'Choose a staff role.', 'invalid_input')
     await assertStaffRole(body.role)
     if (target.id === actor.id) fail(400, 'You can’t change your own role.', 'self_change')
+    await assertMayManageRole(actor, body.role, 'You can’t give someone a role with more access than your own.')
     changes.role = body.role
     if ((await refers(body.role)) && !target.referralCode) changes.referralCode = await uniqueReferralCode(db)
   }
@@ -218,7 +230,13 @@ const updateUser = async (req, res, { params }) => {
     changes.status = body.status === 'active' && !target.passwordHash ? 'invited' : body.status
   }
 
-  Object.assign(changes, parseApprovalBand(body, target))
+  const band = parseApprovalBand(body, target)
+  // Nobody but an administrator (who holds everything by design) sets the loan amounts
+  // they may approve themselves.
+  if (target.id === actor.id && actor.role !== 'admin' && Object.entries(band).some(([key, value]) => value !== (target[key] ?? (key === 'approvalMin' ? 0 : null)))) {
+    fail(400, 'You can’t change your own approval limits.', 'self_change')
+  }
+  Object.assign(changes, band)
 
   if (!Object.keys(changes).length) return { user: publicUser(target) }
 
@@ -248,6 +266,7 @@ const sendPasswordLink = async (req, res, { params }) => {
   const [user] = await db.select().from(users).where(eq(users.id, params.id)).limit(1)
   if (!user || !isStaffRole(user.role)) fail(404, 'User not found.', 'not_found')
   if (user.status === 'disabled') fail(400, 'Enable the account before sending a link.', 'disabled')
+  if (user.id !== actor.id) await assertMayManageRole(actor, user.role, 'This person’s role has more access than your own, so only an administrator can send them a link.')
 
   const purpose = user.status === 'invited' ? 'invite' : 'reset'
   const link = await issuePasswordLink(req, { user, purpose, actor })

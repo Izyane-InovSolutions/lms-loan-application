@@ -156,3 +156,33 @@ describe('two-step sign-in', () => {
     expect(sent.body.inviteUrl).toBeUndefined()
   })
 })
+
+describe('delegated team and role management', () => {
+  let delegate
+
+  beforeAll(async () => {
+    const role = await admin.post('/roles', { label: 'Team admin', scope: 'all', permissions: ['users.view', 'users.manage', 'roles.manage'] })
+    expect(role.status, JSON.stringify(role.body)).toBe(200)
+    await admin.post('/users', { name: 'Tamara Delegate', email: 'delegate@example.com', role: role.body.role.key })
+    delegate = client(handler)
+    await delegate.post('/auth/password/set', { token: decodeURIComponent(sentLinks.at(-1).url.split('token=')[1]), password: 'delegate-strong-pass' })
+    expect((await delegate.get('/auth/me')).body.user.email).toBe('delegate@example.com')
+  })
+
+  it('can’t hand out more access than the delegate holds', async () => {
+    expect((await delegate.post('/users', { name: 'New Admin', email: 'new.admin@example.com', role: 'admin' })).body.code).toBe('beyond_own_access')
+    expect((await delegate.post('/roles', { label: 'Everything', scope: 'all', permissions: ['settings.manage'] })).body.code).toBe('beyond_own_access')
+    expect((await delegate.patch('/roles/team_admin', { permissions: ['users.view', 'users.manage', 'roles.manage', 'cases.decide'] })).body.code).toBe('beyond_own_access')
+
+    const officers = (await admin.get('/users')).body.users.filter((user) => user.role === 'loan_officer')
+    expect((await delegate.patch(`/users/${officers[0].id}`, { role: 'admin' })).body.code).toBe('beyond_own_access')
+    const admins = (await admin.get('/users')).body.users.filter((user) => user.role === 'admin')
+    expect((await delegate.patch(`/users/${admins[0].id}`, { resetTwoFactor: true })).body.code).toBe('beyond_own_access')
+  })
+
+  it('can share what the delegate holds, but not set their own approval limits', async () => {
+    expect((await delegate.post('/roles', { label: 'Directory', scope: 'own', permissions: ['users.view'] })).status).toBe(200)
+    const me = (await delegate.get('/auth/me')).body.user
+    expect((await delegate.patch(`/users/${me.id}`, { approvalMax: 1000000 })).body.code).toBe('self_change')
+  })
+})
