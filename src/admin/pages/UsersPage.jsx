@@ -6,14 +6,23 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { ROLES, STAFF_ROLES, USER_STATUSES, can, roleLabel } from '@/config/roles'
+import { USER_STATUSES, hasPermission, registeredRoles, roleDescription, roleHas, roleLabel } from '@/config/roles'
+
+// Every staff role in the workspace, custom ones included, as the auth provider loaded them.
+const staffRoleKeys = () => registeredRoles().map((role) => role.key)
+
+// Who gets a "reports to" picker: people who bring business in without leading a team (agents).
+const takesManager = (role) => roleHas(role, 'applications.assist') && !roleHas(role, 'team.lead')
+
+// Who gets an approval band: anyone who reviews or decides cases.
+const hasApprovalBand = (role) => roleHas(role, 'cases.work') || roleHas(role, 'cases.decide')
 import { api, toQuery } from '../api'
 import { useAuth } from '../auth'
 import { EmptyState, Field, FormError, Initials, PageHeader, RoleBadge, StatusText, timeAgo, useToast } from '../components'
 
 export function UsersPage() {
   const { user: viewer } = useAuth()
-  const canManage = can(viewer.role, 'users.manage')
+  const canManage = hasPermission(viewer, 'users.manage')
   const [params, setParams] = useSearchParams()
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
@@ -73,7 +82,7 @@ export function UsersPage() {
         description={
           canManage
             ? 'Invite staff, set their role and, for agents, the relationship manager they report to.'
-            : viewer.role === 'rm'
+            : viewer.scope !== 'all'
               ? 'You and the agents who report to you.'
               : 'Everyone on the staff side of the workspace.'
         }
@@ -103,12 +112,12 @@ export function UsersPage() {
           <div className="w-48">
             <Select aria-label="Filter by role" value={role} onChange={(event) => setFilter('role', event.target.value)} className="h-10 text-sm">
               <option value="all">All staff roles</option>
-              {STAFF_ROLES.map((value) => (
+              {staffRoleKeys().map((value) => (
                 <option key={value} value={value}>
                   {roleLabel(value)}
                 </option>
               ))}
-              {viewer.role === 'admin' ? <option value="customer">Customers</option> : null}
+              {canManage ? <option value="customer">Customers</option> : null}
             </Select>
           </div>
           <div className="w-40">
@@ -297,7 +306,7 @@ function InviteDialog({ open, onOpenChange, managers, onInvited }) {
     try {
       const result = await api('/users', {
         method: 'POST',
-        body: { ...form, managerId: form.role === 'dsa' ? form.managerId || null : null },
+        body: { ...form, managerId: takesManager(form.role) ? form.managerId || null : null },
       })
       onInvited()
       if (result.emailed) {
@@ -335,16 +344,16 @@ function InviteDialog({ open, onOpenChange, managers, onInvited }) {
             <Field id="invite-email" label="Work email">
               <Input id="invite-email" type="email" value={form.email} onChange={update('email')} />
             </Field>
-            <Field id="invite-role" label="Role" hint={ROLES[form.role]?.description}>
+            <Field id="invite-role" label="Role" hint={roleDescription(form.role)}>
               <Select id="invite-role" value={form.role} onChange={update('role')}>
-                {STAFF_ROLES.map((value) => (
+                {staffRoleKeys().map((value) => (
                   <option key={value} value={value}>
                     {roleLabel(value)}
                   </option>
                 ))}
               </Select>
             </Field>
-            {form.role === 'dsa' ? (
+            {takesManager(form.role) ? (
               <Field
                 id="invite-manager"
                 label="Reports to"
@@ -429,7 +438,7 @@ function EditDialog({ person, viewer, managers, onClose, onSaved }) {
         name: form.name,
         phone: form.phone,
         role: form.role,
-        managerId: form.role === 'dsa' ? form.managerId || null : null,
+        managerId: takesManager(form.role) ? form.managerId || null : null,
         approvalMin: form.approvalMin,
         approvalMax: form.approvalMax,
       },
@@ -444,8 +453,11 @@ function EditDialog({ person, viewer, managers, onClose, onSaved }) {
       const result = await api(`/users/${person.id}/password-link`, { method: 'POST' })
       if (result.emailed) {
         notify(result.purpose === 'invite' ? 'Invitation sent again' : 'Password reset link sent')
-      } else {
+      } else if (result.inviteUrl) {
         setManualUrl(result.inviteUrl)
+      } else {
+        // Reset links only ever go to the person's own mailbox, so there is nothing to copy.
+        setError('The reset link couldn’t be emailed. Check the email settings, or ask them to use “Forgot password” once email works.')
       }
     } catch (linkError) {
       setError(linkError.message)
@@ -467,16 +479,16 @@ function EditDialog({ person, viewer, managers, onClose, onSaved }) {
           <Field id="edit-name" label="Full name">
             <Input id="edit-name" value={form.name} onChange={update('name')} />
           </Field>
-          <Field id="edit-role" label="Role" hint={isSelf ? 'You can’t change your own role.' : ROLES[form.role]?.description}>
+          <Field id="edit-role" label="Role" hint={isSelf ? 'You can’t change your own role.' : roleDescription(form.role)}>
             <Select id="edit-role" value={form.role} onChange={update('role')} disabled={isSelf}>
-              {STAFF_ROLES.map((value) => (
+              {staffRoleKeys().map((value) => (
                 <option key={value} value={value}>
                   {roleLabel(value)}
                 </option>
               ))}
             </Select>
           </Field>
-          {form.role === 'dsa' ? (
+          {takesManager(form.role) ? (
             <Field id="edit-manager" label="Reports to">
               <Select id="edit-manager" value={form.managerId} onChange={update('managerId')}>
                 <option value="">No relationship manager</option>
@@ -491,7 +503,7 @@ function EditDialog({ person, viewer, managers, onClose, onSaved }) {
           <Field id="edit-phone" label="Phone">
             <Input id="edit-phone" type="tel" value={form.phone} onChange={update('phone')} />
           </Field>
-          {['admin', 'loan_officer'].includes(form.role) ? (
+          {hasApprovalBand(form.role) ? (
             <div className="grid gap-4 sm:grid-cols-2">
               <Field id="edit-approval-min" label="Minimum approval amount (K)" hint="Applications outside this band cannot be assigned to this person or approved by them.">
                 <Input id="edit-approval-min" type="number" min="0" step="1" value={form.approvalMin} onChange={update('approvalMin')} />

@@ -1,5 +1,5 @@
 [Unit]
-Description=iZyane LOS API
+Description=Loan Origination API
 After=network.target postgresql.service
 
 [Service]

@@ -1,11 +1,14 @@
 import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, ne, sql } from 'drizzle-orm'
 import { getDb, schema } from '../_lib/db/client.js'
-import { requireUser } from '../_lib/rbac.js'
+import { can, requireUser } from '../_lib/rbac.js'
+import { getRole, rolesWith } from '../_lib/roles.js'
 import { scopeApplications } from '../_lib/applications.js'
 import { getSetting } from '../_lib/settings.js'
+import { scopeDrafts } from '../_lib/drafts.js'
+import { queueCondition } from '../_lib/workflow.js'
 import { APPROVED_STATUSES, OPEN_STATUSES } from '../../src/config/applications.js'
 
-const { applications, prescreens, users, appraisals } = schema
+const { applications, applicationDrafts, prescreens, users, appraisals } = schema
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const APPROVED = APPROVED_STATUSES
@@ -88,6 +91,7 @@ const dashboard = async (req, res, { query }) => {
 
   const result = {
     role: viewer.role,
+    permissions: viewer.permissions,
     days,
     kpis: { current, previous, pipeline: { count: int(pipeline.count), value: Number(pipeline.value) || 0 } },
     funnel: funnel.map((row) => ({ status: row.status, count: int(row.count), value: Number(row.value) || 0 })),
@@ -97,7 +101,7 @@ const dashboard = async (req, res, { query }) => {
   }
 
   // Who brings business in: agents and RMs, within the viewer's scope.
-  if (['admin', 'sales_manager', 'rm'].includes(viewer.role)) {
+  if (can(viewer, 'reports.team')) {
     const rows = await db
       .select({
         id: users.id,
@@ -125,7 +129,7 @@ const dashboard = async (req, res, { query }) => {
     }))
   }
 
-  if (viewer.role === 'admin') {
+  if (can(viewer, 'system.health')) {
     const rows = await db
       .select({ status: applications.lmsSyncStatus, count: sql`count(*)` })
       .from(applications)
@@ -134,11 +138,13 @@ const dashboard = async (req, res, { query }) => {
     result.lmsHealth = Object.fromEntries(rows.map((row) => [row.status, int(row.count)]))
   }
 
-  if (['loan_officer', 'admin'].includes(viewer.role)) {
+  if (can(viewer, 'cases.work')) {
     const { slaDays } = await getSetting('workflow')
     const overdueBefore = new Date(now.getTime() - slaDays * DAY_MS)
+    const inQueue = await queueCondition(viewer)
     const [queue] = await db
       .select({
+        inMyQueue: sql`count(*) filter (where ${inQueue})`,
         unassigned: sql`count(*) filter (where ${isNull(applications.assignedOfficer)} and ${inArray(applications.status, OPEN_STATUSES)})`,
         mine: sql`count(*) filter (where ${applications.assignedOfficer} = ${viewer.id} and ${inArray(applications.status, OPEN_STATUSES)})`,
         awaitingDecision: sql`count(*) filter (where ${applications.status} = 'pending_approval')`,
@@ -154,6 +160,7 @@ const dashboard = async (req, res, { query }) => {
       .from(appraisals)
       .where(and(eq(appraisals.officerId, viewer.id), gte(appraisals.createdAt, start)))
     result.queue = {
+      inMyQueue: int(queue.inMyQueue),
       unassigned: int(queue.unassigned),
       mine: int(queue.mine),
       awaitingDecision: int(queue.awaitingDecision),
@@ -165,8 +172,17 @@ const dashboard = async (req, res, { query }) => {
     }
   }
 
-  // Agents and RMs see their latest cases on the dashboard itself.
-  if (['dsa', 'rm'].includes(viewer.role)) {
+  // Unfinished applications this person may follow up.
+  if (can(viewer, 'drafts.view')) {
+    const [row] = await db
+      .select({ count: sql`count(*)`, value: sql`coalesce(sum(${applicationDrafts.amount}), 0)` })
+      .from(applicationDrafts)
+      .where(and(scopeDrafts(viewer), gte(applicationDrafts.expiresAt, now)))
+    result.drafts = { count: int(row.count), value: Number(row.value) || 0 }
+  }
+
+  // People who bring business in see their latest cases on the dashboard itself.
+  if (can(viewer, 'applications.assist')) {
     result.recent = await db
       .select({ id: applications.id, reference: applications.reference, applicantName: applications.applicantName, loanType: applications.loanType, amount: applications.amount, status: applications.status, submittedAt: applications.submittedAt })
       .from(applications)
@@ -182,13 +198,16 @@ const dashboard = async (req, res, { query }) => {
 const referral = async (req, res, { params }) => {
   const db = await getDb()
   const code = String(params.code || '').toUpperCase().slice(0, 20)
+  const referring = await rolesWith('applications.assist')
+  if (!referring.length) return { referrer: null }
   const [person] = await db
     .select({ name: users.name, role: users.role })
     .from(users)
-    .where(and(eq(users.referralCode, code), inArray(users.role, ['dsa', 'rm']), eq(users.status, 'active')))
+    .where(and(eq(users.referralCode, code), inArray(users.role, referring), eq(users.status, 'active')))
     .limit(1)
   if (!person) return { referrer: null }
-  return { referrer: { firstName: person.name.split(' ')[0], role: person.role, code } }
+  const role = await getRole(person.role)
+  return { referrer: { firstName: person.name.split(' ')[0], role: person.role, roleLabel: role?.label || person.role, code } }
 }
 
 export const dashboardRoutes = [

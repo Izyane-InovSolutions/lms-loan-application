@@ -31,12 +31,43 @@ export const parseCookies = (req) =>
 export const clientIp = (req) =>
   String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket?.remoteAddress || null
 
-/** Origin used in emailed links. APP_URL wins so links never point at a preview host by accident. */
-export const appOrigin = (req) => {
+const configuredOrigin = () => {
   if (process.env.APP_URL) return process.env.APP_URL.replace(/\/+$/, '')
+  const vercelHost = process.env.VERCEL_ENV === 'production' ? process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL : process.env.VERCEL_URL
+  return vercelHost ? `https://${vercelHost}` : null
+}
+
+let warnedNoAppUrl = false
+
+/**
+ * Origin used in emailed links. APP_URL wins so links never point at a preview host by
+ * accident; without it, a Vercel deployment uses the address Vercel gives it. Only then
+ * does it fall back to the request's Host header.
+ */
+export const appOrigin = (req) => {
+  const configured = configuredOrigin()
+  if (configured) return configured
+  if (!warnedNoAppUrl && process.env.NODE_ENV === 'production') {
+    warnedNoAppUrl = true
+    console.warn('[http] APP_URL is not set; emailed links use the request’s Host header. Set APP_URL.')
+  }
   const host = req.headers['x-forwarded-host'] || req.headers.host
-  const proto = req.headers['x-forwarded-proto'] || (process.env.VERCEL ? 'https' : 'http')
+  const proto = req.headers['x-forwarded-proto'] || 'http'
   return `${proto}://${host}`
+}
+
+/**
+ * The origin for links that carry a secret (password links). Never the Host header in
+ * production: the caller chooses it, and a forged Host on "forgot password" would put
+ * the victim's reset token in a link to the attacker's site.
+ */
+export const secretLinkOrigin = (req) => {
+  const configured = configuredOrigin()
+  if (configured) return configured
+  if (process.env.NODE_ENV === 'production') {
+    throw new HttpError(500, 'Set APP_URL to this site’s address before it can email password links.', 'app_url_missing')
+  }
+  return appOrigin(req)
 }
 
 /*

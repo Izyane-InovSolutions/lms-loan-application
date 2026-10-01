@@ -3,9 +3,13 @@ import { AlertTriangle, Check, CircleDashed, Loader2, MapPin, RefreshCw, ShieldA
 
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { CHECKS, LMS_SYNC_LABELS } from '@/config/applications'
+import { LMS_SYNC_LABELS } from '@/config/applications'
+import { checklistOf } from '@/config/stages'
+import { PHASES } from '@/config/workflow'
+import { roleLabel } from '@/config/roles'
 import { FACTS, OUTCOMES, describeCondition, formatFact } from '@/config/creditRules'
-import { CONSENT_NOTICES } from '@/config/consent'
+import { consentText } from '@/config/consent'
+import { useBranding } from '@/components/brand/BrandingProvider'
 import { OutcomeMark, Panel, dateTime, money, timeAgo } from '../components'
 import { LocationMap } from './LocationMap'
 
@@ -151,12 +155,18 @@ export function AiReviewPanel({ prescreen }) {
   )
 }
 
-/** The officer's checklist. Ticking asks for a note of what was checked. */
-export function ChecklistPanel({ application, editable, onToggle }) {
+/** The officer's checklist (Settings → Stages). Ticking asks for a note of what was checked. */
+export function ChecklistPanel({ application, stages, editable, onToggle }) {
+  const checklist = checklistOf(stages)
+  const required = checklist.filter((check) => check.requiredToApprove)
   return (
-    <Panel title="Verification" description={editable ? 'Required before recommending approval: identity, documents and income.' : undefined}>
+    <Panel
+      title="Verification"
+      description={editable && required.length ? `Required before recommending approval: ${required.map((check) => check.label.toLowerCase()).join(', ')}.` : undefined}
+    >
       <ul className="space-y-3">
-        {Object.entries(CHECKS).map(([key, check]) => {
+        {checklist.map((check) => {
+          const { key } = check
           const state = application.checks?.[key]
           return (
             <li key={key} className="flex items-start gap-3">
@@ -184,6 +194,78 @@ export function ChecklistPanel({ application, editable, onToggle }) {
           )
         })}
       </ul>
+    </Panel>
+  )
+}
+
+/**
+ * The recorded steps of this case's workflow (its stage-like states), by part of the
+ * journey: what is done, by whom, and the current one with a button for whoever may
+ * complete it.
+ */
+export function StagesPanel({ workflow, application, onComplete, onReopen, canReopen }) {
+  const steps = workflow?.steps || []
+  if (!steps.length) return null
+  const phases = [...new Set(steps.map((step) => step.phase))]
+  const checkName = (key) => (workflow.checklist || []).find((check) => check.key === key)?.label?.toLowerCase() || key
+  const move = (step) => workflow.actions.find((action) => action.id === step.moveActionId)
+  return (
+    <Panel title="Stages" description="This workspace’s own steps, done in order.">
+      <div className="space-y-5">
+        {phases.map((phase) => (
+          <div key={phase}>
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{PHASES[phase]}</p>
+            <ol className="mt-2 space-y-3">
+              {steps
+                .filter((step) => step.phase === phase)
+                .map((step) => {
+                  const progress = step.progress
+                  const action = step.current ? move(step) : null
+                  const allowed = action && !action.blocked
+                  const missing = step.checks.filter((key) => !application.checks?.[key]?.done)
+                  return (
+                    <li key={step.id} className="flex items-start gap-3 text-sm">
+                      <span
+                        className={cn(
+                          'mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border',
+                          progress?.done ? 'border-success bg-success text-success-foreground' : step.current ? 'border-primary' : 'border-input'
+                        )}
+                        aria-hidden="true"
+                      >
+                        {progress?.done ? <Check className="size-3.5" /> : step.current ? <CircleDashed className="size-3.5 text-primary" /> : null}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className={cn('text-foreground', step.current && 'font-medium')}>{step.label}</p>
+                        {progress?.done ? (
+                          <p className="text-xs text-muted-foreground">
+                            {progress.byName}, {timeAgo(progress.at)}
+                            {progress.note ? `: ${progress.note}` : ''}
+                          </p>
+                        ) : (
+                          <p className="text-xs text-muted-foreground">
+                            {step.description || null}
+                            {step.roles.length ? `${step.description ? ' ' : ''}For ${step.roles.map((role) => roleLabel(role).toLowerCase()).join(' or ')}.` : ''}
+                            {missing.length && step.current ? ` Needs: ${missing.map(checkName).join(', ')}.` : ''}
+                          </p>
+                        )}
+                        {allowed && application.status !== 'info_requested' ? (
+                          <Button size="sm" variant="outline" className="mt-2" onClick={() => onComplete(step)} disabled={missing.length > 0}>
+                            Mark as done
+                          </Button>
+                        ) : null}
+                        {step.reopenable && canReopen ? (
+                          <button type="button" className="mt-1 text-xs font-medium text-primary hover:underline" onClick={() => onReopen(step)}>
+                            Reopen
+                          </button>
+                        ) : null}
+                      </div>
+                    </li>
+                  )
+                })}
+            </ol>
+          </div>
+        ))}
+      </div>
     </Panel>
   )
 }
@@ -309,10 +391,12 @@ export function LocationPanel({ points, facts, onLogVisit }) {
     <Panel
       title="Location"
       action={
-        <Button variant="outline" size="sm" onClick={logVisit} disabled={busy}>
-          {busy ? <Loader2 className="animate-spin" /> : <MapPin />}
-          Log a visit here
-        </Button>
+        onLogVisit ? (
+          <Button variant="outline" size="sm" onClick={logVisit} disabled={busy}>
+            {busy ? <Loader2 className="animate-spin" /> : <MapPin />}
+            Log a visit here
+          </Button>
+        ) : null
       }
     >
       {points.length ? (
@@ -344,10 +428,59 @@ export function LocationPanel({ points, facts, onLogVisit }) {
   )
 }
 
-const CONSENT_LABELS = { data_processing: 'Terms and privacy notice', location: 'Location sharing', crb: 'Credit bureau check', offer: 'Loan offer accepted' }
+/**
+ * The customer's signatures on their offer: who, when, how it was confirmed, and each
+ * document's fingerprint before and after, with the signed copies.
+ */
+export function SignaturesPanel({ signatures, applicationId }) {
+  if (!signatures?.length) return null
+  return (
+    <Panel title="Signature" description="Evidence kept with the signed documents.">
+      <ul className="space-y-5">
+        {signatures.map((signature) => (
+          <li key={signature.id} className="space-y-3 text-sm">
+            <img src={signature.image} alt={`Signature of ${signature.signerName}`} className="h-16 w-auto rounded border bg-white p-1" />
+            <dl className="grid grid-cols-[7.5rem_1fr] gap-x-3 gap-y-1.5 text-xs">
+              <dt className="text-muted-foreground">Signed by</dt>
+              <dd className="text-foreground">{signature.signerName}</dd>
+              <dt className="text-muted-foreground">When</dt>
+              <dd className="text-foreground">{dateTime(signature.signedAt)}</dd>
+              <dt className="text-muted-foreground">How</dt>
+              <dd className="text-foreground">
+                {signature.method === 'typed' ? 'Typed name' : 'Drawn'}
+                {signature.codeVerified ? `, confirmed by a code emailed to ${signature.signerEmail}` : ''}
+                {signature.capturedBy ? ', in person with staff' : ''}
+              </dd>
+              <dt className="text-muted-foreground">From</dt>
+              <dd className="text-foreground [overflow-wrap:anywhere]">{signature.ip || 'unknown'}</dd>
+              <dt className="text-muted-foreground">Record</dt>
+              <dd className={signature.sealValid === false ? 'font-medium text-destructive' : 'text-foreground'}>
+                {signature.sealValid === true ? 'Sealed, unchanged since signing' : signature.sealValid === false ? 'Doesn’t match its seal: changed after signing' : 'Not sealed'}
+              </dd>
+            </dl>
+            <ul className="space-y-2">
+              {signature.documents.map((entry) => (
+                <li key={entry.signedDocumentId} className="rounded-md border p-2 text-xs">
+                  <a className="font-medium text-primary hover:underline" href={`/api/v1/applications/${applicationId}/documents/${entry.signedDocumentId}`} target="_blank" rel="noreferrer">
+                    {entry.label} (signed)
+                  </a>
+                  <p className="mt-1 font-mono text-[10px] text-muted-foreground [overflow-wrap:anywhere]">Before: {entry.sha256}</p>
+                  <p className="font-mono text-[10px] text-muted-foreground [overflow-wrap:anywhere]">Signed: {entry.signedSha256}</p>
+                </li>
+              ))}
+            </ul>
+          </li>
+        ))}
+      </ul>
+    </Panel>
+  )
+}
+
+const CONSENT_LABELS = { data_processing: 'Terms and privacy notice', draft_contact: 'Contact about the unfinished application', location: 'Location sharing', crb: 'Credit bureau check', offer: 'Loan offer accepted' }
 const METHOD_LABELS = { applicant_checkbox: 'by the applicant online', customer_code: 'by the customer’s emailed code, with an agent' }
 
 export function ConsentPanel({ consents }) {
+  const { name: brand } = useBranding()
   if (!consents.length) return null
   return (
     <Panel title="Consent">
@@ -357,7 +490,7 @@ export function ConsentPanel({ consents }) {
             {consent.granted ? <Check className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" /> : <span className="mt-0.5 size-4 shrink-0 text-center text-muted-foreground">–</span>}
             <span>
               <span className="text-foreground">{CONSENT_LABELS[consent.type]}</span>
-              <span className="block text-xs text-muted-foreground" title={CONSENT_NOTICES[consent.type]?.text}>
+              <span className="block text-xs text-muted-foreground" title={consentText(consent.type, brand)}>
                 {consent.granted ? `Given ${METHOD_LABELS[consent.method] || ''}` : 'Not given'}, notice {consent.noticeVersion}
               </span>
             </span>

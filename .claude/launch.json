@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "app-e2e",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "--mode", "e2e", "--port", "4318", "--strictPort"],
+      "port": 4318
+    }
+  ]
+}

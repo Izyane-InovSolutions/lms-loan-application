@@ -3,12 +3,13 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-do
 import { Loader2, LogOut, Menu, Moon, Sun, X } from 'lucide-react'
 
 import { Logo } from '@/components/brand/Logo'
+import { useBranding } from '@/components/brand/BrandingProvider'
 import { cn } from '@/lib/utils'
 import { ROLES, roleLabel } from '@/config/roles'
 import { useAuth } from './auth'
 import { navFor } from './navigation'
 import { useWorkspaceTheme } from './theme'
-import { Initials, PageErrorBoundary, ROLE_TONES, useToast } from './components'
+import { Initials, PageErrorBoundary, roleTone, useToast } from './components'
 import { NotificationBell } from './NotificationBell'
 
 /**
@@ -49,7 +50,7 @@ export function Shell() {
       <div className="sticky top-0 z-30 flex h-14 items-center justify-between border-b bg-[hsl(205_65%_14%)] px-4 text-white lg:hidden">
         <Link to="/admin" className="flex items-center gap-2.5 font-semibold">
           <Logo size="sm" showWordmark={false} />
-          Loan workspace
+          Loan Workspace
         </Link>
         <div className="flex items-center gap-1">
           <NotificationBell />
@@ -101,9 +102,10 @@ export function Shell() {
 }
 
 function Sidebar({ user, demoEnabled, theme, onToggleTheme }) {
+  const { name } = useBranding()
   const { signOut } = useAuth()
   const navigate = useNavigate()
-  const sections = navFor(user.role)
+  const sections = navFor(user)
 
   const handleSignOut = async () => {
     await signOut()
@@ -116,8 +118,8 @@ function Sidebar({ user, demoEnabled, theme, onToggleTheme }) {
         <Link to="/admin" className="flex items-center gap-3 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60">
           <Logo size="sm" showWordmark={false} />
           <span className="leading-tight">
-            <span className="block text-[0.95rem] font-semibold">Loan workspace</span>
-            <span className="block text-xs text-white/55">iZyane origination</span>
+            <span className="block text-[0.95rem] font-semibold">Loan Workspace</span>
+            <span className="block text-xs text-white/55">{name}</span>
           </span>
         </Link>
         <span className="hidden lg:block">
@@ -169,7 +171,7 @@ function Sidebar({ user, demoEnabled, theme, onToggleTheme }) {
           <Initials name={user.name} className="bg-white/15 text-white" />
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-medium">{user.name}</p>
-            <p className="truncate text-xs text-white/55">{roleLabel(user.role)}</p>
+            <p className="truncate text-xs text-white/55">{user.roleLabel || roleLabel(user.role)}</p>
           </div>
         </Link>
         <div className="mt-1 flex gap-1">
@@ -243,7 +245,7 @@ function DemoSwitcher({ currentRole }) {
               )}
             >
               {/* The admin hue is the sidebar's own navy, so it gets a light ring to stay visible. */}
-              <span className={cn('size-1.5 rounded-full', ROLE_TONES[role].dot, role === 'admin' && 'ring-1 ring-white/70')} aria-hidden="true" />
+              <span className={cn('size-1.5 rounded-full', roleTone(role).dot, role === 'admin' && 'ring-1 ring-white/70')} aria-hidden="true" />
               {pending === role ? 'Switching…' : shortRole(role)}
             </button>
           )

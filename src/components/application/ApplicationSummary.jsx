@@ -4,7 +4,7 @@ import { Eye, FileText, Pencil } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useObjectUrl, isPreviewableImage, canPreview, formatBytes } from '@/hooks/useObjectUrl'
-import mark from '@/assets/Icon.png'
+import { useBranding } from '@/components/brand/BrandingProvider'
 
 /**
  * The overview step, laid out as a document rather than a dashboard.
@@ -14,6 +14,7 @@ import mark from '@/assets/Icon.png'
  * pages. Printing to PDF from this screen produces a clean application summary.
  */
 export function ApplicationSummary({ loanTypeLabel, generatedOn, children }) {
+  const { logoSrc } = useBranding()
   return (
     <article
       className={cn(
@@ -24,7 +25,7 @@ export function ApplicationSummary({ loanTypeLabel, generatedOn, children }) {
       <header className="flex flex-wrap items-start justify-between gap-4 border-b border-border bg-secondary/40 px-6 py-5 print:bg-transparent print:px-0 print:pt-0">
         <div className="flex items-center gap-3">
           <span className="grid size-11 shrink-0 place-items-center overflow-hidden rounded-md bg-white ring-1 ring-border">
-            <img src={mark} alt="" aria-hidden="true" className="size-full object-contain p-0.5" />
+            <img src={logoSrc} alt="" aria-hidden="true" className="size-full object-contain p-0.5" />
           </span>
           <div>
             <h2 className="text-lg font-semibold tracking-tight text-foreground">Loan Application Summary</h2>

@@ -42,17 +42,17 @@ This is the most reliable way for outside testers. Every step in this guide work
 unchanged, including certbot.
 
 1. Sign in at <https://www.duckdns.org> (with Google or GitHub). Create a subdomain, for
-   example `izyane-los`, and set its IP to the server's public IP. Keep the token shown
+   example `loan-origination`, and set its IP to the server's public IP. Keep the token shown
    on the page.
 2. Keep the IP up to date (optional on a VPS, where it rarely changes):
    ```bash
-   echo '*/5 * * * * root curl -fsS "https://www.duckdns.org/update?domains=izyane-los&token=YOUR_TOKEN" >/dev/null' | sudo tee /etc/cron.d/duckdns
+   echo '*/5 * * * * root curl -fsS "https://www.duckdns.org/update?domains=loan-origination&token=YOUR_TOKEN" >/dev/null' | sudo tee /etc/cron.d/duckdns
    ```
-3. Check it resolves: `dig +short izyane-los.duckdns.org` should print the server IP.
+3. Check it resolves: `dig +short loan-origination.duckdns.org` should print the server IP.
 4. Allow ports 80 and 443 in the cloud provider's firewall or security group as well as
    `ufw`. Let's Encrypt must be able to reach port 80.
-5. Run the [Quick path](#quick-path) with `DOMAIN=izyane-los.duckdns.org`, then
-   `sudo certbot --nginx -d izyane-los.duckdns.org`.
+5. Run the [Quick path](#quick-path) with `DOMAIN=loan-origination.duckdns.org`, then
+   `sudo certbot --nginx -d loan-origination.duckdns.org`.
 
 ### Option B: office or home machine + Tailscale Funnel
 

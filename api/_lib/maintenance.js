@@ -1,6 +1,7 @@
 import { list, del } from '@vercel/blob'
 import kv from './kv.js'
 import { purgeExpiredSessions } from './auth/sessions.js'
+import { purgeExpiredDraftSummaries } from './drafts.js'
 import { pullDisbursements, releaseStaleSends, retryDueSyncs } from './lms/sync.js'
 import { expireOffers } from '../_handlers/workflow.js'
 import { applyRetention } from './retention.js'
@@ -28,6 +29,14 @@ export const runDailyMaintenance = async (origin) => {
   } catch (error) {
     sessionsPurged = false
     console.warn(`[cron] session purge skipped: ${error?.message || error}`)
+  }
+
+  // Drafts Redis has let expire leave the pipeline too.
+  let draftsExpired = null
+  try {
+    draftsExpired = await purgeExpiredDraftSummaries()
+  } catch (error) {
+    console.warn(`[cron] draft expiry skipped: ${error?.message || error}`)
   }
 
   // Offers the customer did not accept in time lapse.
@@ -67,7 +76,7 @@ export const runDailyMaintenance = async (origin) => {
   // Nothing to sweep when no Blob store is linked (local runs, or a deployment before
   // the store is attached) — and `list` would throw on the missing token.
   if (!process.env.BLOB_READ_WRITE_TOKEN) {
-    return finish({ scanned: 0, deleted: 0, sessionsPurged, lms, offersExpired, retention, overdue, skipped: 'no blob store configured' })
+    return finish({ scanned: 0, deleted: 0, sessionsPurged, draftsExpired, lms, offersExpired, retention, overdue, skipped: 'no blob store configured' })
   }
 
   let cursor
@@ -90,5 +99,5 @@ export const runDailyMaintenance = async (origin) => {
     }
   } while (cursor)
 
-  return finish({ scanned, deleted, sessionsPurged, lms, offersExpired, retention, overdue })
+  return finish({ scanned, deleted, sessionsPurged, draftsExpired, lms, offersExpired, retention, overdue })
 }

@@ -1,4 +1,5 @@
 import { and, desc, eq, inArray } from 'drizzle-orm'
+import { unindexDraft } from '../_lib/drafts.js'
 import kv from '../_lib/kv.js'
 import { getDb, schema } from '../_lib/db/client.js'
 import { fail, email as parseEmail } from '../_lib/http.js'
@@ -40,7 +41,7 @@ const collect = async (email) => {
 }
 
 const summary = async (req, res, { query }) => {
-  const actor = await requireUser(req, { roles: ['admin'] })
+  const actor = await requireUser(req, { permission: 'privacy.manage' })
   const email = parseEmail(query.get('email'))
   if (!email) fail(400, 'Enter the person’s email address.', 'invalid_input')
   const found = await collect(email)
@@ -59,7 +60,7 @@ const summary = async (req, res, { query }) => {
 
 /** Everything held, as one JSON file. Documents are listed; each can be downloaded from the case. */
 const exportData = async (req, res, { query }) => {
-  const actor = await requireUser(req, { roles: ['admin'] })
+  const actor = await requireUser(req, { permission: 'privacy.manage' })
   const email = parseEmail(query.get('email'))
   if (!email) fail(400, 'Enter the person’s email address.', 'invalid_input')
   const found = await collect(email)
@@ -87,7 +88,7 @@ const exportData = async (req, res, { query }) => {
 
 /** Erases applications, files, draft, consents and the customer account for an email. */
 const erase = async (req) => {
-  const actor = await requireUser(req, { roles: ['admin'] })
+  const actor = await requireUser(req, { permission: 'privacy.manage' })
   const email = parseEmail(req.body?.email)
   if (!email || req.body?.confirm !== email) fail(400, 'Type the email address again to confirm.', 'invalid_input')
   const found = await collect(email)
@@ -99,6 +100,7 @@ const erase = async (req) => {
   if (found.draft) {
     await deleteBlobsForDraft(found.draft).catch(() => {})
     await Promise.all([...new Set([...(found.draft.aliases || []), email])].map((key) => kv.del(`draft:${key}`)))
+    await unindexDraft(found.draft.id)
   }
   if (found.account) {
     // The audit trail stays (it is how the controller shows what happened), without the name.
