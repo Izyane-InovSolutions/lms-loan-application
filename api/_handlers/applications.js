@@ -4,7 +4,7 @@ import { alias } from 'drizzle-orm/pg-core'
 import kv from '../_lib/kv.js'
 import { getDb, schema } from '../_lib/db/client.js'
 import { fail, text, email as parseEmail } from '../_lib/http.js'
-import { requireUser, staffWith } from '../_lib/rbac.js'
+import { can, requireUser, staffWith } from '../_lib/rbac.js'
 import { activeUser, attributionFor, resolveReferral } from '../_lib/attribution.js'
 import { unindexDraft } from '../_lib/drafts.js'
 import { ensureOfferDocuments } from '../_lib/offerDocuments.js'
@@ -413,6 +413,21 @@ const auditView = async (req, viewer, application) => {
 
 const publicDocument = ({ url, pathname, lmsFileUrl, ...document }) => ({ ...document, inLms: Boolean(lmsFileUrl) })
 
+/**
+ * A bureau report's accounts, addresses and profile are for credit staff. Agents and
+ * RMs following the case see the headline only. Without a viewer, the headline too.
+ * Earlier pulls keep their figures but not the full report, which can be large.
+ */
+const crbReportFor = (viewer) => (row, index) => {
+  if (can(viewer, 'cases.work')) {
+    if (index === 0 || !row.report?.reportData) return row
+    const { reportData, ...headline } = row.report
+    return { ...row, report: headline }
+  }
+  const { band, summary, sample, found, grade, testIdentity } = row.report || {}
+  return { ...row, report: { band, summary, sample, found, grade, testIdentity: testIdentity ? { nrc: testIdentity.nrc } : undefined, restricted: true } }
+}
+
 /** Everything the case page shows. Exported for the workflow handlers, which return it after each change. */
 export const loadCase = async (applicationId, viewer) => {
   const db = await getDb()
@@ -447,7 +462,7 @@ export const loadCase = async (applicationId, viewer) => {
     appraisals: appraisalRows,
     consents: consentRows,
     locations: points,
-    crbReports: crbRows,
+    crbReports: crbRows.map(crbReportFor(viewer)),
     lmsConfigured: Boolean(await getLms()),
     offersRequireAcceptance: (await getSetting('offers')).requireAcceptance,
     stages: await getSetting('stages'),
