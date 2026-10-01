@@ -48,12 +48,18 @@ describe('the Workflow editor', () => {
       definition: {
         ...published,
         injected: true,
-        states: [...published.states, { id: '../../etc', label: 'Odd one', type: 'final', extra: 'x', actions: [{ label: 'Go', kind: 'teleport', to: 'in_review' }] }],
+        states: [
+          ...published.states.map((state) => (['declined', 'in_review'].includes(state.id) ? { ...state, disabled: true } : state)),
+          { id: '../../etc', label: 'Odd one', type: 'final', extra: 'x', actions: [{ label: 'Go', kind: 'teleport', to: 'in_review' }] },
+        ],
       },
     })
     expect(body.draft.definition.injected).toBeUndefined()
     const odd = body.draft.definition.states.at(-1)
     expect(odd).toMatchObject({ id: 'etc', type: 'work' })
+    // A state can be turned off; the built-in ends stay on.
+    expect(body.draft.definition.states.find((state) => state.id === 'in_review').disabled).toBe(true)
+    expect(body.draft.definition.states.find((state) => state.id === 'declined').disabled).toBeUndefined()
     expect(odd.extra).toBeUndefined()
     expect(odd.actions[0].kind).toBe('move')
     // It isn't reachable from the start, so the draft can't be published as it is.

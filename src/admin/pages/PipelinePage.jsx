@@ -36,7 +36,8 @@ const workflowColumns = (workflow, applications) => {
   const current = workflow.current
   const byId = Object.fromEntries(current.states.map((state) => [state.id, state]))
   const work = current.order.filter((id) => byId[id] && byId[id].type !== 'final')
-  const columns = work.map((id) => ({ key: id, label: byId[id].label, accent: ACCENTS[current.categories[id]], match: (row) => row.state === id && row.status !== 'info_requested' }))
+  // A state turned off gets no new cases; its column shows only while older cases are in it.
+  const columns = work.map((id) => ({ key: id, label: byId[id].label, accent: ACCENTS[current.categories[id]], hideEmpty: Boolean(byId[id].disabled), match: (row) => row.state === id && row.status !== 'info_requested' }))
   const afterReview = columns.findIndex((column) => !['submitted', 'in_review'].includes(current.categories[column.key]))
   columns.splice(afterReview === -1 ? columns.length : afterReview, 0, { key: 'info_requested', label: 'Waiting on applicant', accent: ACCENTS.info_requested, match: (row) => row.status === 'info_requested' })
 
@@ -54,7 +55,9 @@ const workflowColumns = (workflow, applications) => {
     { key: 'paid_out', label: name('paid_out', 'Paid out'), accent: ACCENTS.disbursed, match: (row) => row.status === 'disbursed' },
     { key: 'declined', label: name('declined', 'Declined'), accent: ACCENTS.declined, match: (row) => row.status === 'declined' },
     { key: 'closed', label: 'Withdrawn or lapsed', accent: ACCENTS.withdrawn, match: (row) => ['withdrawn', 'expired'].includes(row.status) },
-  ].map((column) => ({ ...column, cards: applications.filter(column.match) }))
+  ]
+    .map((column) => ({ ...column, cards: applications.filter(column.match) }))
+    .filter((column) => !column.hideEmpty || column.cards.length)
 }
 
 // By what the viewer's role lets them see.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { analyzeWorkflow, legacyStateOf, legacyToWorkflow, resolveState, validateWorkflow } from '../src/config/workflow.js'
+import { actionTarget, analyzeWorkflow, legacyStateOf, legacyToWorkflow, resolveState, validateWorkflow } from '../src/config/workflow.js'
 
 const ROLES = ['admin', 'loan_officer', 'sales_manager', 'rm', 'dsa']
 const valid = (definition) => {
@@ -220,5 +220,26 @@ describe('a workflow built in the editor', () => {
     expect(errorsOf(edit(custom(), 'disbursement', () => ({ askApplicant: true })))).toMatch(/only be asked for more before the decision/)
     const filtered = edit(custom(), 'appraisal', () => ({ products: ['business'] }))
     expect(errorsOf(filtered)).toMatch(/needs exactly one Move action/)
+  })
+})
+
+describe('a state turned off', () => {
+  const off = (definition, id) => edit(definition, id, () => ({ disabled: true }))
+
+  it('is passed straight through, forward and back', () => {
+    const definition = off(custom(), 'prescreening')
+    const { categories } = valid(definition)
+    expect(resolveState(definition, 'prescreening', 'personal').id).toBe('appraisal')
+    // Appraisal's Return to prescreening goes back one further, to the draft.
+    const back = definition.states.find((state) => state.id === 'appraisal').actions.find((action) => action.kind === 'return')
+    expect(actionTarget(definition, back, 'personal').id).toBe('draft')
+    expect(categories.appraisal).toBe('in_review')
+  })
+
+  it('needs exactly one Move to pass cases on, and can’t be the start, the offer or an end', () => {
+    expect(errorsOf(off(custom(), 'appraisal'))).toMatch(/“Loan appraisal” is turned off, so cases pass straight through it by its Move action/)
+    expect(errorsOf(off(custom(), 'draft'))).toMatch(/so it can’t be turned off/)
+    expect(errorsOf(off(custom(), 'offer'))).toMatch(/“Offer” is the offer: it can’t be turned off/)
+    expect(errorsOf(off(custom(), 'declined'))).toMatch(/“Rejected” is an end: it can’t be turned off/)
   })
 })

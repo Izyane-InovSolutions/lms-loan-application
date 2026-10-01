@@ -232,3 +232,32 @@ describe('what the workspace shows of a case’s workflow', () => {
     expect((await act(officer, id, 'take')).status).toBe(403)
   })
 })
+
+describe('a state turned off', () => {
+  // Intake → Field check → Prescreening, with Field check off.
+  const withFieldCheck = (disabled) => ({
+    ...CUSTOM,
+    states: [
+      { ...CUSTOM.states[0], actions: [{ id: 'field', label: 'Send to field check', kind: 'move', to: 'field_check', options: { claim: true } }] },
+      { id: 'field_check', label: 'Field check', type: 'work', disabled, actions: [{ id: 'prescreen', label: 'Send to prescreening', kind: 'move', to: 'prescreening' }] },
+      ...CUSTOM.states.slice(1),
+    ],
+  })
+
+  it('is passed straight through, and its setup kept', async () => {
+    await saveDraftWorkflow(withFieldCheck(true), 'Field check off', { id: null })
+    const published = await publishDraftWorkflow({ id: null }, 'Field check off')
+    expect(published.definition.states.find((state) => state.id === 'field_check')).toMatchObject({ disabled: true, label: 'Field check' })
+    const id = await submit('field-off@example.com')
+    expect((await move(officer, id, 'field')).status).toBe(200)
+    expect(await consistent(id)).toMatchObject({ state: 'prescreening', status: 'in_review' })
+  })
+
+  it('takes cases again once turned back on', async () => {
+    await saveDraftWorkflow(withFieldCheck(false), 'Field check on', { id: null })
+    await publishDraftWorkflow({ id: null }, 'Field check on')
+    const id = await submit('field-on@example.com')
+    expect((await move(officer, id, 'field')).status).toBe(200)
+    expect(await consistent(id)).toMatchObject({ state: 'field_check', status: 'in_review' })
+  })
+})

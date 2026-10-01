@@ -1,6 +1,6 @@
 /* eslint-disable react/prop-types */
 import React, { useEffect, useRef } from 'react'
-import { Flag, Plus, Trash2 } from 'lucide-react'
+import { Flag, Plus, Power, Trash2 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -8,7 +8,7 @@ import { Select } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { registeredRoles } from '@/config/roles'
 import { ACTION_KINDS, STATE_TYPES, SYSTEM_FINALS, stateById } from '@/config/workflow'
-import { addAction, changeAction, changeState, removeAction, removeState } from './editing'
+import { addAction, changeAction, changeState, removeAction, removeState, setStateEnabled } from './editing'
 
 /*
  * Everything about one state, in a side panel: its name, type and roles, what it asks for,
@@ -278,7 +278,14 @@ export function StateDrawer({ definition, stateId, focusActionId, errors, onChan
                 ) : null}
 
                 <Section title="This state">
+                  {state.disabled ? (
+                    <p className="rounded-md bg-muted px-3 py-2 text-sm text-muted-foreground">Off: cases pass straight through it by its Move action. Its setup is kept for when you turn it back on.</p>
+                  ) : null}
                   <div className="flex flex-wrap gap-2">
+                    <Button type="button" variant="outline" size="sm" onClick={() => onChange(setStateEnabled(definition, state.id, Boolean(state.disabled)))}>
+                      <Power />
+                      {state.disabled ? 'Turn this state on' : 'Turn this state off'}
+                    </Button>
                     {state.type === 'work' && definition.start !== state.id ? (
                       <Button type="button" variant="outline" size="sm" onClick={() => onChange({ ...definition, start: state.id })}>
                         <Flag />

@@ -29,7 +29,7 @@ const summarize = (flow) => ({
   version: flow.version,
   legacy: flow.legacy,
   start: flow.definition.start,
-  states: flow.definition.states.map(({ id, label, type, roles = [], products = [], askApplicant = false, trackProgress = false }) => ({ id, label, type, roles, products, askApplicant, trackProgress })),
+  states: flow.definition.states.map(({ id, label, type, roles = [], products = [], askApplicant = false, trackProgress = false, disabled = false }) => ({ id, label, type, roles, products, askApplicant, trackProgress, disabled })),
   order: flow.analysis.order,
   categories: flow.analysis.categories,
   phases: flow.analysis.phases,
@@ -110,6 +110,7 @@ export const sanitizeWorkflow = (input) => {
       askApplicant: Boolean(state?.askApplicant),
       handToLms: Boolean(state?.handToLms),
       trackProgress: Boolean(state?.trackProgress),
+      ...(state?.disabled && !system ? { disabled: true } : {}),
       ...(type === 'offer' ? { offer: { onAccept: text(state?.offer?.onAccept, 60) } } : {}),
       actions:
         type === 'final'
@@ -180,7 +181,7 @@ const publish = async (req, res) => {
 
 /**
  * Moves open cases on older versions onto the published one, where the state they are in
- * still exists there (by id). The others stay where they are, to finish on their version.
+ * still exists there (by id) and is on. The others stay where they are, to finish on their version.
  */
 const moveCases = async (req) => {
   const actor = await requireUser(req, { permission: 'settings.manage' })
@@ -193,7 +194,7 @@ const moveCases = async (req) => {
   let moved = 0
   for (const row of open) {
     const target = stateById(current.definition, row.state)
-    if (!target || target.type === 'final') continue
+    if (!target || target.type === 'final' || target.disabled) continue
     const status = row.status === 'info_requested' && target.askApplicant ? 'info_requested' : current.analysis.categories[target.id]
     const [updated] = await db
       .update(applications)

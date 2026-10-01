@@ -47,11 +47,11 @@ function Node({ definition, node, depth }) {
   return (
     <li className={cn('relative', depth > 0 && 'pl-6')}>
       {depth > 0 ? <span className="absolute left-0 top-5 h-px w-5 bg-border" aria-hidden="true" /> : null}
-      <div className={cn('inline-flex max-w-full flex-col gap-1 rounded-lg border bg-card px-3.5 py-2.5', state.type === 'final' && 'bg-muted/60')}>
+      <div className={cn('inline-flex max-w-full flex-col gap-1 rounded-lg border bg-card px-3.5 py-2.5', state.type === 'final' && 'bg-muted/60', state.disabled && 'border-dashed opacity-60')}>
         <div className="flex flex-wrap items-center gap-2">
           {via ? <span className="rounded bg-secondary px-1.5 py-0.5 text-[11px] font-medium text-secondary-foreground">{via}</span> : null}
           <span className="text-sm font-semibold text-foreground">{state.label}</span>
-          <span className="text-xs text-muted-foreground">{STATE_TYPES[state.type]?.label}</span>
+          <span className="text-xs text-muted-foreground">{state.disabled ? 'Off: passed straight through' : STATE_TYPES[state.type]?.label}</span>
         </div>
         {state.type !== 'final' ? (
           <p className="text-xs text-muted-foreground">{state.roles?.length ? state.roles.map(roleLabel).join(', ') : 'Anyone allowed'}</p>

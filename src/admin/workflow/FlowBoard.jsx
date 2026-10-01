@@ -75,6 +75,7 @@ function StateCard({ definition, state, isStart, errorCount, onEdit, onEditActio
         'relative flex flex-col rounded-xl border bg-card shadow-sm transition-shadow',
         state.type !== 'final' && 'min-h-[15rem]',
         over && (dragging === 'connect' ? 'ring-2 ring-success/60' : 'ring-2 ring-primary/50'),
+        state.disabled && 'border-dashed bg-card/60',
         errorCount > 0 && 'border-destructive/50'
       )}
     >
@@ -108,15 +109,16 @@ function StateCard({ definition, state, isStart, errorCount, onEdit, onEditActio
             <PencilLine className="size-4" />
           </button>
         </div>
-        {isStart || errorCount ? (
+        {isStart || errorCount || state.disabled ? (
           <div className="mt-2 flex flex-wrap gap-1.5">
             {isStart ? <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium text-secondary-foreground">Applications start here</span> : null}
+            {state.disabled ? <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">Off: cases pass straight through</span> : null}
             {errorCount ? <span className="rounded-full bg-destructive/10 px-2 py-0.5 text-[11px] font-medium text-destructive">{errorCount === 1 ? '1 problem' : `${errorCount} problems`}</span> : null}
           </div>
         ) : null}
       </div>
 
-      <div className="flex flex-1 flex-col gap-2.5 px-5 py-4">
+      <div className={cn('flex flex-1 flex-col gap-2.5 px-5 py-4', state.disabled && 'opacity-60')}>
         {state.type === 'final' ? <p className="text-sm italic text-muted-foreground">End of workflow</p> : null}
         {state.type === 'offer' ? (
           <ActionChip label="Customer accepts" target={stateById(definition, state.offer?.onAccept)?.label || 'Choose…'} tone="forward" onClick={onEdit} />

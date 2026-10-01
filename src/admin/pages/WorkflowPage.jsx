@@ -1,6 +1,6 @@
 /* eslint-disable react/prop-types */
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, GitBranch, LayoutGrid, ListChecks, Loader2, Plus, Rocket, Trash2, Undo2, X } from 'lucide-react'
+import { AlertTriangle, GitBranch, LayoutGrid, List, ListChecks, Loader2, Plus, Rocket, Trash2, Undo2, X } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -14,7 +14,8 @@ import { FormError, PageHeader, Panel, dateTime, useToast } from '../components'
 import { FlowBoard } from '../workflow/FlowBoard'
 import { TreePreview } from '../workflow/TreePreview'
 import { StateDrawer } from '../workflow/StateDrawer'
-import { addAction, addState, changeChecklist, connect, connectToNew, forEditing, moveStateBefore } from '../workflow/editing'
+import { StepList } from '../workflow/StepList'
+import { addAction, addState, changeChecklist, connect, connectToNew, forEditing, moveStateBefore, moveStep, setStateEnabled } from '../workflow/editing'
 
 /*
  * Settings for the loan workflow (src/config/workflow.js): the states an application moves
@@ -23,6 +24,22 @@ import { addAction, addState, changeChecklist, connect, connectToNew, forEditing
  */
 
 const HINT_KEY = 'los:workflow-hint-dismissed'
+const VIEW_KEY = 'los:workflow-view'
+const VIEWS = [
+  ['list', 'List', List],
+  ['flow', 'Flow', LayoutGrid],
+  ['tree', 'Tree preview', GitBranch],
+]
+
+// The view this browser used last; storage may be blocked, which just means the default.
+const readView = () => {
+  try {
+    const saved = window.localStorage.getItem(VIEW_KEY)
+    return VIEWS.some(([key]) => key === saved) ? saved : 'flow'
+  } catch {
+    return 'flow'
+  }
+}
 
 const readHintDismissed = () => {
   try {
@@ -116,7 +133,7 @@ export function WorkflowPage() {
   const [loaded, setLoaded] = useState({ status: 'loading' })
   const [definition, setDefinition] = useState(null)
   const [saved, setSaved] = useState(null)
-  const [view, setView] = useState('flow')
+  const [view, setViewState] = useState(readView)
   const [editing, setEditing] = useState(null)
   const [checklistOpen, setChecklistOpen] = useState(false)
   const [hintDismissed, setHintDismissed] = useState(readHintDismissed)
@@ -206,6 +223,14 @@ export function WorkflowPage() {
       notify(`${moved} ${moved === 1 ? 'case' : 'cases'} moved${kept ? `; ${kept} stay on their version (their state isn’t in this one)` : ''}`)
     })
 
+  const setView = (next) => {
+    setViewState(next)
+    try {
+      window.localStorage.setItem(VIEW_KEY, next)
+    } catch {
+      // Storage blocked: the view isn't remembered.
+    }
+  }
   const edit = (stateId, actionId = null) => setEditing({ stateId, actionId })
   const addNewState = () => {
     const { definition: next, id } = addState(definition, { label: 'New state' })
@@ -249,10 +274,7 @@ export function WorkflowPage() {
 
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="inline-flex rounded-lg border bg-card p-1" role="tablist" aria-label="View">
-          {[
-            ['flow', 'Flow', LayoutGrid],
-            ['tree', 'Tree preview', GitBranch],
-          ].map(([key, label, Icon]) => (
+          {VIEWS.map(([key, label, Icon]) => (
             <button
               key={key}
               type="button"
@@ -324,7 +346,15 @@ export function WorkflowPage() {
         </ul>
       ) : null}
 
-      {view === 'flow' ? (
+      {view === 'list' ? (
+        <StepList
+          definition={definition}
+          errorsByState={errorsByState}
+          onEdit={edit}
+          onMove={(id, beforeId) => setDefinition(moveStep(definition, id, beforeId))}
+          onToggle={(id, enabled) => setDefinition(setStateEnabled(definition, id, enabled))}
+        />
+      ) : view === 'flow' ? (
         <FlowBoard
           definition={definition}
           errorsByState={errorsByState}

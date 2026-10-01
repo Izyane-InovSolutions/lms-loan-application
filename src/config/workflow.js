@@ -7,13 +7,16 @@
  *
  *   { start, checklist: [{ key, label, hint, requiredToApprove }],
  *     states: [{ id, label, type: 'work' | 'offer' | 'final', outcome?,
- *                roles, products, requiredChecks, askApplicant, handToLms, trackProgress,
+ *                roles, products, requiredChecks, askApplicant, handToLms, trackProgress, disabled?,
  *                offer?: { onAccept }, actions: [{ id, label, kind, to, permission?, options }] }] }
  *
  * `applications.status` stays the reporting category every report, the customer page and
  * the LMS read. It is derived from the state (analyzeWorkflow → categories): the graph
  * decides whether a state comes before the decision, after it, or after the customer
  * accepted, and that fixes its category.
+ *
+ * A state can be turned off (`disabled`) instead of deleted: cases pass straight through it
+ * by its Move action, as they pass a state limited to other products, and its setup stays.
  */
 
 import { APPLICATION_STATUSES } from './applications.js'
@@ -57,8 +60,8 @@ export const PHASES = { review: 'Before the decision', decided: 'After approval'
 
 export const stateById = (definition, id) => (definition?.states || []).find((state) => state.id === id) || null
 
-/** Whether a state applies to a product; a state limited to others is skipped. */
-export const appliesTo = (state, product) => !state?.products?.length || !product || state.products.includes(product)
+/** Whether a state applies to a product; a state turned off, or limited to others, is skipped. */
+export const appliesTo = (state, product) => !state?.disabled && (!state?.products?.length || !product || state.products.includes(product))
 
 /** The edges that move a case on, including an offer's acceptance. */
 export const forwardEdges = (state) => [
@@ -67,8 +70,8 @@ export const forwardEdges = (state) => [
 ]
 
 /**
- * The state a case really lands in when sent to `id`: a state limited to other products
- * is passed through by its single move, as if it weren't there.
+ * The state a case really lands in when sent to `id`: a state turned off or limited to
+ * other products is passed through by its single move, as if it weren't there.
  */
 export const resolveState = (definition, id, product) => {
   const seen = new Set()
@@ -80,6 +83,26 @@ export const resolveState = (definition, id, product) => {
   }
   return state
 }
+
+/**
+ * Where a return really sends a case: a state turned off (or limited to other products)
+ * is stepped back past, to the state before it, when exactly one state leads there.
+ */
+export const resolveReturn = (definition, id, product) => {
+  const seen = new Set()
+  let state = stateById(definition, id)
+  while (state && !appliesTo(state, product) && !seen.has(state.id)) {
+    seen.add(state.id)
+    const current = state
+    const before = (definition?.states || []).filter((entry) => entry.id !== current.id && forwardEdges(entry).some((edge) => edge.to === current.id))
+    state = before.length === 1 ? before[0] : null
+  }
+  return state
+}
+
+/** The state an action really sends a case to, for its product. */
+export const actionTarget = (definition, action, product) =>
+  action?.kind === 'return' ? resolveReturn(definition, action.to, product) : resolveState(definition, action?.to, product)
 
 const PRODUCTS = ['personal', 'business']
 
@@ -119,7 +142,9 @@ export const analyzeWorkflow = (definition) => {
   if (!hasCycle) {
     for (const product of PRODUCTS) {
       const walk = (id, phase, afterRecommend, path) => {
-        const state = resolveState(definition, id, product)
+        // A skipped state that can't pass cases on is reported on its own; the walk goes
+        // on through it, so the states after it aren't reported as unreachable too.
+        const state = resolveState(definition, id, product) || stateById(definition, id)
         if (!state || path.has(state.id)) return
         reached.add(state.id)
         if (state.type === 'final') return
@@ -228,6 +253,7 @@ export const validateWorkflow = (definition, { roles } = {}) => {
   else {
     if (start.type !== 'work') add(errors, 'New applications must start in an in-progress state.', start.id)
     if (start.products?.length) add(errors, 'The start state must apply to every loan product.', start.id)
+    if (start.disabled) add(errors, `Applications start in “${start.label}”, so it can’t be turned off. Start them in another state first.`, start.id)
   }
 
   const checkKeys = new Set((definition.checklist || []).map((check) => check.key))
@@ -238,6 +264,7 @@ export const validateWorkflow = (definition, { roles } = {}) => {
     if (state.type === 'final') {
       if (state.actions?.length) add(errors, `“${state.label}” is an end: it can’t have actions.`, state.id)
       if (state.products?.length) add(errors, `“${state.label}” is an end and applies to every product.`, state.id)
+      if (state.disabled) add(errors, `“${state.label}” is an end: it can’t be turned off.`, state.id)
       continue
     }
     const actions = state.actions || []
@@ -259,6 +286,9 @@ export const validateWorkflow = (definition, { roles } = {}) => {
       if (kind.to && action.to !== kind.to) add(errors, `“${action.label}” must lead to “${stateById(definition, kind.to)?.label || kind.to}”.`, state.id, action.id)
       if (!kind.to && target.type === 'final') add(errors, `“${action.label}” can’t end the case. Use a Reject or Mark as paid out action for that.`, state.id, action.id)
       if (target.id === state.id) add(errors, `“${action.label}” in “${state.label}” leads back to the same state.`, state.id, action.id)
+      if (action.kind === 'return' && target.disabled && !resolveReturn(definition, target.id, null)) {
+        add(errors, `“${action.label}” in “${state.label}” sends cases back to “${target.label}”, which is turned off, and no single state comes before it to go back to instead.`, state.id, action.id)
+      }
       for (const key of action.options?.checks || []) {
         if (!checkKeys.has(key)) add(errors, `“${action.label}” needs a checklist item that no longer exists.`, state.id, action.id)
       }
@@ -277,7 +307,12 @@ export const validateWorkflow = (definition, { roles } = {}) => {
       if (!onAccept) add(errors, `“${state.label}”: choose where a case goes once the customer accepts.`, state.id)
       else if (onAccept.type !== 'work') add(errors, `“${state.label}”: after acceptance a case goes to an in-progress state (payout comes from there).`, state.id)
     }
-    if (state.products?.length && state.products.length < PRODUCTS.length && actions.filter((action) => action.kind === 'move').length !== 1) {
+    const moves = actions.filter((action) => action.kind === 'move').length
+    if (state.disabled && state.type === 'offer') {
+      add(errors, `“${state.label}” is the offer: it can’t be turned off, because an offer has no way to pass a case on without the customer.`, state.id)
+    } else if (state.disabled && moves !== 1) {
+      add(errors, `“${state.label}” is turned off, so cases pass straight through it by its Move action. It needs exactly one.`, state.id)
+    } else if (state.products?.length && state.products.length < PRODUCTS.length && moves !== 1) {
       add(errors, `“${state.label}” is for some loans only, so it needs exactly one Move action: the way other loans go past it.`, state.id)
     }
   }
@@ -288,7 +323,8 @@ export const validateWorkflow = (definition, { roles } = {}) => {
 
   if (!analysis.hasCycle) {
     for (const state of states) {
-      if (state.type === 'final') continue
+      // A state turned off is never entered: where it sits in the journey doesn't apply.
+      if (state.type === 'final' || state.disabled) continue
       const phase = analysis.phases[state.id]
       if (!analysis.reached.has(state.id)) add(errors, `“${state.label}” can’t be reached from the start.`, state.id)
       for (const action of state.actions || []) {
@@ -299,8 +335,12 @@ export const validateWorkflow = (definition, { roles } = {}) => {
         if (action.kind === 'reject' && phase !== 'review') add(errors, `“${action.label}”: after approval a case is withdrawn, not rejected.`, state.id, action.id)
         if (action.kind === 'pay_out' && phase === 'review') add(errors, `“${action.label}”: a loan is paid out only after it is approved.`, state.id, action.id)
         if (action.kind === 'return') {
-          if (!reachableFrom(definition, target.id).has(state.id)) add(errors, `“${action.label}” must send the case back to an earlier state.`, state.id, action.id)
-          else if (analysis.phases[target.id] !== phase) add(errors, `“${action.label}” can’t go back past the decision: the offer, signatures and LMS hand-off can’t be undone.`, state.id, action.id)
+          // Back to a state that's off means the one before it.
+          const back = target.disabled ? resolveReturn(definition, target.id, null) : target
+          if (!back) continue
+          if (back.id === state.id) add(errors, `“${action.label}” in “${state.label}” leads back to the same state.`, state.id, action.id)
+          else if (!reachableFrom(definition, back.id).has(state.id)) add(errors, `“${action.label}” must send the case back to an earlier state.`, state.id, action.id)
+          else if (analysis.phases[back.id] !== phase) add(errors, `“${action.label}” can’t go back past the decision: the offer, signatures and LMS hand-off can’t be undone.`, state.id, action.id)
         }
       }
       if (state.type === 'offer' && phase !== 'decided') add(errors, `“${state.label}” must come right after an Approve action.`, state.id)

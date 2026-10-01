@@ -7,7 +7,7 @@ import { addEvent } from './applications.js'
 import { getSetting } from './settings.js'
 import { getPublishedWorkflow, getWorkflowVersion } from './workflowVersions.js'
 import { OPEN_STATUSES, WITHDRAWABLE_STATUSES } from '../../src/config/applications.js'
-import { ACTION_KINDS, PHASES, SYSTEM_FINAL_IDS, appliesTo, forwardEdges, resolveState, stateById } from '../../src/config/workflow.js'
+import { ACTION_KINDS, PHASES, SYSTEM_FINAL_IDS, actionTarget, appliesTo, forwardEdges, resolveState, stateById } from '../../src/config/workflow.js'
 import { checkOtp } from './otp.js'
 import { signatureFor } from './signing.js'
 import { priceLoan } from '../../src/config/loanProducts.js'
@@ -316,7 +316,7 @@ const runTransition = async (tx, viewer, application, flow, state, action, input
       event = { type: state.trackProgress ? 'stage' : 'status', message: state.trackProgress ? `${stepName(state)}: done${rationale ? ` (${rationale})` : ''}` : `${action.label}${rationale ? ` (${rationale})` : ''}` }
     }
   } else if (action.kind === 'return') {
-    changes.stageProgress = progressWithout(flow, application, resolveState(flow.definition, action.to, application.loanType).id)
+    changes.stageProgress = progressWithout(flow, application, actionTarget(flow.definition, action, application.loanType).id)
     event = { type: 'decision', message: `Sent back for more work: ${rationale}` }
   } else if (action.kind === 'recommend') {
     await tx.insert(appraisals).values({
@@ -340,7 +340,8 @@ const runTransition = async (tx, viewer, application, flow, state, action, input
     event = { type: 'status', message: rationale ? `Paid out (${rationale})` : 'Paid out', visibleToCustomer: true }
   }
 
-  const { target, changes: entry } = entryChanges(flow, application, action.to, settings)
+  // A return to a state that's off goes to the one before it; entering passes the rest through.
+  const { target, changes: entry } = entryChanges(flow, application, actionTarget(flow.definition, action, application.loanType)?.id || action.to, settings)
   result.handToLms = Boolean(target.handToLms)
   result.enteredOffer = target.type === 'offer'
   return { changes: { ...changes, ...entry }, event, result, target }
@@ -389,7 +390,7 @@ const decision = async (tx, viewer, application, action, input, rationale, setti
     const price = priceLoan(approved.amount, approved.tenure, settings.products.find((entry) => entry.id === application.loanType))
     Object.assign(changes, { totalRepayable: price.total, monthlyInstalment: price.monthly })
   }
-  const toOffer = resolveState(flow.definition, action.to, application.loanType)?.type === 'offer'
+  const toOffer = actionTarget(flow.definition, action, application.loanType)?.type === 'offer'
   return {
     decided: 'approved',
     approved: true,
@@ -708,7 +709,7 @@ export const workflowView = async (viewer, application, { recommendation = null 
       state.type === 'final'
         ? []
         : (state.actions || []).map((action) => {
-            const target = resolveState(definition, action.to, product)
+            const target = actionTarget(definition, action, product)
             return {
               id: action.id,
               label: action.label,

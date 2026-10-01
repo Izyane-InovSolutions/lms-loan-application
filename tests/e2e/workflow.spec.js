@@ -100,3 +100,43 @@ test('an admin builds the workflow in the editor, and cases follow it', async ({
   await expect(manager.getByText('Underwriting done')).toBeVisible()
   await expect(manager.getByText('Awaiting approval').first()).toBeVisible()
 })
+
+test('in the list view, an admin drags a step into the path and turns another off', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 2200 })
+  await signInAs(page, 'Administrator')
+  await page.goto('/admin/workflow')
+  await page.getByRole('tab', { name: 'List' }).click()
+  const steps = page.getByRole('region', { name: 'Steps' })
+  const row = (name) => steps.locator(`li[aria-label="${name}"]`)
+
+  // A new step lands at the end, unconnected; dragged above Underwriting, it joins the path.
+  await page.getByRole('button', { name: 'Add state' }).click()
+  const panel = page.getByRole('dialog')
+  await panel.getByLabel('Name', { exact: true }).fill('Compliance')
+  await page.keyboard.press('Escape')
+  await expect(panel).toBeHidden()
+  await expect(page.getByText('“Compliance” can’t be reached from the start.')).toBeVisible()
+  const target = row('Underwriting')
+  const box = await target.boundingBox()
+  // The top quarter of the row: dropped before it.
+  await drag(page, row('Compliance').locator('[title="Drag to move"]'), { boundingBox: async () => ({ ...box, height: box.height / 2 }) })
+  const order = await steps.locator('li h3').allTextContents()
+  expect(order.indexOf('Compliance')).toBe(order.indexOf('Underwriting') - 1)
+  await expect(row('In review')).toContainText(/Recommend\s*Compliance/)
+  await expect(row('Compliance')).toContainText('Send to Underwriting')
+  await expect(page.getByText(/things? needs? fixing/)).toBeHidden()
+
+  // Underwriting off: cases pass straight through, and it keeps its setup.
+  await page.getByRole('switch', { name: 'Disable Underwriting' }).click()
+  await expect(row('Underwriting')).toContainText('Off: cases pass straight through to “Awaiting approval”')
+  await page.getByRole('tab', { name: 'Flow' }).click()
+  await expect(page.locator('article[aria-label="Underwriting"]')).toContainText('Off: cases pass straight through')
+  await page.screenshot({ path: 'test-results/workflow-list-flow.png', fullPage: true })
+  await page.getByRole('tab', { name: 'List' }).click()
+  await page.screenshot({ path: 'test-results/workflow-list.png', fullPage: true })
+
+  await page.getByRole('button', { name: 'Save workflow' }).click()
+  await expect(page.getByText(/Workflow published/)).toBeVisible()
+  const { current } = await (await page.request.get('/api/v1/workflow')).json()
+  expect(current.states.find((state) => state.label === 'Underwriting')).toMatchObject({ disabled: true, roles: ['sales_manager'] })
+})

@@ -73,6 +73,12 @@ export const removeState = (definition, id) => {
   return { ...definition, states, start: definition.start === id ? states.find((state) => state.type === 'work')?.id || '' : definition.start }
 }
 
+/**
+ * Turns a state on or off. Off, cases pass straight through it by its Move action and
+ * everything about it is kept, ready to turn back on.
+ */
+export const setStateEnabled = (definition, id, enabled) => (SYSTEM_FINAL_IDS.includes(id) ? definition : updateState(definition, id, () => ({ disabled: enabled ? undefined : true })))
+
 /** Puts `id` just before `beforeId` (or last, with no `beforeId`). */
 export const moveStateBefore = (definition, id, beforeId) => {
   if (id === beforeId) return definition
@@ -142,4 +148,89 @@ export const changeChecklist = (definition, checklist) => {
     actions: (state.actions || []).map((action) => ({ ...action, options: { ...action.options, checks: (action.options?.checks || []).filter((key) => known.has(key)) } })),
   }))
   return { ...definition, checklist: items, states }
+}
+
+// ---------------------------------------------------------------------------
+// The list view: the steps in order, where the order is the path
+// ---------------------------------------------------------------------------
+
+/** The steps the list view shows and reorders: every state but the ends, in order. */
+export const listSteps = (definition) => definition.states.filter((state) => state.type !== 'final')
+
+// The actions whose target follows the order. Returns, rejections and payouts stay put.
+const FOLLOWS_ORDER = new Set(['move', 'recommend', 'approve'])
+
+/**
+ * `state` with the actions (and offer acceptance) that led to `from` leading to `to`
+ * instead. An action named after its old target is renamed after the new one; one that
+ * would duplicate an action already going there is dropped.
+ */
+const retarget = (definition, state, from, to) => {
+  const toState = stateById(definition, to)
+  const actions = []
+  for (const action of state.actions || []) {
+    if (action.to !== from || !FOLLOWS_ORDER.has(action.kind)) {
+      actions.push(action)
+      continue
+    }
+    if (!to) continue
+    if ((state.actions || []).some((other) => other !== action && other.to === to && other.kind === action.kind)) continue
+    const named = action.label === defaultActionLabel(action.kind, stateById(definition, from))
+    actions.push({ ...action, to, ...(named ? { label: defaultActionLabel(action.kind, toState) } : {}) })
+  }
+  const offer = state.type === 'offer' && state.offer?.onAccept === from ? { offer: { ...state.offer, onAccept: to || '' } } : {}
+  return { ...state, actions, ...offer }
+}
+
+const leadsTo = (state, id) => (state.type === 'offer' ? state.offer?.onAccept === id : (state.actions || []).some((action) => action.to === id && ACTION_KINDS[action.kind]?.forward))
+
+/**
+ * Moves step `id` to just before `beforeId` (or to the end of the steps) and reconnects
+ * the steps around it, so the list order stays the path a case takes:
+ *
+ *   where it was     what led into it from the step above now leads to the step below
+ *   where it lands   the step above now leads to it, and it leads to the step below
+ *
+ * Only the links between neighbours change; branches, returns and rejections stay as
+ * they are. Moving a step to or from the top makes the top step the start.
+ */
+export const moveStep = (definition, id, beforeId = null) => {
+  const steps = listSteps(definition).map((state) => state.id)
+  const from = steps.indexOf(id)
+  if (from < 0 || id === beforeId) return definition
+  const rest = steps.filter((step) => step !== id)
+  const found = beforeId ? rest.indexOf(beforeId) : -1
+  const at = found >= 0 ? found : rest.length
+  if (at === from) return definition
+
+  const [above, below] = [steps[from - 1], steps[from + 1]]
+  const [newAbove, newBelow] = [rest[at - 1], rest[at]]
+  let current = definition
+  const change = (stateId, edit) => {
+    current = withStates(current, current.states.map((state) => (state.id === stateId ? edit(state) : state)))
+  }
+
+  // Out of its old place: the step above skips to the step below (or loses the link, at the end).
+  if (above) change(above, (state) => retarget(current, state, id, below || null))
+  // Into its new place.
+  if (newAbove && newBelow) change(newAbove, (state) => retarget(current, state, newBelow, id))
+  change(id, (state) => {
+    // What led to its old neighbour below now leads to its new one (or nowhere, at the end,
+    // where it would point back up the list).
+    let moved = below && below !== newBelow ? retarget(current, state, below, newBelow || null) : state
+    if (newBelow && !leadsTo(moved, newBelow)) {
+      if (moved.type === 'offer') moved = { ...moved, offer: { ...moved.offer, onAccept: newBelow } }
+      else {
+        const target = stateById(current, newBelow)
+        const actionId = uniqueId('next', new Set((moved.actions || []).map((action) => action.id)), 'next')
+        moved = { ...moved, actions: [...(moved.actions || []), { id: actionId, label: defaultActionLabel('move', target), kind: 'move', to: newBelow, options: { checks: [] } }] }
+      }
+    }
+    return moved
+  })
+
+  const firstEnd = current.states.find((state) => state.type === 'final')?.id || null
+  current = moveStateBefore(current, id, newBelow || firstEnd)
+  if ((from === 0 || at === 0) && definition.start === steps[0]) current = { ...current, start: listSteps(current)[0].id }
+  return current
 }
