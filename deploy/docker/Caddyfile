@@ -1,0 +1,27 @@
+# HTTPS in front of the app. DOMAIN comes from deploy/docker/.env; ports 80 and 443 must
+# reach this server for Let's Encrypt. DOMAIN=localhost gives a local, self-signed site.
+{$DOMAIN} {
+	encode zstd gzip
+
+	# Uploads are capped at 4 MB by the app.
+	request_body {
+		max_size 6MB
+	}
+
+	# The daily maintenance runs inside the app; nobody outside needs this endpoint.
+	@cron path /api/cron/*
+	respond @cron 404
+
+	reverse_proxy app:3001 {
+		# Only Cloudflare may set this (CLIENT_IP_HEADER); here a visitor could forge it.
+		header_up -CF-Connecting-IP
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		X-Frame-Options SAMEORIGIN
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+}

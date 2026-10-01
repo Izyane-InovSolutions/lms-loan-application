@@ -11,7 +11,10 @@ import { AI_CONNECTIONS, AI_FIELDS, AI_MODEL_PROVIDERS, OCR_ENGINES, isServiceRe
 
 export { AiProviderError, AiUnavailableError, AiUnsupportedInputError, classifyAiFailure } from './errors.js'
 
-const DEFAULT_TIMEOUT_MS = 100000
+// The whole call's budget. It must end before whatever is in front of the app gives up:
+// Cloudflare (a tunnel) answers 524 after 100 s, so the default leaves room for the upload
+// and the reply. AI_TIMEOUT_SECONDS changes it.
+const DEFAULT_TIMEOUT_MS = (Number(process.env.AI_TIMEOUT_SECONDS) || 85) * 1000
 const MIN_ATTEMPT_MS = 15000
 // Time held back for the fallback provider, so a primary that hangs until its timeout
 // still leaves the next one a fair attempt within the same request.
@@ -183,7 +186,7 @@ const withOcrText = (request, ocr, ocrText, { keepFiles }) => ({
  * retries transient failures (429, 5xx) itself.
  *
  * `timeoutMs` is the budget for the whole call, OCR and fallbacks included, so it has to
- * stay under the 120 s maxDuration of api/ai/* (vercel.json; nginx allows 130 s).
+ * end before the proxy in front gives up (Cloudflare 100 s, nginx 130 s, Vercel 120 s).
  */
 export const generateJson = async ({ system, text, files = [], schema, schemaName, timeoutMs = DEFAULT_TIMEOUT_MS }) => {
   const { providers, ocr, ocrMode } = resolveSetup(await readSetting())

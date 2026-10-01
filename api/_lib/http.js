@@ -28,8 +28,18 @@ export const parseCookies = (req) =>
       })
   )
 
-export const clientIp = (req) =>
-  String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket?.remoteAddress || null
+/*
+ * The visitor's address, for rate limits and the audit log. By default the first entry of
+ * X-Forwarded-For, which is right behind a proxy that replaces that header (Caddy, the
+ * nginx config in deploy/, Vercel). Cloudflare instead appends to whatever the visitor
+ * sent, so behind it the first entry is theirs to choose: set CLIENT_IP_HEADER to the one
+ * header the proxy sets itself (cf-connecting-ip). Only that header is then trusted.
+ */
+export const clientIp = (req) => {
+  const trusted = (process.env.CLIENT_IP_HEADER || '').trim().toLowerCase()
+  if (trusted) return String(req.headers[trusted] || '').split(',')[0].trim() || req.socket?.remoteAddress || null
+  return String(req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket?.remoteAddress || null
+}
 
 const configuredOrigin = () => {
   if (process.env.APP_URL) return process.env.APP_URL.replace(/\/+$/, '')

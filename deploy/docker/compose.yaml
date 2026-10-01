@@ -1,0 +1,169 @@
+# The whole workspace on one server. From this folder (deploy/docker):
+#
+#   cp .env.example .env     fill it in (see DEPLOY-DOCKER.md)
+#   docker compose up -d --build                  first install
+#   ./update.sh --pull                            every update after that
+#
+# Postgres and Redis are reachable only on the stack's own network. Data lives in named
+# volumes (and backups in ./backups), so containers can be rebuilt and replaced freely.
+
+name: los
+
+x-app: &app
+  image: los-app:latest
+  env_file: .env
+  environment:
+    DATABASE_URL: postgres://los:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in deploy/docker/.env}@postgres:5432/los
+    REDIS_URL: redis://:${REDIS_PASSWORD:?set REDIS_PASSWORD in deploy/docker/.env}@redis:6379
+    LOS_LOCAL_BLOB_DIR: /data/blob
+  volumes:
+    - documents:/data/blob
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: los
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: los
+      TZ: ${TZ:-Africa/Lusaka}
+    volumes:
+      - postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U los -d los"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Drafts, sign-in codes, locks and rate limits. Appended to disk (drafts are hours of an
+  # applicant's work) and never evicted: a full Redis refuses writes instead of dropping drafts.
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
+    command: ["sh", "-c", 'exec redis-server --appendonly yes --maxmemory-policy noeviction --requirepass "$$REDIS_PASSWORD"']
+    volumes:
+      - redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Brings the database schema up to date, then exits. The app waits for it. update.sh
+  # runs it on its own first, so a failed migration leaves the running app alone.
+  migrate:
+    <<: *app
+    command: ["node", "scripts/db-migrate.js"]
+    pull_policy: never
+    restart: "no"
+    volumes: []
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  app:
+    <<: *app
+    # Built once here; migrate runs the same image.
+    build:
+      context: ../..
+      args:
+        VITE_CRB_ENABLED: ${VITE_CRB_ENABLED:-false}
+        VITE_MAP_TILE_URL: ${VITE_MAP_TILE_URL:-https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png}
+        VITE_MAP_ATTRIBUTION: ${VITE_MAP_ATTRIBUTION:-&copy; OpenStreetMap contributors}
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://los:${POSTGRES_PASSWORD}@postgres:5432/los
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      LOS_LOCAL_BLOB_DIR: /data/blob
+      # The daily maintenance runs inside the app (api/_lib/scheduler.js): no host cron.
+      LOS_SCHEDULER: "true"
+      TZ: ${TZ:-Africa/Lusaka}
+    # For a reverse proxy on the host (when the https profile is off). Only this machine
+    # can reach it.
+    ports:
+      - "127.0.0.1:${APP_PORT:-3001}:3001"
+    # server.js waits up to 20 s for requests and background work (an LMS hand-off).
+    stop_grace_period: 30s
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # HTTPS with certificates from Let's Encrypt, renewed automatically. On with
+  # COMPOSE_PROFILES=https in .env; leave it off if the server already has a reverse proxy.
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["https"]
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - app
+
+  # A Cloudflare Tunnel instead of Caddy: Cloudflare serves HTTPS and the tunnel connects
+  # out from this server, so no ports need opening. On with COMPOSE_PROFILES=tunnel and
+  # TUNNEL_TOKEN in .env; the tunnel's public hostname points at http://app:3001.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: ["tunnel"]
+    restart: unless-stopped
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      # Unset, cloudflared says "Provided Tunnel token is not valid".
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-not-set}
+    depends_on:
+      - app
+
+  # Nightly database dump and documents archive into ./backups (deploy/docker/backups),
+  # kept for BACKUP_KEEP_DAYS. Copy that folder off the server too.
+  backup:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      PGHOST: postgres
+      PGUSER: los
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: los
+      TZ: ${TZ:-Africa/Lusaka}
+      BACKUP_HOUR: ${BACKUP_HOUR:-1}
+      BACKUP_KEEP_DAYS: ${BACKUP_KEEP_DAYS:-14}
+    entrypoint: ["sh", "/backup.sh"]
+    volumes:
+      - ./backup.sh:/backup.sh:ro
+      - ./backups:/backups
+      - documents:/data/blob:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # Virus scanning of uploads. On with COMPOSE_PROFILES=https,clamav and CLAMAV_HOST=clamav
+  # in .env. Needs about 2 GB of memory; its first start downloads signatures (minutes).
+  clamav:
+    image: clamav/clamav:stable
+    profiles: ["clamav"]
+    restart: unless-stopped
+    volumes:
+      - clamav:/var/lib/clamav
+
+volumes:
+  postgres:
+  redis:
+  documents:
+  caddy-data:
+  caddy-config:
+  clamav:

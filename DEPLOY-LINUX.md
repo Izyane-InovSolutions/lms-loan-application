@@ -1,8 +1,10 @@
 # Deploying to a Linux server
 
+> **Prefer [DEPLOY-DOCKER.md](DEPLOY-DOCKER.md)** for new servers: the same app in Docker,
+> with Redis, HTTPS, nightly backups and migrate-before-replace updates included.
+
 This guide puts the whole app on one Ubuntu 22.04/24.04 server: nginx serves the built
 site and proxies `/api` to a small Node process (`server.js`), backed by local Postgres.
-For Vercel, see [Deploying to Vercel](README.md#deploying-to-vercel).
 
 | Piece | On Vercel | On this server |
 | --- | --- | --- |
