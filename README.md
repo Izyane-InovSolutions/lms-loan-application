@@ -21,6 +21,7 @@ It has three parts, all served from one Vite app plus Vercel functions:
 - [Testing](#testing)
 - [What administrators configure](#what-administrators-configure)
 - [How an application moves](#how-an-application-moves)
+- [The workflow](#the-workflow)
 - [Roles and what they see](#roles-and-what-they-see)
 - [Project structure](#project-structure)
 - [Deploying to Vercel](#deploying-to-vercel)
@@ -140,10 +141,9 @@ needed, and every change is recorded in the audit log.
 
 | Tab | What it controls |
 | --- | --- |
-| Credit workflow | Four-eyes approval, the target days to a decision, whether customers must accept offers (and for how many days), whether accepting means signing, automatic decline |
-| Stages | The processing flow: staff names for each status, the verification checklist, and your own stages during review, before the decision and before payout (see [Configurable stages](#configurable-stages)) |
+| Credit workflow | The target days to a decision, how many days an offer stays open, whether accepting means signing, automatic decline |
 | Loan products | For each product: whether it's offered, amount and tenure limits, interest rate (flat once, or per month), facility fee (fixed or a percentage). The website, wizard and server all price with these. |
-| LMS connection | The Frappe address, API key and secret (or username and password), method names, the field carrying our reference, which LMS statuses mean paid out, and when to hand over. *Test connection* checks it before you save. |
+| LMS connection | The Frappe address, API key and secret (or username and password), method names, the field carrying our reference, which LMS statuses mean paid out. *Test connection* checks it before you save. |
 | Notifications and SMS | Staff emails, customer texts, and the SMS provider (Africa's Talking) with a test message |
 | Data retention | How long declined, withdrawn and lapsed applications, paid-out loans and audit entries are kept before automatic deletion |
 | Security | Roles that must use two-step sign-in |
@@ -170,6 +170,9 @@ never shows them again.
 ## How an application moves
 
 ### The journey at a glance
+
+This is the workflow every workspace starts with; [the workflow](#the-workflow) can be
+reshaped in the editor.
 
 ```mermaid
 flowchart LR
@@ -327,48 +330,43 @@ an out-of-date screen is refused with a prompt to refresh.
 The switches mentioned above (four-eyes, acceptance and its expiry, auto-decline, LMS
 hand-off timing) are in **Settings**. Approval limits are set per person in **Team**.
 
-## Configurable stages
+## The workflow
 
-The backbone of the flow (submitted, in review, awaiting approval, approved, accepted,
-paid out) is fixed, because decisions, offers and the LMS depend on it. Around it,
-**Settings → Stages** lets you shape the process without code:
+**Policy → Workflow** (for whoever can change settings) sets the states an application
+moves through, who works on each, and what happens next. Nothing is fixed: states can be
+added, removed, renamed and reordered.
 
-- **Status names.** Call *In review* "Assessment", say. Staff see the new name on the
-  pipeline, lists and cases; customers keep their own plain wording.
-- **The verification checklist.** Add, rename, reorder or remove items, and choose which
-  are needed before approval.
-- **Your own stages**, in three places:
+- **Flow.** A card per state with its type (*In progress*, *Offer* or *Final*), the roles
+  that work on it, and its actions. Drag a card's grip to reorder it. Drag the + on its
+  edge onto another card to connect them, or onto empty space to create a connected
+  state. Everything can also be done from the state's panel (the pencil), keyboard
+  included.
+- **Tree preview.** The journey from the start state, with returns and rejections shown on
+  the state they leave from.
+- **Actions** each do one of: *move on*, *return* (to an earlier state, with a reason),
+  *recommend* (approve or decline, with terms), *approve* (the decision, within the
+  approver's limit), *reject*, or *mark as paid out*. Any action can require a second
+  person: not whoever recommended the case or brought it in (four-eyes).
+- **A state** can name the roles that work on it (its cases wait in their queue, under
+  *In my queue*), apply to personal or business loans only, let staff ask the applicant
+  for more, hand the loan to the LMS when a case arrives, require checklist items, and
+  show as a step on the case with *Mark as done*.
+- **The Offer state** waits for the customer to accept, then sends the case on. An offer
+  not accepted in time goes to *Offer expired*.
+- Four ends always exist and can be renamed: *Paid out*, *Declined*, *Withdrawn* and
+  *Offer expired*.
 
-| Where | When | Blocks until done |
-| --- | --- | --- |
-| During review | While the case is in review | Recommending |
-| Before the decision | After the recommendation | Approving or declining |
-| Before payout | After the customer accepts | Marking it paid out, and the LMS hand-off |
+Changes are a draft until saved. Saving checks the whole flow first: every state
+reachable, a way forward from each, no loops of forward actions, no returning past the
+decision (the offer, signatures and LMS hand-off can't be undone), and so on. The editor
+lists anything to fix. New applications then follow the new version, while open cases
+finish on the one they started with. *Versions* can move open cases across, where the
+state they are in still exists.
 
-Each stage is done in order and can:
-
-- require checklist items first, for example *Field verification* needing *Site visit*;
-- be limited to some roles. With none ticked, anyone who can review (during review),
-  decide (before the decision) or pay out (before payout) can do it, and admins always
-  can;
-- apply to personal loans, business loans or both;
-- before the decision only: need someone other than the recommender or whoever brought
-  the case in, as a credit committee would.
-
-```mermaid
-flowchart TB
-    S[Submitted] --> R1["In review:<br/>Document check"] --> R2["In review:<br/>Field verification"] --> REC{{Recommend}}
-    REC --> A1["Awaiting approval:<br/>Credit committee"] --> DEC{{Decide}}
-    DEC -->|approve| OFF[Offer made] --> ACC["Accepted:<br/>Security documents signed"] --> PAY[Paid out]
-    DEC -->|send back| R2
-```
-
-A stage is marked done from the case page (*Stages* panel), with an optional note, and
-shows on the timeline. It can be reopened while its part of the flow is still open, which
-reopens every later stage in that part too. A case sent back from the decision goes
-through the *before the decision* stages again. On the pipeline, a status with stages
-becomes a column per stage, plus "ready to recommend", "ready for a decision" or "ready
-to pay out".
+Statuses still exist for reports and the customer page: each state counts as one, by
+where it sits (before the decision, approved, accepted). Until someone saves a workflow
+in the editor, the workflow is made from the older settings (four-eyes, offer
+acceptance, the LMS hand-off moment and stages); the editor starts from it.
 
 ## Offer letter, agreement and signature
 
