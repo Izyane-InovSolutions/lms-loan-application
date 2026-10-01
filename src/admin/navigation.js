@@ -1,4 +1,4 @@
-import { Activity, Columns3, FileStack, History, KeyRound, LayoutDashboard, Scale, Settings, ShieldCheck, Users } from 'lucide-react'
+import { Activity, Columns3, FileStack, History, KeyRound, LayoutDashboard, Scale, Settings, ShieldCheck, Users, Workflow } from 'lucide-react'
 import { hasPermission, isStaffRole } from '@/config/roles'
 
 const allowedTo = (permission) => (user) => hasPermission(user, permission)
@@ -18,7 +18,10 @@ export const NAV_SECTIONS = [
   },
   {
     label: 'Policy',
-    items: [{ to: '/admin/rules', label: 'Policy rules', icon: Scale, allow: (user) => hasPermission(user, 'rules.view') || hasPermission(user, 'rules.manage') }],
+    items: [
+      { to: '/admin/rules', label: 'Policy rules', icon: Scale, allow: (user) => hasPermission(user, 'rules.view') || hasPermission(user, 'rules.manage') },
+      { to: '/admin/workflow', label: 'Workflow', icon: Workflow, allow: allowedTo('settings.manage') },
+    ],
   },
   {
     label: 'People',
