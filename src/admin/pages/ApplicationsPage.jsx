@@ -238,6 +238,7 @@ export function ApplicationsPage() {
             <div className="sm:w-44">
               <Select aria-label="Assignment" value={filters.assigned} onChange={(event) => setFilter('assigned', event.target.value)} className="h-10 text-sm">
                 <option value="all">Anyone’s</option>
+                <option value="queue">In my queue</option>
                 <option value="me">Assigned to me</option>
                 <option value="unassigned">Unassigned</option>
               </Select>

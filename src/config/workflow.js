@@ -348,6 +348,8 @@ export const legacyToWorkflow = ({ workflow = {}, offers = {}, lms = {}, stages 
   const stageState = (stage, base, legacyStatus, next, permission, extra = {}) => ({
     id: stage.id,
     label: `${base}: ${stage.label}`,
+    // The step's own name, for "Next: …" and "… done" (the label carries the status too).
+    stageLabel: stage.label,
     description: stage.description || '',
     type: 'work',
     roles: stage.roles || [],

@@ -17,6 +17,7 @@ import { addEvent, applicantFromData, findVisibleApplication, nextReference, sco
 import { getLms } from '../_lib/lms/index.js'
 import { queueLmsSync, syncApplicationToLms } from '../_lib/lms/sync.js'
 import { getPublishedWorkflow } from '../_lib/workflowVersions.js'
+import { queueCondition, workflowView } from '../_lib/workflow.js'
 import { resolveState } from '../../src/config/workflow.js'
 import { runPrescreen } from '../_lib/prescreen/run.js'
 import { priceLoan } from '../../src/config/loanProducts.js'
@@ -317,7 +318,7 @@ const SORTS = {
   updated: desc(applications.updatedAt),
 }
 
-const listFilters = (viewer, query) => {
+const listFilters = async (viewer, query) => {
   const filters = [scopeApplications(viewer)]
   const status = query.get('status')
   if (status === 'open') filters.push(inArray(applications.status, OPEN_STATUSES))
@@ -330,6 +331,10 @@ const listFilters = (viewer, query) => {
   const assigned = query.get('assigned')
   if (assigned === 'me') filters.push(eq(applications.assignedOfficer, viewer.id))
   else if (assigned === 'unassigned') filters.push(isNull(applications.assignedOfficer))
+  // The viewer's role queue: open cases in the workflow states they work on (workflow.js).
+  else if (assigned === 'queue') filters.push(await queueCondition(viewer))
+  const state = query.get('state')
+  if (state && /^[a-z0-9_]{1,60}$/.test(state)) filters.push(eq(applications.state, state))
   const lms = query.get('lms')
   if (lms) filters.push(eq(applications.lmsSyncStatus, lms))
   const sourcedBy = query.get('sourcedBy')
@@ -354,13 +359,13 @@ const listApplications = async (req, res, { query }) => {
   const db = await getDb()
   const page = Math.max(1, Number(query.get('page')) || 1)
   const pageSize = Math.min(200, Math.max(1, Number(query.get('pageSize')) || PAGE_SIZE))
-  const filters = listFilters(viewer, query)
+  const filters = await listFilters(viewer, query)
   const where = filters.length ? and(...filters) : undefined
 
   // Tab counts ignore the status filter so every tab shows its own total.
   const countQuery = new URLSearchParams(query)
   countQuery.delete('status')
-  const countFilters = listFilters(viewer, countQuery)
+  const countFilters = await listFilters(viewer, countQuery)
 
   const [rows, [{ total }], statusCounts] = await Promise.all([
     db
@@ -409,7 +414,7 @@ const auditView = async (req, viewer, application) => {
 const publicDocument = ({ url, pathname, lmsFileUrl, ...document }) => ({ ...document, inLms: Boolean(lmsFileUrl) })
 
 /** Everything the case page shows. Exported for the workflow handlers, which return it after each change. */
-export const loadCase = async (applicationId) => {
+export const loadCase = async (applicationId, viewer) => {
   const db = await getDb()
   const [[row], documents, events, [prescreen], appraisalRows, consentRows, points, crbRows] = await Promise.all([
     db
@@ -448,6 +453,8 @@ export const loadCase = async (applicationId) => {
     stages: await getSetting('stages'),
     offersRequireSignature: (await getSetting('offers')).requireSignature,
     signatures: await signaturesOf(applicationId),
+    // Where the case is in its workflow and what this viewer can do next (workflow.js).
+    workflow: viewer ? await workflowView(viewer, row.application, { recommendation: appraisalRows.find((appraisal) => appraisal.kind === 'recommendation') || null }) : null,
     crbProvider: getCrb()?.name || null,
   }
 }
@@ -458,7 +465,7 @@ const getApplication = async (req, res, { params }) => {
   await auditView(req, viewer, application)
   // Approvals from before offer documents existed, or whose generation failed, get them now.
   if (APPROVED_STATUSES.includes(application.status)) await ensureOfferDocuments(application.id)
-  return loadCase(application.id)
+  return loadCase(application.id, viewer)
 }
 
 // Only these open inline; anything else downloads, so an uploaded HTML or SVG file can
@@ -516,7 +523,7 @@ const sendToLms = async (req, res, { params }) => {
   await db.update(applications).set({ lmsSyncStatus: 'pending' }).where(eq(applications.id, application.id))
   await recordAudit({ req, actor: viewer, action: 'application.lms_send', entityType: 'application', entityId: application.id })
   await syncApplicationToLms(application.id, { actor: viewer })
-  return loadCase(application.id)
+  return loadCase(application.id, viewer)
 }
 
 /**
@@ -543,7 +550,7 @@ const reconcileLms = async (req, res, { params }) => {
     message: found ? `Confirmed in the LMS as ${reference}` : 'Confirmed not in the LMS',
   })
   await recordAudit({ req, actor: viewer, action: 'application.lms_reconciled', entityType: 'application', entityId: application.id, detail: { found, reference: reference || null } })
-  return loadCase(application.id)
+  return loadCase(application.id, viewer)
 }
 
 // ---------------------------------------------------------------------------

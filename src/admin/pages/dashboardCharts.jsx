@@ -346,6 +346,7 @@ export function Leaderboard({ rows }) {
 /** The officer's work, each figure a way into the filtered list. */
 export function QueueTiles({ queue }) {
   const tiles = [
+    { label: 'In your queue', value: queue.inMyQueue ?? 0, to: '/admin/applications?assigned=queue', hint: 'Cases at the stages you work on' },
     { label: 'Unassigned', value: queue.unassigned, to: '/admin/applications?assigned=unassigned', hint: 'Waiting for an officer' },
     { label: 'Assigned to you', value: queue.mine, to: '/admin/applications?assigned=me', hint: 'Open cases you own' },
     { label: 'Awaiting a decision', value: queue.awaitingDecision, to: '/admin/applications?status=pending_approval', hint: 'Recommended, need a second approver' },
@@ -353,7 +354,7 @@ export function QueueTiles({ queue }) {
     { label: `Open over ${queue.slaDays} days`, value: queue.overdue, to: '/admin/applications?sort=oldest', hint: 'Past the target', alert: queue.overdue > 0 },
   ]
   return (
-    <section aria-label="Your queue" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+    <section aria-label="Your queue" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
       {tiles.map((tile) => (
         <Link
           key={tile.label}

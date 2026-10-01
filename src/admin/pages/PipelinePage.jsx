@@ -3,8 +3,7 @@ import { Link } from 'react-router-dom'
 import { Loader2 } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
-import { LOAN_TYPE_LABELS, renamedStatus } from '@/config/applications'
-import { currentStage, phaseForStatus } from '@/config/stages'
+import { LOAN_TYPE_LABELS } from '@/config/applications'
 import { hasPermission } from '@/config/roles'
 import { api } from '../api'
 import { useAuth } from '../auth'
@@ -12,22 +11,51 @@ import { FormError, OutcomeMark, PageHeader, daysSince, money, timeAgo } from '.
 import { DraftDialog } from '../DraftDialog'
 
 // Unfinished applications come first: the stage before "submitted".
-const DRAFT_COLUMN = { status: 'draft', label: 'Draft', accent: 'bg-muted-foreground/30' }
+const DRAFT_COLUMN = { key: 'draft', label: 'Draft', accent: 'bg-muted-foreground/30' }
 
-const COLUMNS = [
-  { status: 'submitted', label: 'New', accent: 'bg-muted-foreground/60' },
-  { status: 'in_review', label: 'In review', accent: 'bg-primary' },
-  { status: 'info_requested', label: 'Waiting on applicant', accent: 'bg-warning' },
-  { status: 'pending_approval', label: 'Awaiting approval', accent: 'bg-[hsl(262_40%_48%)]' },
-  { status: 'approved', label: 'Offer made', accent: 'bg-success' },
-  { status: 'accepted', label: 'Accepted', accent: 'bg-success' },
-  { status: 'disbursed', label: 'Paid out', accent: 'bg-success' },
-  { status: 'declined', label: 'Declined', accent: 'bg-muted-foreground/40' },
-  { status: ['withdrawn', 'expired'], label: 'Withdrawn or lapsed', accent: 'bg-muted-foreground/30' },
-]
+// Column colours by where a state sits in the journey (its reporting category).
+const ACCENTS = {
+  submitted: 'bg-muted-foreground/60',
+  in_review: 'bg-primary',
+  info_requested: 'bg-warning',
+  pending_approval: 'bg-[hsl(262_40%_48%)]',
+  approved: 'bg-success',
+  accepted: 'bg-success',
+  disbursed: 'bg-success',
+  declined: 'bg-muted-foreground/40',
+  withdrawn: 'bg-muted-foreground/30',
+  expired: 'bg-muted-foreground/30',
+}
 
-// The last column of a split status, once every stage in it is done.
-const READY = { review: 'ready to recommend', approval: 'ready for a decision', closing: 'ready to pay out' }
+/**
+ * The board's columns from the workflow (Workflow editor): one per state in the order a
+ * case moves, with "Waiting on applicant" after the review states, then the ends. Cases on
+ * an older version, in a state the current one no longer has, get a column of their own.
+ */
+const workflowColumns = (workflow, applications) => {
+  const current = workflow.current
+  const byId = Object.fromEntries(current.states.map((state) => [state.id, state]))
+  const work = current.order.filter((id) => byId[id] && byId[id].type !== 'final')
+  const columns = work.map((id) => ({ key: id, label: byId[id].label, accent: ACCENTS[current.categories[id]], match: (row) => row.state === id && row.status !== 'info_requested' }))
+  const afterReview = columns.findIndex((column) => !['submitted', 'in_review'].includes(current.categories[column.key]))
+  columns.splice(afterReview === -1 ? columns.length : afterReview, 0, { key: 'info_requested', label: 'Waiting on applicant', accent: ACCENTS.info_requested, match: (row) => row.status === 'info_requested' })
+
+  const known = new Set(current.states.map((state) => state.id))
+  const retired = new Map()
+  for (const version of workflow.versions) {
+    for (const state of version.states) {
+      if (!known.has(state.id) && state.type !== 'final' && !retired.has(state.id)) retired.set(state.id, { key: `retired:${state.id}`, label: `${state.label} (earlier workflow)`, accent: ACCENTS[version.categories[state.id]], match: (row) => row.state === state.id && row.status !== 'info_requested' })
+    }
+  }
+  const name = (id, fallback) => byId[id]?.label || fallback
+  return [
+    ...columns,
+    ...retired.values(),
+    { key: 'paid_out', label: name('paid_out', 'Paid out'), accent: ACCENTS.disbursed, match: (row) => row.status === 'disbursed' },
+    { key: 'declined', label: name('declined', 'Declined'), accent: ACCENTS.declined, match: (row) => row.status === 'declined' },
+    { key: 'closed', label: 'Withdrawn or lapsed', accent: ACCENTS.withdrawn, match: (row) => ['withdrawn', 'expired'].includes(row.status) },
+  ].map((column) => ({ ...column, cards: applications.filter(column.match) }))
+}
 
 // By what the viewer's role lets them see.
 const DESCRIPTIONS = {
@@ -41,7 +69,7 @@ const DESCRIPTIONS = {
  * Read-only: cases move from the case page, drafts from their own window.
  */
 export function PipelinePage() {
-  const { user, stages, requireAcceptance } = useAuth()
+  const { user, workflow } = useAuth()
   const [state, setState] = useState({ status: 'loading' })
   const [openDraft, setOpenDraft] = useState(null)
   const showDrafts = hasPermission(user, 'drafts.view')
@@ -57,25 +85,12 @@ export function PipelinePage() {
   }, [load])
 
   const columns = useMemo(() => {
-    if (state.status !== 'ready') return []
-    const withValue = (column, cards) => ({ ...column, cards, value: cards.reduce((sum, row) => sum + (row.amount || 0), 0) })
-    const board = COLUMNS.flatMap((column) => {
-      const statuses = [].concat(column.status)
-      const cards = state.applications.filter((row) => statuses.includes(row.status))
-      const base = { ...column, label: renamedStatus(statuses[0]) || column.label }
-      // A status with the workspace's own stages becomes a column per stage, then "ready".
-      const phase = statuses.length === 1 ? phaseForStatus(statuses[0], { requireAcceptance }) : null
-      const phaseStages = phase ? stages?.[phase] || [] : []
-      if (!phaseStages.length) return [withValue(base, cards)]
-      const byStage = (id) => cards.filter((row) => (currentStage(stages, phase, row)?.id || null) === id)
-      return [
-        ...phaseStages.map((stage) => withValue({ ...base, key: `${column.status}:${stage.id}`, label: `${base.label}: ${stage.label}` }, byStage(stage.id))),
-        withValue({ ...base, key: `${column.status}:ready`, label: `${base.label}: ${READY[phase]}` }, byStage(null)),
-      ]
-    })
+    if (state.status !== 'ready' || !workflow) return []
+    const withValue = (column) => ({ ...column, value: column.cards.reduce((sum, row) => sum + (row.amount || 0), 0) })
+    const board = workflowColumns(workflow, state.applications).map(withValue)
     if (!showDrafts) return board
-    return [withValue(DRAFT_COLUMN, state.drafts), ...board]
-  }, [state, showDrafts, stages, requireAcceptance])
+    return [withValue({ ...DRAFT_COLUMN, cards: state.drafts }), ...board]
+  }, [state, showDrafts, workflow])
 
   return (
     <div className="space-y-6">
@@ -104,14 +119,14 @@ export function PipelinePage() {
                 </header>
                 <ol className="flex max-h-[70vh] flex-col gap-2 overflow-y-auto px-2 pb-2">
                   {column.cards.length === 0 ? <li className="px-2 py-6 text-center text-xs text-muted-foreground">Nothing here</li> : null}
-                  {column.status === 'draft'
+                  {column.key === 'draft'
                     ? column.cards.map((row) => (
                         <li key={row.id}>
                           <DraftCard row={row} viewerId={user.id} onOpen={() => setOpenDraft(row.id)} />
                         </li>
                       ))
                     : null}
-                  {column.status !== 'draft' && column.cards.map((row) => (
+                  {column.key !== 'draft' && column.cards.map((row) => (
                     <li key={row.id}>
                       <Link
                         to={`/admin/applications/${row.id}`}

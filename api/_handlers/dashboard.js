@@ -5,6 +5,7 @@ import { getRole, rolesWith } from '../_lib/roles.js'
 import { scopeApplications } from '../_lib/applications.js'
 import { getSetting } from '../_lib/settings.js'
 import { scopeDrafts } from '../_lib/drafts.js'
+import { queueCondition } from '../_lib/workflow.js'
 import { APPROVED_STATUSES, OPEN_STATUSES } from '../../src/config/applications.js'
 
 const { applications, applicationDrafts, prescreens, users, appraisals } = schema
@@ -140,8 +141,10 @@ const dashboard = async (req, res, { query }) => {
   if (can(viewer, 'cases.work')) {
     const { slaDays } = await getSetting('workflow')
     const overdueBefore = new Date(now.getTime() - slaDays * DAY_MS)
+    const inQueue = await queueCondition(viewer)
     const [queue] = await db
       .select({
+        inMyQueue: sql`count(*) filter (where ${inQueue})`,
         unassigned: sql`count(*) filter (where ${isNull(applications.assignedOfficer)} and ${inArray(applications.status, OPEN_STATUSES)})`,
         mine: sql`count(*) filter (where ${applications.assignedOfficer} = ${viewer.id} and ${inArray(applications.status, OPEN_STATUSES)})`,
         awaitingDecision: sql`count(*) filter (where ${applications.status} = 'pending_approval')`,
@@ -157,6 +160,7 @@ const dashboard = async (req, res, { query }) => {
       .from(appraisals)
       .where(and(eq(appraisals.officerId, viewer.id), gte(appraisals.createdAt, start)))
     result.queue = {
+      inMyQueue: int(queue.inMyQueue),
       unassigned: int(queue.unassigned),
       mine: int(queue.mine),
       awaitingDecision: int(queue.awaitingDecision),

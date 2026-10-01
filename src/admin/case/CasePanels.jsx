@@ -4,7 +4,8 @@ import { AlertTriangle, Check, CircleDashed, Loader2, MapPin, RefreshCw, ShieldA
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { LMS_SYNC_LABELS } from '@/config/applications'
-import { STAGE_PHASES, checkLabel, checklistOf, pendingStages, phaseForStatus, stagesFor } from '@/config/stages'
+import { checklistOf } from '@/config/stages'
+import { PHASES } from '@/config/workflow'
 import { roleLabel } from '@/config/roles'
 import { FACTS, OUTCOMES, describeCondition, formatFact } from '@/config/creditRules'
 import { consentText } from '@/config/consent'
@@ -198,41 +199,43 @@ export function ChecklistPanel({ application, stages, editable, onToggle }) {
 }
 
 /**
- * The workspace's own stages for this case (Settings → Stages), by phase: what is done, by
- * whom, and the current one with a button for whoever may complete it.
+ * The recorded steps of this case's workflow (its stage-like states), by part of the
+ * journey: what is done, by whom, and the current one with a button for whoever may
+ * complete it.
  */
-export function StagesPanel({ application, stages, user, requireAcceptance, onComplete, onReopen, canReopen }) {
-  const phases = Object.keys(STAGE_PHASES).filter((phase) => stagesFor(stages, phase, application.loanType).length)
-  if (!phases.length) return null
-  const active = phaseForStatus(application.status, { requireAcceptance })
+export function StagesPanel({ workflow, application, onComplete, onReopen, canReopen }) {
+  const steps = workflow?.steps || []
+  if (!steps.length) return null
+  const phases = [...new Set(steps.map((step) => step.phase))]
+  const checkName = (key) => (workflow.checklist || []).find((check) => check.key === key)?.label?.toLowerCase() || key
+  const move = (step) => workflow.actions.find((action) => action.id === step.moveActionId)
   return (
     <Panel title="Stages" description="This workspace’s own steps, done in order.">
       <div className="space-y-5">
-        {phases.map((phase) => {
-          const list = stagesFor(stages, phase, application.loanType)
-          const [current] = pendingStages(stages, phase, application)
-          return (
-            <div key={phase}>
-              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{STAGE_PHASES[phase].label}</p>
-              <ol className="mt-2 space-y-3">
-                {list.map((stage) => {
-                  const progress = application.stageProgress?.[stage.id]
-                  const isCurrent = active === phase && current?.id === stage.id
-                  const allowed = user.role === 'admin' || (stage.roles.length ? stage.roles.includes(user.role) : user.permissions?.includes(STAGE_PHASES[phase].defaultPermission))
-                  const missing = stage.checks.filter((key) => !application.checks?.[key]?.done)
+        {phases.map((phase) => (
+          <div key={phase}>
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{PHASES[phase]}</p>
+            <ol className="mt-2 space-y-3">
+              {steps
+                .filter((step) => step.phase === phase)
+                .map((step) => {
+                  const progress = step.progress
+                  const action = step.current ? move(step) : null
+                  const allowed = action && !action.blocked
+                  const missing = step.checks.filter((key) => !application.checks?.[key]?.done)
                   return (
-                    <li key={stage.id} className="flex items-start gap-3 text-sm">
+                    <li key={step.id} className="flex items-start gap-3 text-sm">
                       <span
                         className={cn(
                           'mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border',
-                          progress?.done ? 'border-success bg-success text-success-foreground' : isCurrent ? 'border-primary' : 'border-input'
+                          progress?.done ? 'border-success bg-success text-success-foreground' : step.current ? 'border-primary' : 'border-input'
                         )}
                         aria-hidden="true"
                       >
-                        {progress?.done ? <Check className="size-3.5" /> : isCurrent ? <CircleDashed className="size-3.5 text-primary" /> : null}
+                        {progress?.done ? <Check className="size-3.5" /> : step.current ? <CircleDashed className="size-3.5 text-primary" /> : null}
                       </span>
                       <div className="min-w-0 flex-1">
-                        <p className={cn('text-foreground', isCurrent && 'font-medium')}>{stage.label}</p>
+                        <p className={cn('text-foreground', step.current && 'font-medium')}>{step.label}</p>
                         {progress?.done ? (
                           <p className="text-xs text-muted-foreground">
                             {progress.byName}, {timeAgo(progress.at)}
@@ -240,18 +243,18 @@ export function StagesPanel({ application, stages, user, requireAcceptance, onCo
                           </p>
                         ) : (
                           <p className="text-xs text-muted-foreground">
-                            {stage.description || null}
-                            {stage.roles.length ? `${stage.description ? ' ' : ''}For ${stage.roles.map((role) => roleLabel(role).toLowerCase()).join(' or ')}.` : ''}
-                            {missing.length && isCurrent ? ` Needs: ${missing.map((key) => checkLabel(stages, key).toLowerCase()).join(', ')}.` : ''}
+                            {step.description || null}
+                            {step.roles.length ? `${step.description ? ' ' : ''}For ${step.roles.map((role) => roleLabel(role).toLowerCase()).join(' or ')}.` : ''}
+                            {missing.length && step.current ? ` Needs: ${missing.map(checkName).join(', ')}.` : ''}
                           </p>
                         )}
-                        {isCurrent && allowed ? (
-                          <Button size="sm" variant="outline" className="mt-2" onClick={() => onComplete(stage)} disabled={missing.length > 0}>
+                        {allowed && application.status !== 'info_requested' ? (
+                          <Button size="sm" variant="outline" className="mt-2" onClick={() => onComplete(step)} disabled={missing.length > 0}>
                             Mark as done
                           </Button>
                         ) : null}
-                        {progress?.done && active === phase && canReopen ? (
-                          <button type="button" className="mt-1 text-xs font-medium text-primary hover:underline" onClick={() => onReopen(stage)}>
+                        {step.reopenable && canReopen ? (
+                          <button type="button" className="mt-1 text-xs font-medium text-primary hover:underline" onClick={() => onReopen(step)}>
                             Reopen
                           </button>
                         ) : null}
@@ -259,10 +262,9 @@ export function StagesPanel({ application, stages, user, requireAcceptance, onCo
                     </li>
                   )
                 })}
-              </ol>
-            </div>
-          )
-        })}
+            </ol>
+          </div>
+        ))}
       </div>
     </Panel>
   )

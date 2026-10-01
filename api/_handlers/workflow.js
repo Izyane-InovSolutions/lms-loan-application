@@ -117,7 +117,7 @@ const act = async (req, res, { params }) => {
   if (result.notify) notifyCustomer(req, updated, result.notify)
   // Whichever state the workflow marks for it (Workflow editor) hands the loan to the LMS.
   if (result.handToLms) await handToLms(updated, viewer)
-  return loadCase(application.id)
+  return loadCase(application.id, viewer)
 }
 
 /** Everyone who reviews cases, for the "assign to" picker. */
@@ -156,7 +156,7 @@ const addStaffDocument = async (req, res, { params }) => {
   })
   await addEvent(db, { applicationId: application.id, actor: viewer, type: 'document', message: `Added a document: ${label}` })
   await recordAudit({ req, actor: viewer, action: 'application.document_added', entityType: 'application', entityId: application.id, detail: { label } })
-  return loadCase(application.id)
+  return loadCase(application.id, viewer)
 }
 
 const rerunPrescreen = async (req, res, { params }) => {
@@ -164,7 +164,7 @@ const rerunPrescreen = async (req, res, { params }) => {
   const application = await findVisibleApplication(viewer, params.id)
   await runPrescreen(application.id, { actor: viewer })
   await recordAudit({ req, actor: viewer, action: 'application.prescreen_rerun', entityType: 'application', entityId: application.id })
-  return loadCase(application.id)
+  return loadCase(application.id, viewer)
 }
 
 /** A field visit: where the staff member is now, with a note. Needs their device's location. */
@@ -191,7 +191,7 @@ const logVisit = async (req, res, { params }) => {
   })
   await addEvent(db, { applicationId: application.id, actor: viewer, type: 'visit', message: note ? `Field visit: ${note}` : 'Field visit logged' })
   await recordAudit({ req, actor: viewer, action: 'application.visit_logged', entityType: 'application', entityId: application.id })
-  return loadCase(application.id)
+  return loadCase(application.id, viewer)
 }
 
 /** Pulls a credit bureau report, only with the applicant's recorded consent. */
@@ -218,7 +218,7 @@ const runCreditCheck = async (req, res, { params }) => {
   await recordAudit({ req, actor: viewer, action: 'application.crb_checked', entityType: 'application', entityId: application.id, detail: { provider: crb.name } })
   // The score is a rule input, so the prescreen is brought up to date.
   await runPrescreen(application.id, { actor: viewer })
-  return loadCase(application.id)
+  return loadCase(application.id, viewer)
 }
 
 // ---------------------------------------------------------------------------

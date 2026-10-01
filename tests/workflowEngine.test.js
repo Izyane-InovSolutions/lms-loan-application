@@ -198,3 +198,37 @@ describe('a workflow published from the editor', () => {
     expect(await consistent(before)).toMatchObject({ state: 'pending_approval' })
   })
 })
+
+describe('what the workspace shows of a case’s workflow', () => {
+  let id
+
+  it('lists the state’s actions, and says why someone can’t take one', async () => {
+    id = await submit('queue@example.com')
+    await move(officer, id, 'prescreen')
+    const forOfficer = (await officer.get(`/applications/${id}`)).body.workflow
+    expect(forOfficer.state).toMatchObject({ id: 'prescreening', askApplicant: true })
+    expect(forOfficer.actions.map((action) => [action.id, action.kind, action.blocked])).toEqual([
+      ['underwrite', 'recommend', null],
+      ['back', 'return', null],
+      ['reject', 'reject', null],
+    ])
+    const forManager = (await salesManager.get(`/applications/${id}`)).body.workflow
+    expect(forManager.actions[0].blocked).toMatch(/Waiting for loan officer/)
+  })
+
+  it('queues cases for the roles a state names, until someone takes them', async () => {
+    await act(officer, id, 'check', { check: 'identity', done: true, note: 'NRC seen' })
+    await move(officer, id, 'underwrite', { verdict: 'approve', rationale: 'Affordable' })
+    const queued = async (who) => (await who.get('/applications?assigned=queue&pageSize=200')).body.applications.map((row) => row.id)
+    expect(await queued(salesManager)).toContain(id)
+    expect(await queued(officer)).not.toContain(id)
+    expect((await salesManager.get('/dashboard')).body.queue.inMyQueue).toBeGreaterThan(0)
+
+    // Taking it here doesn't change who owns the case.
+    const owner = (await row(id)).assignedOfficer
+    expect((await act(salesManager, id, 'take')).status).toBe(200)
+    expect(await row(id)).toMatchObject({ assignedOfficer: owner })
+    expect((await row(id)).stateAssignee).toBeTruthy()
+    expect((await act(officer, id, 'take')).status).toBe(403)
+  })
+})

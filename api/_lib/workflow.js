@@ -1,13 +1,13 @@
-import { and, eq } from 'drizzle-orm'
+import { and, eq, inArray, isNull, ne, notInArray, or, sql } from 'drizzle-orm'
 import { getDb, schema } from './db/client.js'
 import { fail, text } from './http.js'
 import { requirePermission } from './rbac.js'
-import { roleHas } from './roles.js'
+import { listRoles, roleHas } from './roles.js'
 import { addEvent } from './applications.js'
 import { getSetting } from './settings.js'
 import { getPublishedWorkflow, getWorkflowVersion } from './workflowVersions.js'
 import { OPEN_STATUSES, WITHDRAWABLE_STATUSES } from '../../src/config/applications.js'
-import { ACTION_KINDS, PHASES, appliesTo, forwardEdges, resolveState, stateById } from '../../src/config/workflow.js'
+import { ACTION_KINDS, PHASES, SYSTEM_FINAL_IDS, appliesTo, forwardEdges, resolveState, stateById } from '../../src/config/workflow.js'
 import { checkOtp } from './otp.js'
 import { signatureFor } from './signing.js'
 import { priceLoan } from '../../src/config/loanProducts.js'
@@ -170,6 +170,42 @@ const progressWithout = (flow, application, fromId) => {
 // ---------------------------------------------------------------------------
 // Graph actions
 // ---------------------------------------------------------------------------
+
+/**
+ * Whether `viewer` works on cases in `state`: one of its roles, or — for a state that
+ * names none — someone who may take one of its actions. Admins work everywhere.
+ */
+export const worksOn = (viewer, state) => {
+  if (!state || state.type === 'final') return false
+  if (viewer.role === 'admin') return true
+  if (state.roles?.length) return state.roles.includes(viewer.role)
+  if (state.type === 'offer') return Boolean(viewer.permissions?.includes('offers.record'))
+  return (state.actions || []).some((action) => viewer.permissions?.includes(action.permission || ACTION_KINDS[action.kind]?.permission))
+}
+
+/**
+ * The cases in `viewer`'s queue, as a query condition: open cases in states they work on,
+ * not waiting on the applicant, and not taken by someone else — in a state that names
+ * roles, by whoever took it there; otherwise by the case's officer.
+ */
+export const queueCondition = async (viewer) => {
+  const db = await getDb()
+  const versions = (await db.selectDistinct({ version: applications.workflowVersion }).from(applications).where(notInArray(applications.state, SYSTEM_FINAL_IDS)))
+    .map((row) => row.version)
+    .filter(Boolean)
+  const flows = await Promise.all(versions.map((version) => getWorkflowVersion(version)))
+  const parts = []
+  for (const flow of flows) {
+    const mine = flow.definition.states.filter((state) => worksOn(viewer, state))
+    const byRole = mine.filter((state) => state.roles?.length).map((state) => state.id)
+    const byPermission = mine.filter((state) => !state.roles?.length).map((state) => state.id)
+    const version = eq(applications.workflowVersion, flow.version)
+    if (byRole.length) parts.push(and(version, inArray(applications.state, byRole), or(isNull(applications.stateAssignee), eq(applications.stateAssignee, viewer.id))))
+    if (byPermission.length) parts.push(and(version, inArray(applications.state, byPermission), or(isNull(applications.assignedOfficer), eq(applications.assignedOfficer, viewer.id))))
+  }
+  if (!parts.length) return sql`false`
+  return and(or(...parts), ne(applications.status, 'info_requested'))
+}
 
 /** A state that names roles is theirs (and admins'); otherwise the action's permission decides. */
 const authorize = (viewer, state, action) => {
@@ -387,6 +423,18 @@ const UTILITY = {
     }
   },
 
+  /** Takes the case from its state's queue: theirs to work in this state (and the case's officer, if it has none). */
+  async take(tx, viewer, application, input, ctx) {
+    requireStatus(application, OPEN_STATUSES, 'This case is closed.')
+    if (!worksOn(viewer, ctx.state)) fail(403, `Your role doesn’t work on “${stepName(ctx.state)}”.`, 'forbidden')
+    if (application.stateAssignee && application.stateAssignee !== viewer.id) fail(409, 'Someone else has taken this case here.', 'taken')
+    requireAssignmentRange(viewer, application)
+    return {
+      changes: { stateAssignee: viewer.id, assignedOfficer: application.assignedOfficer || viewer.id },
+      event: { type: 'assignment', message: `${viewer.name} took the case (${stepName(ctx.state)})` },
+    }
+  },
+
   /** Asks the applicant (or their agent) for something; they answer from their page. */
   async request_info(tx, viewer, application, input, ctx) {
     requireCase(viewer, 'cases.work')
@@ -592,3 +640,88 @@ export const stateAfter = async (application, what) => {
 
 /** The case's state, workflow and analysis, for handlers deciding what applies. */
 export const caseWorkflow = locate
+
+// ---------------------------------------------------------------------------
+// What the case page shows
+// ---------------------------------------------------------------------------
+
+/** Why `viewer` can't take `action` here, or null when they can (the server checks again on the day). */
+const blockedReason = (viewer, application, state, action, recommendation, roleName) => {
+  if (application.status === 'info_requested') return 'Waiting on the applicant.'
+  if (viewer.role !== 'admin') {
+    const roles = state.roles || []
+    if (roles.length && !roles.includes(viewer.role)) return `Waiting for ${roles.map((role) => roleName(role).toLowerCase()).join(' or ')}.`
+    if (!roles.length && !viewer.permissions?.includes(action.permission || ACTION_KINDS[action.kind].permission)) return 'Your role can’t do this.'
+  }
+  if (action.options?.fourEyes && (recommendation?.officerId === viewer.id || application.sourcedBy === viewer.id)) {
+    return recommendation?.officerId === viewer.id ? 'You recommended this case, so a colleague makes the decision.' : 'You brought this case in, so a colleague makes the decision.'
+  }
+  return null
+}
+
+/**
+ * The case's place in its workflow, for the case page: its state, the recorded steps of
+ * the journey, and each action there with whether this viewer may take it.
+ */
+export const workflowView = async (viewer, application, { recommendation = null } = {}) => {
+  const { flow, state } = await locate(application)
+  const { definition, analysis } = flow
+  const product = application.loanType
+  const labels = Object.fromEntries((await listRoles()).map((role) => [role.key, role.label]))
+  const roleName = (key) => labels[key] || key
+  const phase = analysis.phases[state.id] || null
+  const stepStates = analysis.order.map((id) => stateById(definition, id)).filter((entry) => entry?.trackProgress && appliesTo(entry, product))
+  const currentStretch = new Set([state.id, ...laterStates(definition, state.id, product)])
+  return {
+    version: flow.version,
+    legacy: flow.legacy,
+    checklist: definition.checklist || [],
+    state: {
+      id: state.id,
+      label: state.label,
+      stepName: stepName(state),
+      description: state.description || '',
+      type: state.type,
+      roles: state.roles || [],
+      askApplicant: Boolean(state.askApplicant),
+      trackProgress: Boolean(state.trackProgress),
+      requiredChecks: state.requiredChecks || [],
+      checks: [...new Set([...(state.requiredChecks || []), ...(state.actions || []).flatMap((action) => action.options?.checks || [])])],
+      onAcceptLabel: state.type === 'offer' ? resolveState(definition, state.offer?.onAccept, product)?.label || null : null,
+    },
+    phase,
+    worksHere: worksOn(viewer, state),
+    steps: stepStates.map((entry) => ({
+      id: entry.id,
+      label: stepName(entry),
+      description: entry.description || '',
+      phase: analysis.phases[entry.id],
+      roles: entry.roles || [],
+      checks: entry.requiredChecks || [],
+      current: entry.id === state.id,
+      progress: application.stageProgress?.[entry.id] || null,
+      // Done steps in the stretch still ahead of the case's current position can be reopened.
+      reopenable: Boolean(application.stageProgress?.[entry.id]?.done) && analysis.phases[entry.id] === phase && !currentStretch.has(entry.id),
+      moveActionId: moveOf(entry)?.id || null,
+    })),
+    actions:
+      state.type === 'final'
+        ? []
+        : (state.actions || []).map((action) => {
+            const target = resolveState(definition, action.to, product)
+            return {
+              id: action.id,
+              label: action.label,
+              kind: action.kind,
+              tone: ACTION_KINDS[action.kind]?.tone || 'neutral',
+              to: target?.id || action.to,
+              toLabel: target?.label || action.to,
+              singleStep: Boolean(action.options?.singleStep),
+              claim: Boolean(action.options?.claim),
+              requireNote: Boolean(action.options?.requireNote),
+              checks: action.options?.checks || [],
+              blocked: blockedReason(viewer, application, state, action, recommendation, roleName),
+            }
+          }),
+  }
+}
