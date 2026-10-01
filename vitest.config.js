@@ -18,6 +18,7 @@ export default defineConfig({
       CRB_PROVIDER: 'demo',
       GEOCODER: '',
       DATABASE_URL: '',
+      REDIS_URL: '',
       KV_REST_API_URL: '',
       KV_REST_API_TOKEN: '',
       UPSTASH_REDIS_REST_URL: '',

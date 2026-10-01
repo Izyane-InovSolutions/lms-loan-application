@@ -1,0 +1,17 @@
+# Never in an image: secrets, local data, and anything rebuilt inside it.
+.git
+.env
+.env.*
+!.env.example
+**/.env
+node_modules
+dist
+build
+.local-blob
+.local-kv.json
+.local-pg
+.e2e
+test-results
+playwright-report
+deploy/docker/backups
+.DS_Store

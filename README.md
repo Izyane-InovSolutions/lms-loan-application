@@ -6,7 +6,7 @@ application. Loan officers appraise and decide, and the customer accepts the off
 in one workspace. Approved loans can be handed to the Frappe LMS, but everything also
 works without an LMS.
 
-It has three parts, all served from one Vite app plus Vercel functions:
+It has three parts, all served from one Vite app and its API (`api/`):
 
 | Part | URL | Who uses it |
 | --- | --- | --- |
@@ -24,6 +24,7 @@ It has three parts, all served from one Vite app plus Vercel functions:
 - [The workflow](#the-workflow)
 - [Roles and what they see](#roles-and-what-they-see)
 - [Project structure](#project-structure)
+- [Deploying with Docker](#deploying-with-docker)
 - [Deploying to Vercel](#deploying-to-vercel)
 - [Deploying to Linux](#deploying-to-linux)
 - [Limits worth knowing](#limits-worth-knowing)
@@ -59,7 +60,7 @@ isn't configured, the app falls back to a local stand-in:
 | Service | Configured with | Local fallback when unset |
 | --- | --- | --- |
 | Postgres (users, applications, rules, settings, audit log) | `DATABASE_URL` | In-process **PGlite** in `.local-pg/`, migrated automatically on startup |
-| Redis (drafts, email codes, rate limits) | `KV_REST_API_URL` + `KV_REST_API_TOKEN` | JSON file `.local-kv.json` |
+| Redis (drafts, email codes, rate limits) | `REDIS_URL` (any Redis), or `KV_REST_API_URL` + `KV_REST_API_TOKEN` (Upstash) | JSON file `.local-kv.json` |
 | Blob storage (documents) | `BLOB_READ_WRITE_TOKEN` | Files in `.local-blob/` |
 | Email (codes, invitations, notifications) | `EMAIL_*` | None. Sending fails unless you set `LOS_DEV_LOG_CODES=true`, which prints codes to the terminal. |
 | AI document checks and reviews | *Settings → AI document checks* (Gemini, Mistral, Claude, OpenAI, Azure OpenAI, Vertex AI, Bedrock or self-hosted, plus an optional OCR step), or the variables in `.env.example` | Off. The AI notes are hidden. |
@@ -68,8 +69,10 @@ isn't configured, the app falls back to a local stand-in:
 | Credit bureau | `CRB_PROVIDER` (`product109` plus the `CRB_*` variables in `.env.example`) | Off. `demo` gives sample scores marked as sample data. |
 | Virus scanning | `CLAMAV_HOST` | Off |
 
-All local stores are gitignored. None of the fallbacks run on Vercel: a deployment
-missing a store fails with a message naming the variable to set.
+All local stores are gitignored. On a deployment (`NODE_ENV=production`, as in the
+Docker image, or Vercel) the database, Redis and secrets-key fallbacks are refused, so a
+missing setting fails with a message naming the variable to set. Documents are the
+exception: on your own servers a folder (a Docker volume) is where they are stored.
 
 ### Using your own Postgres
 
@@ -117,7 +120,7 @@ VITE_CRB_ENABLED=true           # ask applicants for credit bureau consent
 | Sign in as a customer | Open `/my-applications`, enter the email you applied with, and read the code from the terminal (needs `LOS_DEV_LOG_CODES=true`) |
 | Try an agent-assisted application | Sign in as a **DSA**, then *Applications → New application*. The customer's consent code appears in the terminal. |
 | Try a referral link | Open `/?ref=DEMODSA` (or an agent's own code). The landing page names the agent and the application is credited to them. |
-| Run the daily maintenance | *Admin → System health → Run now*. On Vercel it runs every morning. |
+| Run the daily maintenance | *Admin → System health → Run now*. On a deployment it runs every morning. |
 | Production build | `npm run build`, then `npm run preview` |
 
 Only one dev server can use `.local-pg/` at a time. PGlite holds the directory open.
@@ -567,7 +570,21 @@ tests/                     # Vitest suites; tests/e2e/ Playwright specs
 Files in `src/config/` are imported by both the browser and the API, so one definition
 serves both.
 
+## Deploying with Docker
+
+The workspace runs on our own servers as a `docker compose` stack: the app, Postgres,
+Redis, a Cloudflare Tunnel (or Caddy) for HTTPS, nightly backups and optional virus scanning. The daily jobs
+run inside the app, so there is no cron to install. See [DEPLOY-DOCKER.md](DEPLOY-DOCKER.md).
+
+```bash
+cd deploy/docker && cp .env.example .env    # fill it in
+docker compose up -d --build                 # first install
+./update.sh --pull                           # every update after that
+```
+
 ## Deploying to Vercel
+
+No longer the plan (we deploy with Docker), but the code still supports it.
 
 Import the repository with the **Vite** preset (build `npm run build`, output `dist`).
 The functions in `api/` deploy automatically. Set every variable for both **Production
@@ -606,8 +623,9 @@ anyone sign in as any role.
 
 ## Deploying to Linux
 
-To run on your own Linux server (nginx, local Postgres, systemd) instead of Vercel, see
-[DEPLOY-LINUX.md](DEPLOY-LINUX.md). It includes a one-command setup script.
+Without Docker, on one Linux server (nginx, local Postgres, systemd), see
+[DEPLOY-LINUX.md](DEPLOY-LINUX.md). It includes a one-command setup script. Prefer
+[Docker](#deploying-with-docker): it adds Redis, backups and safer updates.
 
 ## Limits worth knowing
 

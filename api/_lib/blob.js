@@ -1,4 +1,4 @@
-import { put as vercelPut, del as vercelDel, get as vercelGet, copy as vercelCopy } from '@vercel/blob'
+import { put as vercelPut, del as vercelDel, get as vercelGet, copy as vercelCopy, list as vercelList } from '@vercel/blob'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 
@@ -49,6 +49,9 @@ const sanitizeSegment = (segment, isFilename) => {
   const extension = dot > 0 && safe.length - dot <= 12 ? safe.slice(dot) : ''
   return safe.slice(0, MAX_SEGMENT_LENGTH - extension.length) + extension
 }
+
+/** A folder name as putBlob stores it: "ada+loans@example.com" becomes "ada-loans@example.com". */
+export const blobFolderName = (segment) => sanitizeSegment(segment, false)
 
 export const sanitizePathname = (pathname) => {
   const segments = String(pathname).split('/').filter(Boolean)
@@ -152,6 +155,47 @@ export const copyBlob = async (ref, toPathname) => {
   await fs.mkdir(path.dirname(target), { recursive: true })
   await fs.copyFile(path.join(LOCAL_BLOB_DIR, blobPathname(ref)), target)
   return { url: `${LOCAL_BLOB_URL_PREFIX}${safePathname}`, pathname: safePathname }
+}
+
+/** Every stored file under `prefix` (e.g. "drafts/"), as { url, pathname, uploadedAt }. */
+export async function* listBlobs(prefix) {
+  if (hasVercelBlob()) {
+    let cursor
+    do {
+      const page = await vercelList({ prefix, cursor, limit: 1000, token: blobToken() })
+      cursor = page.cursor
+      for (const blob of page.blobs) yield { url: blob.url, pathname: blob.pathname, uploadedAt: new Date(blob.uploadedAt) }
+    } while (cursor)
+    return
+  }
+  if (process.env.VERCEL) throwUnconfigured()
+  let entries
+  try {
+    entries = await fs.readdir(path.join(LOCAL_BLOB_DIR, prefix), { recursive: true, withFileTypes: true })
+  } catch (error) {
+    if (error.code === 'ENOENT') return
+    throw error
+  }
+  for (const entry of entries) {
+    if (!entry.isFile()) continue
+    const filePath = path.join(entry.parentPath, entry.name)
+    const pathname = path.relative(LOCAL_BLOB_DIR, filePath).split(path.sep).join('/')
+    const { mtime } = await fs.stat(filePath)
+    yield { url: `${LOCAL_BLOB_URL_PREFIX}${pathname}`, pathname, uploadedAt: mtime }
+  }
+}
+
+/** Whether files can be stored, for Admin → System health. Locally, that the folder is writable (a volume mounted with the wrong owner is not). */
+export const checkBlobStore = async () => {
+  if (hasVercelBlob()) return { ok: true, kind: blobAccess() === 'private' ? 'Vercel Blob (private)' : 'Vercel Blob (public)' }
+  if (process.env.VERCEL) return { ok: false, kind: 'not configured' }
+  try {
+    await fs.mkdir(LOCAL_BLOB_DIR, { recursive: true })
+    await fs.access(LOCAL_BLOB_DIR, fs.constants.W_OK)
+    return { ok: true, kind: 'local folder' }
+  } catch (error) {
+    return { ok: false, kind: `local folder, not writable (${error.code || error.message})` }
+  }
 }
 
 export const deleteBlobs = async (refs) => {

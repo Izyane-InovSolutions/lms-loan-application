@@ -5,6 +5,7 @@ import { OTP_PURPOSES, otpKey, storeOtp } from '../_lib/otp.js'
 import { ipOf, rateKey, underLimit } from '../_lib/rateLimit.js'
 import { getSessionUser } from '../_lib/auth/sessions.js'
 import { isStaffRole } from '../../src/config/roles.js'
+import { isDeployed } from '../_lib/runtime.js'
 
 const OTP_COOLDOWN_MS = 60 * 1000
 // Enough for an office of agents behind one address; stops one client mailing the world.
@@ -50,8 +51,8 @@ export default async function handler(req, res) {
     await sendOtpEmail(email, code, { purpose, agentName })
   } catch (error) {
     // Local testing without a mail server: LOS_DEV_LOG_CODES=true prints the code to the
-    // server console instead. Never honoured on Vercel.
-    if (process.env.LOS_DEV_LOG_CODES === 'true' && !process.env.VERCEL) {
+    // server console instead. Never honoured on a deployment.
+    if (process.env.LOS_DEV_LOG_CODES === 'true' && !isDeployed()) {
       console.warn(`[dev] could not email ${email}; their ${purpose} code is ${code}`)
       return res.status(200).json({ message: 'OTP sent.' })
     }

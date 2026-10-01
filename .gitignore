@@ -11,3 +11,6 @@ build/
 .e2e/
 test-results/
 playwright-report/
+
+# Docker deployment: database and document backups
+deploy/docker/backups/

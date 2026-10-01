@@ -1,8 +1,7 @@
 import crypto from 'node:crypto'
 import { runDailyMaintenance } from '../_lib/maintenance.js'
 import { appOrigin } from '../_lib/http.js'
-
-const deployed = () => Boolean(process.env.VERCEL) || process.env.NODE_ENV === 'production'
+import { isDeployed } from '../_lib/runtime.js'
 
 const authorised = (req) => {
   const expected = Buffer.from(`Bearer ${process.env.CRON_SECRET}`)
@@ -15,7 +14,7 @@ const authorised = (req) => {
 // rather than letting anyone run the deletions; only local development may skip it.
 export default async function handler(req, res) {
   if (!process.env.CRON_SECRET) {
-    if (deployed()) return res.status(503).json({ message: 'Set CRON_SECRET to enable the scheduled maintenance.' })
+    if (isDeployed()) return res.status(503).json({ message: 'Set CRON_SECRET to enable the scheduled maintenance.' })
   } else if (!authorised(req)) {
     return res.status(401).json({ message: 'Unauthorized' })
   }
