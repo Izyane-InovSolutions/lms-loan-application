@@ -69,8 +69,13 @@ export const ROLE_TONES = {
   customer: { dot: 'bg-muted-foreground', chip: 'bg-muted text-muted-foreground', bar: 'hsl(215 16% 60%)' },
 }
 
+// Roles an admin added share one hue; their label tells them apart.
+const CUSTOM_ROLE_TONE = { dot: 'bg-[hsl(340_45%_48%)]', chip: 'bg-[hsl(340_45%_48%/0.12)] text-[hsl(340_45%_40%)] dark:text-[hsl(340_60%_76%)]', bar: 'hsl(340 45% 48%)' }
+
+export const roleTone = (role) => ROLE_TONES[role] || CUSTOM_ROLE_TONE
+
 export function RoleBadge({ role, className }) {
-  const tone = ROLE_TONES[role] || ROLE_TONES.customer
+  const tone = roleTone(role)
   return (
     <span className={cn('inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs font-medium', tone.chip, className)}>
       <span className={cn('size-1.5 rounded-full', tone.dot)} aria-hidden="true" />

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, Check, Database, Loader2, PlugZap, Rocket, Send, Trash2, Undo2 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -7,12 +7,14 @@ import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import { SimpleText } from '@/lib/simpleText'
-import { STAFF_ROLES, roleLabel } from '@/config/roles'
+import { registeredRoles, roleLabel } from '@/config/roles'
 import { describeFee, describeInterest, formatKwacha, priceLoan } from '@/config/loanProducts'
 import { AI_CONNECTIONS, AI_FIELDS, AI_MODEL_PROVIDERS, OCR_ENGINES, isServiceReady } from '@/config/aiProviders'
 import { api } from '../api'
 import { useAuth } from '../auth'
 import { Field, FormError, PageHeader, Panel, dateTime, useToast } from '../components'
+import { DocumentTemplatesTab } from './DocumentTemplatesTab'
+import { BrandingTab } from './BrandingTab'
 
 const TABS = [
   { id: 'workflow', label: 'Credit workflow' },
@@ -22,6 +24,8 @@ const TABS = [
   { id: 'ai', label: 'AI document checks' },
   { id: 'retention', label: 'Data retention' },
   { id: 'security', label: 'Security' },
+  { id: 'branding', label: 'Branding' },
+  { id: 'documents', label: 'Offer documents' },
   { id: 'legal', label: 'Terms and privacy' },
   { id: 'demo', label: 'Sample data', demoOnly: true },
 ]
@@ -141,6 +145,8 @@ export function SettingsPage() {
           {tab === 'ai' ? <AiTab settings={state.settings} integrations={state.integrations} notify={notify} onSaved={load} /> : null}
           {tab === 'retention' ? <RetentionTab initial={state.settings.retention} notify={notify} /> : null}
           {tab === 'security' ? <SecurityTab initial={state.settings.security} notify={notify} /> : null}
+          {tab === 'branding' ? <BrandingTab initial={state.settings.branding} notify={notify} /> : null}
+          {tab === 'documents' ? <DocumentTemplatesTab notify={notify} /> : null}
           {tab === 'legal' ? <LegalTab notify={notify} onPublished={load} /> : null}
           {tab === 'demo' && demoEnabled ? <SampleData notify={notify} /> : null}
         </>
@@ -151,6 +157,21 @@ export function SettingsPage() {
 
 // ---------------------------------------------------------------------------
 
+const PRODUCT_NAMES = { personal: 'Personal loan', business: 'Business loan' }
+
+/** Where a setting went: the Workflow editor, which owns the flow now. */
+function WorkflowPointer({ children }) {
+  return (
+    <p className="text-sm text-muted-foreground">
+      {children}{' '}
+      <Link to="/admin/workflow" className="text-primary hover:underline">
+        Workflow
+      </Link>
+      .
+    </p>
+  )
+}
+
 function WorkflowTab({ settings, notify }) {
   const workflow = useSettingGroup('workflow', settings.workflow, notify)
   const offers = useSettingGroup('offers', settings.offers, notify)
@@ -159,19 +180,17 @@ function WorkflowTab({ settings, notify }) {
     <div className="grid gap-6 lg:grid-cols-2">
       <Panel title="Credit decisions">
         <div className="space-y-5">
-          <Toggle
-            id="four-eyes"
-            label="Require a second approver"
-            description="Whoever recommends a decision, or brought the customer in, cannot make it. Recommended."
-            checked={workflow.value.requireSecondApproval}
-            onChange={(requireSecondApproval) => workflow.set({ requireSecondApproval })}
-          />
-          <Field id="officer-limit" label="Loan officer approval limit (K)" hint="Above this amount, only an administrator can approve.">
-            <Input id="officer-limit" type="number" min="0" value={workflow.value.officerApprovalLimit} onChange={(event) => workflow.set({ officerApprovalLimit: event.target.value })} />
-          </Field>
+          <WorkflowPointer>Who decides, and whether a second approver is needed (four-eyes), is set on each action in the</WorkflowPointer>
           <Field id="sla-days" label="Target days to a decision" hint="Open cases older than this are flagged, and officers get a daily reminder.">
             <Input id="sla-days" type="number" min="1" max="60" value={workflow.value.slaDays} onChange={(event) => workflow.set({ slaDays: event.target.value })} />
           </Field>
+          <p className="text-sm text-muted-foreground">
+            How much each person may approve is now set per user on the{' '}
+            <Link to="/admin/users" className="text-primary hover:underline">
+              Team
+            </Link>{' '}
+            page, as a minimum and maximum on their profile.
+          </p>
         </div>
         <FormError message={workflow.error} />
         <SaveBar dirty={workflow.dirty} saving={workflow.saving} onSave={() => workflow.save()} />
@@ -179,15 +198,16 @@ function WorkflowTab({ settings, notify }) {
       <div className="space-y-6">
         <Panel title="Offers">
           <div className="space-y-5">
+            <WorkflowPointer>Whether the customer accepts an offer before payout is the Offer state in the</WorkflowPointer>
             <Toggle
-              id="require-acceptance"
-              label="The customer accepts the offer first"
-              description="An approved loan is only paid out, or sent to the LMS, once the customer accepts its terms. Recommended — especially when the approved amount differs from what was asked."
-              checked={offers.value.requireAcceptance}
-              onChange={(requireAcceptance) => offers.set({ requireAcceptance })}
+              id="require-signature"
+              label="Accepting means signing"
+              description="The customer reads the offer letter and loan agreement, signs (drawn or typed) and confirms with an emailed code. Signed copies, with a signature record page, are kept with the case."
+              checked={offers.value.requireSignature !== false}
+              onChange={(requireSignature) => offers.set({ requireSignature })}
             />
             <Field id="offer-days" label="Days to accept" hint="An offer not accepted in time lapses and the customer is told.">
-              <Input id="offer-days" type="number" min="1" max="90" value={offers.value.expiryDays} onChange={(event) => offers.set({ expiryDays: event.target.value })} disabled={!offers.value.requireAcceptance} />
+              <Input id="offer-days" type="number" min="1" max="90" value={offers.value.expiryDays} onChange={(event) => offers.set({ expiryDays: event.target.value })} />
             </Field>
           </div>
           <FormError message={offers.error} />
@@ -211,7 +231,7 @@ function WorkflowTab({ settings, notify }) {
 
 // ---------------------------------------------------------------------------
 
-const PRODUCT_NAMES = { personal: 'Personal loan', business: 'Business loan' }
+
 
 function ProductsTab({ initial, notify }) {
   const group = useSettingGroup('products', initial, notify)
@@ -421,20 +441,7 @@ function LmsTab({ settings, integrations, notify, onSaved }) {
       </Panel>
 
       <Panel title="When to hand over">
-        <fieldset className="space-y-2">
-          {[
-            ['approval', 'Once approved', settings.offers.requireAcceptance ? 'After the customer accepts the offer (acceptance is on in Credit workflow). Recommended.' : 'As soon as the decision is made. Recommended.'],
-            ['submit', 'As soon as they’re submitted', 'The LMS gets every application, approved or not.'],
-          ].map(([key, label, hint]) => (
-            <label key={key} className={cn('flex cursor-pointer items-start gap-3 rounded-lg border p-3', timing.value.syncOn === key && 'border-primary bg-primary/5')}>
-              <input type="radio" name="sync-on" checked={timing.value.syncOn === key} onChange={() => timing.set({ syncOn: key })} className="mt-1 accent-[hsl(var(--primary))]" />
-              <span>
-                <span className="block text-sm font-medium text-foreground">{label}</span>
-                <span className="block text-xs text-muted-foreground">{hint}</span>
-              </span>
-            </label>
-          ))}
-        </fieldset>
+        <WorkflowPointer>Which state hands a loan to the LMS is set on that state in the</WorkflowPointer>
         <div className="mt-4">
           <Toggle
             id="send-prescreen"
@@ -779,7 +786,7 @@ function SecurityTab({ initial, notify }) {
   return (
     <Panel title="Two-step sign-in" description="Staff in these roles must use an authenticator app code as well as their password. Anyone without it set up is asked to do so before they can continue.">
       <div className="grid gap-2 sm:grid-cols-2">
-        {STAFF_ROLES.map((role) => (
+        {registeredRoles().map(({ key: role }) => (
           <label key={role} className="flex cursor-pointer items-center gap-3 rounded-lg border p-3 text-sm">
             <input type="checkbox" checked={roles.includes(role)} onChange={() => toggle(role)} className="size-4 accent-[hsl(var(--primary))]" />
             {roleLabel(role)}

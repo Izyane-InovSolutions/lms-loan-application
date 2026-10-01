@@ -1,13 +1,14 @@
 import { desc, eq } from 'drizzle-orm'
 import { getDb, schema } from '../db/client.js'
 import { addEvent } from '../applications.js'
+import { caseWorkflow, systemTransition } from '../workflow.js'
 import { getSetting } from '../settings.js'
 import { getAiProvider } from '../ai/index.js'
 import { prescreenApplication } from '../ai/prescreen.js'
 import { findFormMismatches } from '../../../src/utils/documentChecks.js'
 import { evaluateRules } from '../../../src/config/creditRules.js'
 import { computeFacts, expectedFor } from './facts.js'
-import { getPublishedRuleset } from './rulesets.js'
+import { getPublishedRuleset, rulesetFlatRules } from './rulesets.js'
 import { addressDistanceKm } from '../geo.js'
 
 const { applications, applicationDocuments, prescreens, locations, crbReports } = schema
@@ -41,7 +42,7 @@ export const runPrescreen = async (applicationId, { actor = null } = {}) => {
   const locationDistanceKm = applicantPoint ? await addressDistanceKm(application, applicantPoint).catch(() => null) : null
   const facts = computeFacts(application, documents, { locations: points, crbScore: crb?.score ?? null, locationDistanceKm })
   const ruleset = await getPublishedRuleset()
-  const { outcome, results } = evaluateRules(ruleset.rules, facts, application.loanType)
+  const { outcome, results } = evaluateRules(rulesetFlatRules(ruleset), facts, application.loanType)
 
   let aiReview = null
   let aiError = null
@@ -85,9 +86,15 @@ export const runPrescreen = async (applicationId, { actor = null } = {}) => {
 
   // Automatic decline is an explicit administrator choice; by default a person decides.
   const { autoDecline } = await getSetting('prescreen')
+  // Only while nobody has picked the case up: the start state, at the version read here.
   if (autoDecline && outcome === 'decline' && application.status === 'submitted') {
-    await db.update(applications).set({ status: 'declined', decidedAt: new Date(), version: application.version + 1, updatedAt: new Date() }).where(eq(applications.id, applicationId))
-    await addEvent(db, { applicationId, actor: null, type: 'status', fromStatus: 'submitted', toStatus: 'declined', message: 'Declined automatically by the credit rules', visibleToCustomer: true })
+    const [current] = await db.select().from(applications).where(eq(applications.id, applicationId)).limit(1)
+    const { flow } = await caseWorkflow(current)
+    await systemTransition(db, current, 'declined', {
+      expectState: flow.definition.start,
+      changes: { decidedAt: new Date() },
+      event: { type: 'status', message: 'Declined automatically by the credit rules', visibleToCustomer: true },
+    })
   }
 
   return stored

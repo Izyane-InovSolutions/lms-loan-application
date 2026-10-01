@@ -63,6 +63,8 @@ export function createMemoryKv() {
     async set(key, value, options = {}) {
       const entries = load()
       const existing = entries.get(key)
+      // Redis SET NX: only when the key is absent, and null (not "OK") when it was there.
+      if (options.nx && existing && !isExpired(existing)) return null
       let expiresAt = null
       if (options.keepTtl && existing && !isExpired(existing)) {
         expiresAt = existing.expiresAt
@@ -71,6 +73,7 @@ export function createMemoryKv() {
       }
       entries.set(key, { value, expiresAt })
       persist()
+      return 'OK'
     },
     async del(key) {
       load().delete(key)

@@ -43,6 +43,55 @@
       "when": 1790504104699,
       "tag": "0005_offers_security_ops",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1790607716294,
+      "tag": "0006_glossy_warbird",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1790779695720,
+      "tag": "0007_roles",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1790785739288,
+      "tag": "0008_drafts",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790786841828,
+      "tag": "0009_stages",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1790787352993,
+      "tag": "0010_documents_signatures",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1790800116406,
+      "tag": "0011_signature_seal",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1790804732301,
+      "tag": "0012_workflow_versions",
+      "breakpoints": true
     }
   ]
 }

@@ -2,7 +2,9 @@ import { expect, test } from '@playwright/test'
 import { acceptTermsAndSubmit, attachAll, choose, emailedCode, fill, next, signInAs, typeDate } from './helpers.js'
 
 /** Fills the two business steps; the documents step and after are left to the caller. */
-const fillBusiness = async (page, { email, company }) => {
+const fillBusiness = async (page, { email, company, selfService = false }) => {
+  // On their own, applicants agree up front that staff may help them finish.
+  if (selfService) await page.getByLabel(/help me finish it/).check()
   await fill(page, 'businessInfo.companyName', company)
   await choose(page, 'businessInfo.businessType')
   await typeDate(page, '03012015')
@@ -40,7 +42,7 @@ test('a business applies online and the case shows its directors and documents',
   await page.locator('#start-email').fill('mutale@kafueagro.com')
   await page.getByRole('button', { name: /^Continue$/ }).click()
   await page.waitForURL('**/apply/business/business-information')
-  await fillBusiness(page, { email: 'mutale@kafueagro.com', company: 'Kafue Agro Supplies' })
+  await fillBusiness(page, { email: 'mutale@kafueagro.com', company: 'Kafue Agro Supplies', selfService: true })
   const reference = await acceptTermsAndSubmit(page)
 
   const officer = await browser.newPage()
@@ -67,7 +69,7 @@ test('an agent fills in an application with a customer, who confirms with a code
 
   await expect(page.getByText('The customer’s agreement')).toBeVisible()
   await page.getByRole('button', { name: 'Email the code' }).click()
-  await page.getByLabel('Customer’s code').fill(await emailedCode(customer))
+  await page.getByLabel('Customer’s code').fill(await emailedCode(customer, 'consent'))
   await page.getByRole('button', { name: /Submit application/ }).click()
   await page.getByLabel(/I have read and accept/).check()
   await page.getByRole('button', { name: 'Accept and submit' }).click()
@@ -75,4 +77,50 @@ test('an agent fills in an application with a customer, who confirms with a code
   await page.waitForURL('**/admin/applications/**')
   await expect(page.getByText(/Chisokone Hardware/).first()).toBeVisible()
   await expect(page.getByText(/direct sales agent/i).first()).toBeVisible()
+})
+
+test('an RM can choose a business loan when starting an assisted application', async ({ page }) => {
+  await signInAs(page, 'Relationship manager')
+  await page.goto('/admin/applications')
+  await page.getByRole('button', { name: 'New application' }).first().click()
+
+  await expect(page.getByRole('dialog')).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Personal loan' })).toBeVisible()
+  await page.getByRole('button', { name: 'Business loan' }).click()
+  await page.waitForURL('**/apply/business/business-information')
+  await expect(page.getByText(/filling this in for a customer/)).toBeVisible()
+})
+
+test('an agent saves a customer’s application as a draft and continues it later', async ({ page }) => {
+  await signInAs(page, 'Direct sales agent')
+  await page.goto('/admin/applications')
+  await page.getByRole('button', { name: 'New application' }).first().click()
+  await page.waitForURL('**/apply/personal/**')
+  // No up-front consent box with an agent: the customer agrees at submit, by code.
+  await expect(page.getByLabel(/help me finish it/)).toHaveCount(0)
+
+  await fill(page, 'personalInfo.firstName', 'Chipo')
+  await fill(page, 'personalInfo.surname', 'Mwale')
+  await fill(page, 'personalInfo.phone', '971234570')
+  await fill(page, 'personalInfo.email', 'chipo.mwale@example.com')
+  await fill(page, 'personalInfo.nrc', '345678912')
+  await choose(page, 'personalInfo.gender')
+  await choose(page, 'personalInfo.maritalStatus')
+  await typeDate(page, '07011992')
+  await next(page)
+
+  await page.getByRole('button', { name: 'Save & exit' }).click()
+  await page.waitForURL('**/admin/pipeline')
+  const card = page.getByRole('button', { name: /Chipo Mwale/ })
+  await expect(card).toBeVisible()
+  await expect(card).toContainText('Step 2 of 5')
+  await page.screenshot({ path: 'test-results/pipeline-drafts.png', fullPage: true })
+
+  await card.click()
+  await expect(page.getByRole('dialog').getByText('By Kelvin Mbewe with the customer')).toBeVisible()
+  await page.getByRole('button', { name: 'Continue with the customer' }).click()
+  await page.waitForURL('**/apply/personal/residence-employment')
+  await expect(page.getByText(/filling this in for a customer/)).toBeVisible()
+  await page.getByRole('button', { name: /Previous step/ }).click()
+  await expect(page.locator('#field-personalInfo-firstName')).toHaveValue('Chipo')
 })

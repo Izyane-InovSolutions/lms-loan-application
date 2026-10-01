@@ -1,6 +1,6 @@
 import crypto from 'node:crypto'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
-import { createMemoryKv, client } from './helpers.js'
+import { createMemoryKv, client, draftPreparer, emailCode } from './helpers.js'
 
 const kv = createMemoryKv()
 vi.mock('../api/_lib/kv.js', () => ({ default: kv }))
@@ -9,44 +9,7 @@ const { default: handler } = await import('../api/v1/[...path].js')
 const { putBlob } = await import('../api/_lib/blob.js')
 const { evaluateRules, DEFAULT_RULES } = await import('../src/config/creditRules.js')
 
-const PDF = Buffer.from('%PDF-1.4\n% test\n')
-
-/** Puts a ready-to-submit draft in place, as the wizard would have: files in storage, record in Redis. */
-const prepareDraft = async (email, { withNrc = true } = {}) => {
-  const token = crypto.randomBytes(12).toString('hex')
-  const slots = ['payslips', 'bankStatements', 'passportPhoto', 'tpin', ...(withNrc ? ['nrcCopy'] : [])]
-  const documents = {}
-  const dataDocuments = {}
-  for (const slot of slots) {
-    const path = `personal.documents.${slot}`
-    const stored = await putBlob(`drafts/${email}/${slot}-file.pdf`, PDF, { contentType: 'application/pdf' })
-    documents[path] = { ...stored, filename: `${slot}.pdf`, contentType: 'application/pdf', size: PDF.length }
-    dataDocuments[slot] = { __draftFile__: path }
-  }
-  await kv.set(`draft:${email}`, { documents })
-  await kv.set(`draftToken:${token}`, email)
-  // The server's own AI result for the payslip: net pay makes debt-to-income computable.
-  await kv.set(`aiAnalysis:${email}:payslips`, {
-    analysis: { docType: 'payslips', matchesExpectedType: true, legibility: 'clear', extracted: { holderName: 'Ada Banda', netPay: '10000' }, issues: [], authenticityConcerns: [] },
-    filename: 'payslips.pdf',
-    size: PDF.length,
-  })
-  return {
-    token,
-    body: {
-      submissionKey: crypto.randomUUID(),
-      loanType: 'personal',
-      loanData: { amount: 5000, tenure: 6 },
-      consents: { dataProcessing: true, location: true, crb: true },
-      location: { latitude: -15.41, longitude: 28.28, accuracy: 20 },
-      data: {
-        personalInfo: { firstName: 'Ada', middleName: '', surname: 'Banda', phone: '971234567', email, nrc: '123456/78/9', birthDate: '1990-05-01' },
-        employmentInfo: { residentialAddress: 'Lusaka', occupation: 'Teacher', employerName: 'MoE' },
-        documents: dataDocuments,
-      },
-    },
-  }
-}
+const prepareDraft = draftPreparer(kv, putBlob)
 
 const waitFor = async (check, attempts = 50) => {
   for (let index = 0; index < attempts; index += 1) {
@@ -77,13 +40,17 @@ describe('application lifecycle', () => {
   const rm = client(handler)
   let applicationId
   let reference
+  let adminId
+  let officerId
+  let secondOfficerId
 
   beforeAll(async () => {
-    await admin.post('/auth/demo', { role: 'admin' })
-    await officer.post('/auth/demo', { role: 'loan_officer' })
+    adminId = (await admin.post('/auth/demo', { role: 'admin' })).body.user.id
+    officerId = (await officer.post('/auth/demo', { role: 'loan_officer' })).body.user.id
     await dsa.post('/auth/demo', { role: 'dsa' })
     await rm.post('/auth/demo', { role: 'rm' })
     const invite = await admin.post('/users', { name: 'Second Officer', email: 'second.officer@example.com', role: 'loan_officer' })
+    secondOfficerId = invite.body.user.id
     const token = decodeURIComponent(invite.body.inviteUrl.split('token=')[1])
     await secondOfficer.post('/auth/password/set', { token, password: 'second-officer-pass' })
   })
@@ -123,6 +90,41 @@ describe('application lifecycle', () => {
     expect(detail.documents).toHaveLength(5)
     // Storage URLs never reach the browser.
     expect(JSON.stringify(detail.documents)).not.toContain('url')
+  })
+
+  it('limits assignment and taking cases to each officer’s amount band', async () => {
+    const tooHigh = await admin.patch(`/users/${officerId}`, { approvalMin: 6000 })
+    expect(tooHigh.status).toBe(200)
+    let version = (await officer.get(`/applications/${applicationId}`)).body.application.version
+    const cannotTake = await officer.post(`/applications/${applicationId}/actions`, { action: 'start_review', version })
+    expect(cannotTake.body.code).toBe('outside_approval_range')
+    await admin.patch(`/users/${officerId}`, { approvalMin: 0 })
+
+    const { token, body } = await prepareDraft('assignment-limits@example.com')
+    body.data.personalInfo.email = 'assignment-limits@example.com'
+    const { body: submitted } = await applicant.post('/applications', body, { authorization: `Bearer ${token}` })
+    version = (await admin.get(`/applications/${submitted.id}`)).body.application.version
+    await admin.patch(`/users/${adminId}`, { approvalMin: 6000 })
+    const adminOutsideRange = await admin.post(`/applications/${submitted.id}/actions`, { action: 'assign', officerId: adminId, version })
+    expect(adminOutsideRange.body.code).toBe('outside_approval_range')
+    await admin.patch(`/users/${adminId}`, { approvalMin: 0 })
+    const secondUser = { id: secondOfficerId }
+
+    await admin.patch(`/users/${secondUser.id}`, { approvalMin: 6000, approvalMax: 7000 })
+    const belowMinimum = await admin.post(`/applications/${submitted.id}/actions`, { action: 'assign', officerId: secondUser.id, version })
+    expect(belowMinimum.body.code).toBe('outside_approval_range')
+    await admin.patch(`/users/${secondUser.id}`, { approvalMin: 0, approvalMax: 4000 })
+    const aboveMaximum = await admin.post(`/applications/${submitted.id}/actions`, { action: 'assign', officerId: secondUser.id, version })
+    expect(aboveMaximum.body.code).toBe('outside_approval_range')
+
+    await admin.patch(`/users/${secondUser.id}`, { approvalMin: 4000, approvalMax: 6000 })
+    const officersResponse = await admin.get('/officers')
+    expect(officersResponse.status).toBe(200)
+    expect(officersResponse.body).toHaveProperty('officers')
+    expect(officersResponse.body.officers.find((person) => person.id === secondUser.id)).toMatchObject({ approvalMin: 4000, approvalMax: 6000 })
+    const assigned = await admin.post(`/applications/${submitted.id}/actions`, { action: 'assign', officerId: secondUser.id, version })
+    expect(assigned.status).toBe(200)
+    expect(assigned.body.application.assignedOfficer).toBe(secondUser.id)
   })
 
   it('serves documents to staff who may see the case and hides the case from others', async () => {
@@ -175,11 +177,19 @@ describe('application lifecycle', () => {
 
     // The recommender cannot also decide.
     expect((await act(officer, 'decide', { verdict: 'approve', rationale: 'Me again' })).body.code).toBe('four_eyes')
-    const decided = await act(secondOfficer, 'decide', { verdict: 'approve', rationale: 'Agree' })
+    await admin.patch(`/users/${adminId}`, { approvalMin: 5000 })
+    const adminUnderLimit = await act(admin, 'decide', { verdict: 'approve', rationale: 'Agree' })
+    expect(adminUnderLimit.body.code).toBe('under_limit')
+    await admin.patch(`/users/${adminId}`, { approvalMin: 0, approvalMax: 4000 })
+    const adminOverLimit = await act(admin, 'decide', { verdict: 'approve', rationale: 'Agree' })
+    expect(adminOverLimit.body.code).toBe('over_limit')
+    await admin.patch(`/users/${adminId}`, { approvalMax: 5000 })
+    const decided = await act(admin, 'decide', { verdict: 'approve', rationale: 'Agree' })
     expect(decided.status).toBe(200)
     expect(case_.status).toBe('approved')
     expect(case_.approvedAmount).toBe(4500)
     expect(decided.body.appraisals.map((row) => row.kind)).toEqual(['decision', 'recommendation'])
+    await admin.patch(`/users/${adminId}`, { approvalMax: null })
   })
 
   it('lets the customer answer an information request and keeps internal wording private', async () => {
@@ -196,7 +206,7 @@ describe('application lifecycle', () => {
     await act({ action: 'request_info', message: 'Please send a clearer NRC copy.' })
 
     const customer = client(handler)
-    await kv.set('otp:bo@example.com', { code: '111222', attempts: 0, createdAt: Date.now() }, { ex: 600 })
+    await emailCode(kv, 'login', 'bo@example.com', '111222')
     await customer.post('/auth/customer', { email: 'bo@example.com', code: '111222' })
     const mine = await customer.get('/me/applications')
     expect(mine.body.applications.map((row) => row.reference)).toEqual([submitted.reference])
@@ -220,9 +230,11 @@ describe('application lifecycle', () => {
   })
 
   it('holds officers to their approval limit', async () => {
-    await admin.put('/settings/workflow', { requireSecondApproval: false, officerApprovalLimit: 3000, slaDays: 3 })
+    await admin.patch(`/users/${officerId}`, { approvalMin: 0, approvalMax: 3000 })
+    await admin.put('/settings/workflow', { requireSecondApproval: false, slaDays: 3 })
     const { token, body } = await prepareDraft('limit@example.com')
     body.data.personalInfo.email = 'limit@example.com'
+    body.loanData.amount = 3000
     const { body: submitted } = await applicant.post('/applications', body, { authorization: `Bearer ${token}` })
     let version = (await officer.get(`/applications/${submitted.id}`)).body.application.version
     const act = async (payload) => {
@@ -236,7 +248,8 @@ describe('application lifecycle', () => {
     expect(over.body.code).toBe('over_limit')
     const within = await act({ action: 'recommend', verdict: 'approve', rationale: 'Fine', amount: 3000 })
     expect(within.body.application.status).toBe('approved')
-    await admin.put('/settings/workflow', { requireSecondApproval: true, officerApprovalLimit: 100000, slaDays: 3 })
+    await admin.patch(`/users/${officerId}`, { approvalMin: 0, approvalMax: null })
+    await admin.put('/settings/workflow', { requireSecondApproval: true, slaDays: 3 })
   })
 
   it('pulls a sample credit report only with consent, and re-prescreens', async () => {
@@ -253,15 +266,19 @@ describe('application lifecycle', () => {
     expect(response.body.prescreen.facts.crb_score).toBe(response.body.crbReports[0].score)
   })
 
-  it('edits, simulates and publishes credit rules', async () => {
+  it('edits, simulates and publishes policy rules', async () => {
     const { body: current } = await admin.get('/rules')
-    const tightened = current.published.rules.map((rule) => (rule.fact === 'debt_to_income' ? { ...rule, value: 0.01 } : rule))
-    const simulation = await admin.post('/rules/simulate', { rules: tightened })
+    // Policies group the rules; tighten the debt-to-income rule wherever it lives.
+    const tighten = (policies) =>
+      policies.map((policy) => ({ ...policy, rules: policy.rules.map((rule) => (rule.fact === 'debt_to_income' ? { ...rule, value: 0.01 } : rule)) }))
+    const tightened = tighten(current.published.policies)
+    expect(current.published.policies.some((policy) => policy.rules.some((rule) => rule.fact === 'debt_to_income'))).toBe(true)
+    const simulation = await admin.post('/rules/simulate', { policies: tightened })
     expect(simulation.status).toBe(200)
     expect(simulation.body.proposed.refer).toBeGreaterThanOrEqual(simulation.body.current.refer)
-    expect((await officer.put('/rules/draft', { rules: tightened })).status).toBe(403)
-    expect((await admin.put('/rules/draft', { rules: [{ fact: 'nope' }] })).body.code).toBe('invalid_rules')
-    expect((await admin.put('/rules/draft', { rules: tightened, note: 'Tighter DTI' })).status).toBe(200)
+    expect((await officer.put('/rules/draft', { policies: tightened })).status).toBe(403)
+    expect((await admin.put('/rules/draft', { policies: [{ name: 'Broken', product: 'personal', rules: [{ fact: 'nope' }] }] })).body.code).toBe('invalid_rules')
+    expect((await admin.put('/rules/draft', { policies: tightened, note: 'Tighter DTI' })).status).toBe(200)
     const published = await admin.post('/rules/publish', {})
     expect(published.body.published.version).toBe(2)
   })
@@ -277,7 +294,7 @@ describe('application lifecycle', () => {
 
   it('shows staff their referral banner and never leaks the full name', async () => {
     const { body } = await client(handler).get('/referrals/DEMODSA')
-    expect(body.referrer).toEqual({ firstName: 'Kelvin', role: 'dsa', code: 'DEMODSA' })
+    expect(body.referrer).toEqual({ firstName: 'Kelvin', role: 'dsa', roleLabel: 'Direct sales agent', code: 'DEMODSA' })
   })
 
   it('seeds and clears sample data', async () => {

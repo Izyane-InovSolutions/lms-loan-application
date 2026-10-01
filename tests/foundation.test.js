@@ -1,6 +1,6 @@
 import crypto from 'node:crypto'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
-import { createMemoryKv, client } from './helpers.js'
+import { createMemoryKv, client, emailCode } from './helpers.js'
 
 const kv = createMemoryKv()
 vi.mock('../api/_lib/kv.js', () => ({ default: kv }))
@@ -8,7 +8,8 @@ vi.mock('../api/_lib/kv.js', () => ({ default: kv }))
 const { default: handler } = await import('../api/v1/[...path].js')
 const { hashPassword, verifyPassword } = await import('../api/_lib/auth/password.js')
 const { createRouter, fail } = await import('../api/_lib/http.js')
-const { can } = await import('../src/config/roles.js')
+const { BUILT_IN_ROLES } = await import('../src/config/roles.js')
+const can = (role, permission) => BUILT_IN_ROLES[role]?.permissions.includes(permission) || false
 
 describe('passwords', () => {
   it('verifies the right password and rejects others', async () => {
@@ -55,7 +56,7 @@ describe('router', () => {
 })
 
 describe('role permissions', () => {
-  it('limits management to admins', () => {
+  it('limits management to admins by default', () => {
     expect(can('admin', 'users.manage')).toBe(true)
     expect(['loan_officer', 'sales_manager', 'rm', 'dsa', 'customer'].some((role) => can(role, 'users.manage'))).toBe(false)
     expect(can('rm', 'users.view')).toBe(true)
@@ -141,7 +142,7 @@ describe('accounts and visibility (against PGlite)', () => {
 describe('customer sign-in', () => {
   it('creates a customer from a valid code and refuses staff emails', async () => {
     const customer = client(handler)
-    await kv.set('otp:thandi@example.com', { code: '123456', attempts: 0, createdAt: Date.now() }, { ex: 600 })
+    await emailCode(kv, 'login', 'thandi@example.com', '123456')
     const wrong = await customer.post('/auth/customer', { email: 'thandi@example.com', code: '000000' })
     expect(wrong.status).toBe(400)
     const right = await customer.post('/auth/customer', { email: 'thandi@example.com', code: '123456' })
@@ -149,7 +150,7 @@ describe('customer sign-in', () => {
     // A customer session is not a way into the staff workspace.
     expect((await customer.get('/overview')).status).toBe(403)
 
-    await kv.set('otp:demo.admin@demo.los.local', { code: '654321', attempts: 0, createdAt: Date.now() }, { ex: 600 })
+    await emailCode(kv, 'login', 'demo.admin@demo.los.local', '654321')
     const staff = await client(handler).post('/auth/customer', { email: 'demo.admin@demo.los.local', code: '654321' })
     expect(staff.body.code).toBe('staff_account')
   })

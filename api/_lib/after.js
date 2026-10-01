@@ -1,5 +1,8 @@
 import { waitUntil } from '@vercel/functions'
 
+// Tasks still running, for settleBackgroundTasks.
+const pending = new Set()
+
 /**
  * Runs `task` after the response has been sent — prescreening and the LMS hand-off,
  * which the applicant should not wait for. On Vercel, waitUntil keeps the instance
@@ -14,10 +17,25 @@ export const afterResponse = (label, task) => {
       return import('./errors.js').then(({ reportError }) => reportError({ source: 'background', message: error?.message || String(error), stack: error?.stack, route: label }))
     })
     .catch(() => {})
+    .finally(() => pending.delete(promise))
+  pending.add(promise)
   try {
     waitUntil(promise)
   } catch {
     // Not inside a Vercel request context.
   }
   return promise
+}
+
+/**
+ * Waits for background tasks still running, up to `ms`: server.js calls it on shutdown so
+ * a redeploy does not cut an LMS hand-off short. True if they all finished.
+ */
+export const settleBackgroundTasks = async (ms) => {
+  if (!pending.size) return true
+  let timer
+  const timeout = new Promise((resolve) => (timer = setTimeout(() => resolve(false), ms)))
+  const done = await Promise.race([Promise.allSettled([...pending]).then(() => true), timeout])
+  clearTimeout(timer)
+  return done
 }

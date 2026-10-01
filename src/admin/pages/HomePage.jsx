@@ -4,12 +4,14 @@ import { Check, Copy, FilePlus2, History, Loader2, UserPlus, Users } from 'lucid
 
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { ROLES, STAFF_ROLES, roleLabel } from '@/config/roles'
+import { applyPath } from '@/config/applicationSteps'
+import { hasPermission, registeredRoles, roleDescription, roleLabel } from '@/config/roles'
 import { LOAN_TYPE_LABELS, LMS_SYNC_LABELS, statusLabel } from '@/config/applications'
 import { setAssistedFlag } from '@/lib/assisted'
 import { api } from '../api'
 import { useAuth } from '../auth'
-import { EmptyState, FormError, Initials, PageHeader, Panel, ROLE_TONES, StatusBadge, StatusText, money, timeAgo } from '../components'
+import { EmptyState, FormError, Initials, PageHeader, Panel, roleTone, StatusBadge, StatusText, money, timeAgo } from '../components'
+import { AssistedApplicationTypeDialog } from '../AssistedApplicationTypeDialog'
 import { describeAction } from './AuditPage'
 import { KpiStrip, Leaderboard, ProductMix, QueueTiles, RuleOutcomes, StageBreakdown, SubmissionsTrend } from './dashboardCharts'
 
@@ -34,13 +36,14 @@ export function HomePage() {
   useEffect(() => {
     let cancelled = false
     setData((prev) => ({ ...prev, status: prev.dashboard ? 'refreshing' : 'loading' }))
-    Promise.all([api(`/dashboard?days=${days}`), ['admin', 'rm'].includes(user.role) ? api('/overview') : Promise.resolve(null)])
+    const wantsOverview = hasPermission(user, 'audit.view') || hasPermission(user, 'team.lead')
+    Promise.all([api(`/dashboard?days=${days}`), wantsOverview ? api('/overview') : Promise.resolve(null)])
       .then(([dashboard, overview]) => !cancelled && setData({ status: 'ready', dashboard, overview }))
       .catch((error) => !cancelled && setData({ status: 'error', message: error.message }))
     return () => {
       cancelled = true
     }
-  }, [user.role, days])
+  }, [user, days])
 
   // Straight after a demo role switch the previous role's data is still in state for one render.
   const ready = data.dashboard && data.dashboard.role === user.role
@@ -49,7 +52,7 @@ export function HomePage() {
     <div className="space-y-6">
       <PageHeader
         title={`${greeting()}, ${user.name.split(' ')[0]}`}
-        description={ROLES[user.role]?.description}
+        description={roleDescription(user.role)}
         actions={
           <div className="flex rounded-lg border bg-card p-0.5" role="radiogroup" aria-label="Period">
             {PERIODS.map((period) => (
@@ -98,12 +101,15 @@ function RoleDashboard({ user, dashboard, overview }) {
     </Panel>
   )
   const rules = (
-    <Panel title="Credit rules" description="How prescreening went">
+    <Panel title="Policy rules" description="How prescreening went">
       <RuleOutcomes outcomes={dashboard.prescreenOutcomes} />
     </Panel>
   )
 
-  if (user.role === 'loan_officer') {
+  const may = (permission) => hasPermission(user, permission)
+
+  // Credit staff who don't follow sales: their queue first.
+  if (may('cases.work') && !may('reports.team')) {
     return (
       <>
         <QueueTiles queue={dashboard.queue} />
@@ -123,18 +129,20 @@ function RoleDashboard({ user, dashboard, overview }) {
     )
   }
 
-  if (user.role === 'dsa' || user.role === 'rm') {
+  // People who bring business in and see only their own or their team's.
+  if (may('applications.assist') && user.scope !== 'all') {
     return (
       <>
         <KpiStrip kpis={dashboard.kpis} days={dashboard.days} />
         <div className="grid gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
-          <RecentApplications rows={dashboard.recent} />
+          <RecentApplications rows={dashboard.recent} choosesLoanType={may('team.lead')} />
           <div className="space-y-6">
+            {dashboard.drafts ? <DraftsPanel drafts={dashboard.drafts} /> : null}
             {user.referralCode ? <ReferralPanel code={user.referralCode} /> : null}
             {stages}
           </div>
         </div>
-        {user.role === 'rm' ? (
+        {may('team.lead') ? (
           <div className="grid gap-6 xl:grid-cols-2">
             <Panel title="Your agents’ results">
               <Leaderboard rows={dashboard.leaderboard} />
@@ -147,13 +155,15 @@ function RoleDashboard({ user, dashboard, overview }) {
     )
   }
 
-  // Admin and sales manager: the whole book.
+  // Admin and sales manager: the whole book, plus whatever else their role covers.
   return (
     <>
+      {dashboard.queue ? <QueueTiles queue={dashboard.queue} /> : null}
       <KpiStrip kpis={dashboard.kpis} days={dashboard.days} />
       <div className="grid gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         {trend}
         <div className="space-y-6">
+          {dashboard.drafts ? <DraftsPanel drafts={dashboard.drafts} /> : null}
           {rules}
           <Panel title="Products">
             <ProductMix mix={dashboard.mix} />
@@ -162,54 +172,93 @@ function RoleDashboard({ user, dashboard, overview }) {
       </div>
       <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
         {stages}
-        <Panel title="Agents and relationship managers" description="Ranked by applications brought in">
-          <Leaderboard rows={dashboard.leaderboard} />
-        </Panel>
+        {dashboard.leaderboard ? (
+          <Panel title="Agents and relationship managers" description="Ranked by applications brought in">
+            <Leaderboard rows={dashboard.leaderboard} />
+          </Panel>
+        ) : null}
       </div>
-      {user.role === 'admin' && overview ? <AdminExtras overview={overview} lmsHealth={dashboard.lmsHealth} /> : null}
+      {may('applications.assist') ? (
+        <div className="grid gap-6 xl:grid-cols-2">
+          <RecentApplications rows={dashboard.recent} choosesLoanType={may('team.lead')} />
+          <div className="space-y-6">
+            {user.referralCode ? <ReferralPanel code={user.referralCode} /> : null}
+            {may('team.lead') && overview?.team?.length ? <TeamPanel team={overview.team} /> : null}
+          </div>
+        </div>
+      ) : null}
+      {overview?.userCounts ? <AdminExtras overview={overview} lmsHealth={dashboard.lmsHealth} /> : null}
     </>
   )
 }
 
-function RecentApplications({ rows }) {
-  const navigate = useNavigate()
-  const start = () => {
-    setAssistedFlag()
-    navigate('/apply/personal/personal-information')
-  }
+/** Unfinished applications to follow up, with a way to the pipeline's Draft column. */
+function DraftsPanel({ drafts }) {
   return (
     <Panel
-      title="Latest applications"
+      title="Drafts in progress"
+      description="Started, not yet submitted"
       action={
-        <Button size="sm" onClick={start}>
+        <Link to="/admin/pipeline" className="text-xs font-medium text-primary hover:underline">
+          Open the pipeline
+        </Link>
+      }
+    >
+      <p className="text-3xl font-semibold tabular-nums text-foreground">{drafts.count}</p>
+      <p className="text-sm text-muted-foreground">{drafts.value ? `${money(drafts.value)} asked for so far` : 'Follow them up from the Draft column.'}</p>
+    </Panel>
+  )
+}
+
+function RecentApplications({ rows, choosesLoanType }) {
+  const navigate = useNavigate()
+  const [chooseType, setChooseType] = useState(false)
+  const start = (loanType = 'personal') => {
+    setAssistedFlag()
+    navigate(applyPath(loanType, 0))
+  }
+  const begin = () => {
+    if (choosesLoanType) setChooseType(true)
+    else start()
+  }
+  return (
+    <>
+      <Panel
+        title="Latest applications"
+        action={
+          <Button size="sm" onClick={begin}>
           <FilePlus2 />
           New application
-        </Button>
-      }
-      bodyClassName="p-0"
-    >
-      {rows?.length ? (
-        <ul className="divide-y">
-          {rows.map((row) => (
-            <li key={row.id}>
-              <Link to={`/admin/applications/${row.id}`} className="flex items-center justify-between gap-3 px-5 py-3 hover:bg-muted/30">
-                <span className="min-w-0">
-                  <span className="block truncate text-sm font-medium text-foreground">{row.applicantName}</span>
-                  <span className="block text-xs text-muted-foreground">
-                    {money(row.amount)} {LOAN_TYPE_LABELS[row.loanType].toLowerCase()}, {timeAgo(row.submittedAt)}
+          </Button>
+        }
+        bodyClassName="p-0"
+      >
+        {rows?.length ? (
+          <ul className="divide-y">
+            {rows.map((row) => (
+              <li key={row.id}>
+                <Link to={`/admin/applications/${row.id}`} className="flex items-center justify-between gap-3 px-5 py-3 hover:bg-muted/30">
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-medium text-foreground">{row.applicantName}</span>
+                    <span className="block text-xs text-muted-foreground">
+                      {money(row.amount)} {LOAN_TYPE_LABELS[row.loanType].toLowerCase()}, {timeAgo(row.submittedAt)}
+                    </span>
                   </span>
-                </span>
-                <StatusBadge status={row.status} label={statusLabel(row.status)} />
-              </Link>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <EmptyState icon={FilePlus2} title="No applications yet">
-          Fill one in with a customer, or share your referral link.
-        </EmptyState>
-      )}
-    </Panel>
+                  <StatusBadge status={row.status} label={statusLabel(row.status)} />
+                </Link>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <EmptyState icon={FilePlus2} title="No applications yet">
+            Fill one in with a customer, or share your referral link.
+          </EmptyState>
+        )}
+      </Panel>
+      {choosesLoanType ? (
+        <AssistedApplicationTypeDialog open={chooseType} onOpenChange={setChooseType} onChoose={start} />
+      ) : null}
+    </>
   )
 }
 
@@ -240,11 +289,15 @@ function TeamPanel({ team }) {
 
 function AdminExtras({ overview, lmsHealth }) {
   const team = useMemo(() => {
-    const byRole = Object.fromEntries(STAFF_ROLES.map((role) => [role, { active: 0, invited: 0, disabled: 0 }]))
+    const roles = registeredRoles()
+    const byRole = Object.fromEntries(roles.map((role) => [role.key, { active: 0, invited: 0, disabled: 0 }]))
     overview.userCounts.forEach(({ role, status, count }) => {
       if (byRole[role]) byRole[role][status] = count
     })
-    const rows = STAFF_ROLES.map((role) => ({ role, ...byRole[role], total: byRole[role].active + byRole[role].invited }))
+    // Built-in roles always show; a custom role once someone holds it.
+    const rows = roles
+      .map((role) => ({ role: role.key, builtIn: role.builtIn, ...byRole[role.key], total: byRole[role.key].active + byRole[role.key].invited }))
+      .filter((row) => row.builtIn || row.total)
     return { rows, total: rows.reduce((sum, row) => sum + row.total, 0), invited: rows.reduce((sum, row) => sum + row.invited, 0) }
   }, [overview.userCounts])
   const lmsEntries = Object.entries(lmsHealth || {})
@@ -333,7 +386,7 @@ function TeamComposition({ team }) {
             <span
               key={row.role}
               className="h-full border-r-2 border-card last:border-r-0"
-              style={{ width: `${(row.total / team.total) * 100}%`, background: ROLE_TONES[row.role].bar }}
+              style={{ width: `${(row.total / team.total) * 100}%`, background: roleTone(row.role).bar }}
               title={`${roleLabel(row.role)}: ${row.total}`}
             />
           ))}
@@ -342,7 +395,7 @@ function TeamComposition({ team }) {
         {team.rows.map((row) => (
           <div key={row.role} className="flex items-center justify-between gap-3 border-b border-dashed pb-2">
             <dt className="flex items-center gap-2 text-sm text-foreground">
-              <span className={cn('size-2 rounded-full', ROLE_TONES[row.role].dot)} aria-hidden="true" />
+              <span className={cn('size-2 rounded-full', roleTone(row.role).dot)} aria-hidden="true" />
               {roleLabel(row.role)}
             </dt>
             <dd className="text-sm tabular-nums text-muted-foreground">

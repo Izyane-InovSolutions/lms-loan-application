@@ -53,6 +53,7 @@ import {
   stepIndex,
 } from '@/config/applicationSteps'
 import { WizardStep } from './apply/WizardSteps'
+import { DraftContactConsent } from '@/components/application/DraftContactConsent'
 import { CRB_ENABLED, businessInitial, personalInitial } from './apply/formDefaults'
 
 /** The device's position for the location consent, or null if it is refused or unavailable. */
@@ -142,6 +143,8 @@ function DashboardPage() {
   const [validationErrors, setValidationErrors] = useState({})
   const [submittedApplication, setSubmittedApplication] = useState(null)
   const [shareLocation, setShareLocation] = useState(false)
+  // First step, self-service only: staff may see this draft and help finish it.
+  const [contactConsent, setContactConsent] = useState(false)
   const [allowCrb, setAllowCrb] = useState(false)
   // One key per application: a retried submit files it once (see api/_handlers/applications.js).
   const submissionKeyRef = useRef(newSubmissionKey())
@@ -154,7 +157,7 @@ function DashboardPage() {
   useEffect(() => {
     if (!isAssistedFlagSet()) return
     fetchSession().then((user) => {
-      if (user && ['dsa', 'rm'].includes(user.role)) setAssistedBy(user)
+      if (user?.permissions?.includes('applications.assist')) setAssistedBy(user)
       else clearAssistedFlag()
     })
   }, [])
@@ -171,12 +174,15 @@ function DashboardPage() {
     startFresh: startFreshDraft,
     hydrateFrom: hydrateResumedDraft,
     clearDraft,
+    resumeAutosave,
     invalidateDraftToken,
     ensureDocumentsUploaded,
     flushLocalDraft,
     flushRemoteDraft,
     canSyncRemotely,
     remoteSyncError,
+    draftExists,
+    syncConflictMessage,
     documentSyncError,
     draftToken,
   } = useApplicationDraft({
@@ -190,6 +196,13 @@ function DashboardPage() {
     setPersonalData,
     setBusinessData,
     setLoanData,
+    contactConsent,
+    setContactConsent,
+    assisted: Boolean(assistedBy),
+    referralCode: assistedBy ? null : readReferral(),
+    // A staff machine keeps nothing of the customer's; the flag covers the moment
+    // before the session has confirmed the agent.
+    keepLocalCopy: !assistedBy && !isAssistedFlagSet(),
     // Agents start every customer's application afresh on their device.
     skipLocalCheck: Boolean(resumedDraft || prefilledApplication || isAssistedFlagSet()),
   })
@@ -674,6 +687,8 @@ function DashboardPage() {
     setValidationErrors({})
     setUploadStatuses({})
     setSubmitError('')
+    // A new application: autosave was paused when the last one was submitted.
+    resumeAutosave()
   }
 
   const validateCurrentStep = () => {
@@ -688,6 +703,11 @@ function DashboardPage() {
       if (!value?.toString().trim()) {
         recordError(key, message)
       }
+    }
+
+    // With an agent, the customer agrees at submit, by code; on their own, up front.
+    if (currentStep === 0 && !assistedBy && !contactConsent) {
+      recordError('contactConsent', 'Please agree that we may help you finish your application.')
     }
 
     if (selectedLoanType === 'personal') {
@@ -932,10 +952,23 @@ function DashboardPage() {
       // only exists on this device, so the applicant can retry rather than discover
       // on their phone that the application is unreachable.
       if (canSyncRemotely && !synced) return
+      // An agent goes back to their pipeline, where the draft now waits in the Draft column.
+      if (assistedBy) {
+        clearAssistedFlag()
+        navigate('/admin/pipeline')
+        return
+      }
       navigate('/')
     } finally {
       setExiting(false)
     }
+  }
+
+  // The server already holds an application for this email that this browser has no
+  // token for; only the emailed code proves it is theirs. The answers here stay saved locally.
+  const handleResumeExisting = async () => {
+    await flushLocalDraft()
+    navigate('/?resume=1')
   }
 
   const handleSubmitApplication = () => {
@@ -1075,7 +1108,11 @@ function DashboardPage() {
     setSubmitError(null)
     try {
       const token = await flushRemoteDraft()
-      if (!token) throw new Error('We couldn’t save your application to our server. Check your connection and try again.')
+      if (!token) {
+        throw new Error(
+          syncConflictMessage() || 'We couldn’t save your application to our server. Check your connection and try again.'
+        )
+      }
       await ensureDocumentsUploaded(token)
 
       const location = shareLocation ? await currentPosition() : null
@@ -1139,8 +1176,27 @@ function DashboardPage() {
               role="alert"
               className="mt-6 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm font-medium text-destructive print:hidden"
             >
-              Your progress is saved on this device, but we couldn’t sync it to your account ({remoteSyncError}) — until
-              it syncs, this application won’t be available if you resume on another device.
+              {assistedBy
+                ? `We couldn’t save this application to the server (${remoteSyncError}). Nothing is kept on this device, so keep this page open until it saves.`
+                : `Your progress is saved on this device, but we couldn’t sync it to your account (${remoteSyncError}) — until it syncs, this application won’t be available if you resume on another device.`}
+            </div>
+          ) : null}
+
+          {draftExists ? (
+            <div
+              role="alert"
+              className="mt-6 flex flex-col gap-3 rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm sm:flex-row sm:items-center sm:justify-between print:hidden"
+            >
+              <p className="font-medium text-destructive">
+                {assistedBy
+                  ? `An application is already in progress for ${applicantEmail.trim()}, so this one can’t be saved. Find it in the pipeline, or use a different email address.`
+                  : `An application is already in progress for ${applicantEmail.trim()}. To carry on with it, resume it with a code we’ll email you — or use a different email address. Until then, your answers are saved on this device only.`}
+              </p>
+              {assistedBy ? null : (
+                <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={handleResumeExisting}>
+                  Resume with a code
+                </Button>
+              )}
             </div>
           ) : null}
 
@@ -1218,6 +1274,17 @@ function DashboardPage() {
 
             <div className="grid gap-6">
               <ErrorSummary ref={errorSummaryRef} errors={validationErrors} />
+
+              {currentStep === 0 && !assistedBy ? (
+                <DraftContactConsent
+                  checked={contactConsent}
+                  onChange={(value) => {
+                    setContactConsent(value)
+                    if (value) setValidationError('contactConsent', '')
+                  }}
+                  error={validationErrors.contactConsent}
+                />
+              ) : null}
 
               <WizardStep
                 addDirector={addDirector}

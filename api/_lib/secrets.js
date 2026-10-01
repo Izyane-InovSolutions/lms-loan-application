@@ -1,4 +1,5 @@
 import crypto from 'node:crypto'
+import { isDeployed } from './runtime.js'
 
 /*
  * Encryption for credentials administrators enter in Settings (LMS password or API
@@ -9,7 +10,7 @@ import crypto from 'node:crypto'
  *                     makes stored credentials unreadable; they must then be re-entered.
  *
  * Locally, without the variable, a fixed development key is used so Settings still work.
- * On Vercel the key is required before any credential can be saved.
+ * On a deployment the key is required before any credential can be saved.
  */
 
 const PREFIX = 'enc:v1:'
@@ -18,7 +19,7 @@ const DEV_KEY = 'los-development-only-key-do-not-use-in-production'
 const keyMaterial = () => {
   const configured = (process.env.LOS_SECRETS_KEY || '').trim()
   if (configured) return configured
-  if (process.env.VERCEL) {
+  if (isDeployed()) {
     throw new Error('Set LOS_SECRETS_KEY in the environment before saving credentials in Settings.')
   }
   return DEV_KEY
@@ -47,4 +48,15 @@ export const decryptSecret = (stored) => {
   } catch {
     return null
   }
+}
+
+/**
+ * A key for HMAC seals (signature records), derived from LOS_SECRETS_KEY so it never sits
+ * in the database next to what it protects. Null on a deployment without the variable: records
+ * are then left unsealed rather than refusing to sign.
+ */
+export const sealKey = (purpose) => {
+  const configured = (process.env.LOS_SECRETS_KEY || '').trim()
+  if (!configured && isDeployed()) return null
+  return crypto.createHmac('sha256', configured || DEV_KEY).update(`los-seal:${purpose}`).digest()
 }

@@ -18,6 +18,7 @@ export default defineConfig({
       CRB_PROVIDER: 'demo',
       GEOCODER: '',
       DATABASE_URL: '',
+      REDIS_URL: '',
       KV_REST_API_URL: '',
       KV_REST_API_TOKEN: '',
       UPSTASH_REDIS_REST_URL: '',
@@ -30,7 +31,9 @@ export default defineConfig({
       GEMINI_API_KEY: '',
       MISTRAL_API_KEY: '',
     },
-    // PGlite takes a moment to boot and migrate on first use.
+    // PGlite takes a moment to boot and migrate on first use — in each file's first
+    // beforeAll, with every file booting its own at once.
     testTimeout: 30000,
+    hookTimeout: 30000,
   },
 })

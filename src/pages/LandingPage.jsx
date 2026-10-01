@@ -33,6 +33,11 @@ function LandingPage() {
     fetchReferrer(code).then(setReferrer)
   }, [searchParams])
 
+  // The link in a "finish your application" reminder (/?resume=1) opens the resume step.
+  useEffect(() => {
+    if (searchParams.get('resume') === '1') setResumeOpen(true)
+  }, [searchParams])
+
   // Every "apply" entry point asks for an email first so the draft can sync from
   // the very first field; the wizard prefills it and carries on.
   const handleApply = useCallback((type) => setPendingLoanType(type), [])
@@ -79,7 +84,7 @@ function LandingPage() {
         <div className="border-b bg-primary/5">
           <p className="container flex items-center gap-2 py-2.5 text-sm text-foreground">
             <UserCheck className="size-4 shrink-0 text-primary" aria-hidden="true" />
-            You’re applying with {referrer.firstName}, your {roleLabel(referrer.role).toLowerCase()}. Your application will be
+            You’re applying with {referrer.firstName}, your {(referrer.roleLabel || roleLabel(referrer.role)).toLowerCase()}. Your application will be
             passed to them.
           </p>
         </div>

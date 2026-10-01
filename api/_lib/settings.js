@@ -3,6 +3,8 @@ import { getDb, schema } from './db/client.js'
 import { decryptSecret, encryptSecret, isEncrypted } from './secrets.js'
 import { DEFAULT_PRICING } from '../../src/config/loanProducts.js'
 import { AI_FIELDS, AI_SECRET_FIELDS } from '../../src/config/aiProviders.js'
+import { DEFAULT_STAGES_CONFIG } from '../../src/config/stages.js'
+import { DEFAULT_BRAND_NAME } from '../../src/config/branding.js'
 
 /*
  * Admin-editable configuration. Each key has a default here, so a fresh database
@@ -13,6 +15,12 @@ import { AI_FIELDS, AI_SECRET_FIELDS } from '../../src/config/aiProviders.js'
  * to the browser; the admin sees whether one is set, not its value.
  */
 export const SETTING_DEFAULTS = {
+  /*
+   * The name and logo applicants and staff see (Settings → Branding). `logo` is the stored
+   * file ({ pathname, url, contentType, size, filename, version }), or null for the
+   * bundled one. Only the logo upload endpoint sets it (api/_handlers/branding.js).
+   */
+  branding: { name: DEFAULT_BRAND_NAME, logo: null },
   // When to hand applications to the LMS: on submit, once approved, or once the customer
   // has accepted the offer (the default when acceptance is required).
   lms: { syncOn: 'approval', sendPrescreen: false },
@@ -47,17 +55,23 @@ export const SETTING_DEFAULTS = {
   workflow: {
     // A second person must approve what an officer recommends (four-eyes).
     requireSecondApproval: true,
-    // Loan officers may give final approval up to this amount; above it, an administrator.
-    officerApprovalLimit: 100000,
     // Days an open case may sit before it is flagged as overdue in the queue.
     slaDays: 3,
+    // Note: how much each person may finally approve is now a per-user limit band on their
+    // team profile (users.approvalMin / approvalMax), not a workflow-wide setting.
   },
   offers: {
     // The customer confirms an approved offer before it is paid out or sent to the LMS.
     requireAcceptance: true,
     // An unaccepted offer lapses after this many days.
     expiryDays: 14,
+    // Accepting means signing the offer letter and agreement (drawn or typed, confirmed
+    // by an emailed code), stamped into signed copies kept with the case.
+    requireSignature: true,
   },
+  // The processing flow around the fixed backbone: renamed statuses, the checklist, and
+  // the workspace's own stages (src/config/stages.js). Empty stage lists: the flow as built.
+  stages: DEFAULT_STAGES_CONFIG,
   // Automatic decline on a failed rule. Off: rules recommend, people decide.
   prescreen: { autoDecline: false },
   products: DEFAULT_PRICING,

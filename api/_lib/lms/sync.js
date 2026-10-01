@@ -2,6 +2,7 @@ import { and, eq, inArray, lt } from 'drizzle-orm'
 import { getDb, schema } from '../db/client.js'
 import { readBlob } from '../blob.js'
 import { addEvent } from '../applications.js'
+import { systemTransition } from '../workflow.js'
 import { getSetting } from '../settings.js'
 import { getLms, LmsError } from './index.js'
 import { creditStaffIds, notifyUsers } from '../notify.js'
@@ -131,11 +132,13 @@ export const syncApplicationToLms = async (applicationId, { actor = null } = {})
   }
 }
 
-/** Queues a case for the LMS if the configured moment has come ('submit' or 'approval'). */
-export const queueLmsSyncIfDue = async (application, moment) => {
+/**
+ * Queues a case for the LMS. Called when a case enters a workflow state marked "hand to
+ * the LMS" (src/config/workflow.js) — which state that is replaces the old submit /
+ * approval setting. False when no LMS is connected.
+ */
+export const queueLmsSync = async (application) => {
   if (!(await getLms())) return false
-  const { syncOn } = await getSetting('lms')
-  if (syncOn !== moment) return false
   const db = await getDb()
   await db.update(applications).set({ lmsSyncStatus: 'pending' }).where(eq(applications.id, application.id))
   return true
@@ -182,9 +185,9 @@ export const pullDisbursements = async () => {
   for (const application of candidates) {
     const status = await lms.statusOf(application.applicantEmail, application.lmsReference, application.reference).catch(() => null)
     if (!status?.disbursed) continue
-    await db.update(applications).set({ status: 'disbursed', updatedAt: new Date(), version: application.version + 1 }).where(eq(applications.id, application.id))
-    await addEvent(db, { applicationId: application.id, actor: null, type: 'status', fromStatus: application.status, toStatus: 'disbursed', message: `Paid out, as reported by the LMS (${status.status})`, visibleToCustomer: true })
-    disbursed += 1
+    // Straight to the paid-out end, whatever steps were left: the money has gone.
+    const moved = await systemTransition(db, application, 'paid_out', { event: { type: 'status', message: `Paid out, as reported by the LMS (${status.status})`, visibleToCustomer: true } })
+    if (moved) disbursed += 1
   }
   return { checked: candidates.length, disbursed }
 }

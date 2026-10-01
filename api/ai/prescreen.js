@@ -42,7 +42,7 @@ export default async function handler(req, res) {
     return res.status(400).json({ message: 'loanType and loan are required.' })
   }
 
-  if (!(await consumeAiQuota(email))) {
+  if (!(await consumeAiQuota(email, req))) {
     return res.status(429).json({ code: 'quota_exceeded', message: 'Daily prescreen limit reached.' })
   }
 

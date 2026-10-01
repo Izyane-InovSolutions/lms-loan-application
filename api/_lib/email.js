@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer'
+import { brandName } from './branding.js'
 
 const isTrue = (value) => String(value).toLowerCase() === 'true'
 
@@ -25,6 +26,16 @@ const getTransporter = () => {
 }
 
 export const sendOtpEmail = async (email, code, { purpose = 'resume', agentName = '' } = {}) => {
+  if (purpose === 'sign') {
+    await getTransporter().sendMail({
+      from: FROM_EMAIL,
+      to: email,
+      subject: 'Your code to sign your loan offer',
+      text: `Your code to sign your loan offer and agreement is ${code}. It expires in 10 minutes. If you did not ask for it, do not share it with anyone.`,
+      html: `<p>Your code to sign your loan offer and agreement is <strong>${code}</strong>. It expires in 10 minutes.</p><p style="color:#64748b">If you did not ask for it, do not share it with anyone.</p>`,
+    })
+    return
+  }
   if (purpose === 'offer') {
     await getTransporter().sendMail({
       from: FROM_EMAIL,
@@ -36,13 +47,24 @@ export const sendOtpEmail = async (email, code, { purpose = 'resume', agentName 
     return
   }
   if (purpose === 'consent') {
-    const who = agentName ? `${agentName}, an iZyane agent,` : 'An iZyane agent'
+    const brand = await brandName()
+    const who = agentName ? `${agentName}, a ${brand} agent,` : `A ${brand} agent`
     await getTransporter().sendMail({
       from: FROM_EMAIL,
       to: email,
       subject: 'Confirm your loan application',
       text: `${who} is completing a loan application with you. If you agree to it being submitted, read this code to them: ${code}. It expires in 10 minutes. If you are not applying for a loan, do not share it.`,
       html: `<p>${escapeHtml(who)} is completing a loan application with you.</p><p>If you agree to it being submitted, read this code to them: <strong>${code}</strong>. It expires in 10 minutes.</p><p style="color:#64748b">If you are not applying for a loan, do not share this code.</p>`,
+    })
+    return
+  }
+  if (purpose === 'login') {
+    await getTransporter().sendMail({
+      from: FROM_EMAIL,
+      to: email,
+      subject: 'Your code to sign in to your applications',
+      text: `Your code to sign in to your loan applications is ${code}. It expires in 10 minutes. If you did not ask for it, do not share it with anyone.`,
+      html: `<p>Your code to sign in to your loan applications is <strong>${code}</strong>. It expires in 10 minutes.</p><p style="color:#64748b">If you did not ask for it, do not share it with anyone.</p>`,
     })
     return
   }
@@ -103,5 +125,24 @@ export const sendStaffNotificationEmail = async (email, { name, title, body, url
     subject: title,
     text: `Hello ${name},\n\n${title}${body ? `\n${body}` : ''}\n\nOpen: ${url}\n\nYou can turn these emails off from your profile in the workspace.`,
     html: `<p>Hello ${escapeHtml(name)},</p><p><strong>${escapeHtml(title)}</strong>${body ? `<br>${escapeHtml(body)}` : ''}</p><p><a href="${escapeHtml(url)}">Open in the workspace</a></p><p style="color:#64748b">You can turn these emails off from your profile in the workspace.</p>`,
+  })
+}
+
+/**
+ * A nudge to finish an unfinished application, sent by staff to someone who agreed on the
+ * first step to be contacted about it. Names no details: they resume with an emailed code.
+ */
+export const sendDraftReminderEmail = async (email, { name, product, url, staffName }) => {
+  const greeting = name ? `Hello ${name},` : 'Hello,'
+  const brand = await brandName()
+  const lead = `You started a ${product} application with ${brand} and haven’t finished it yet. Everything you entered is saved.`
+  const how = 'Open the link, choose “Resume an application”, and we’ll email you a code to pick up where you left off.'
+  const from = staffName ? `\n\n${staffName} from the ${brand} team is happy to help if you have questions.` : ''
+  await getTransporter().sendMail({
+    from: FROM_EMAIL,
+    to: email,
+    subject: 'Finish your loan application',
+    text: `${greeting}\n\n${lead}\n\n${how}\n\n${url}${from}\n\nUnfinished applications are deleted after 7 days without changes.`,
+    html: `<p>${escapeHtml(greeting)}</p><p>${escapeHtml(lead)}</p><p>${escapeHtml(how)}</p><p><a href="${escapeHtml(url)}">Finish my application</a></p>${staffName ? `<p>${escapeHtml(staffName)} from the ${escapeHtml(brand)} team is happy to help if you have questions.</p>` : ''}<p style="color:#64748b">Unfinished applications are deleted after 7 days without changes.</p>`,
   })
 }

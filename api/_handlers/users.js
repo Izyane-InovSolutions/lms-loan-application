@@ -7,13 +7,51 @@ import { recordAudit } from '../_lib/audit.js'
 import { destroyUserSessions, publicUser } from '../_lib/auth/sessions.js'
 import { newReferralCode } from '../_lib/auth/tokens.js'
 import { issuePasswordLink } from './auth.js'
-import { ROLES, STAFF_ROLES, isStaffRole } from '../../src/config/roles.js'
+import { isStaffRole } from '../../src/config/roles.js'
+import { can } from '../_lib/rbac.js'
+import { assertRoleWithin, getRole, roleHas, rolesWith } from '../_lib/roles.js'
 
 const { users } = schema
 const manager = alias(users, 'manager')
 
-// Roles whose applications are attributed to them, so they carry a referral code.
-const REFERRING_ROLES = ['dsa', 'rm']
+// Anyone whose role brings business in carries a referral code.
+const refers = (role) => roleHas(role, 'applications.assist')
+
+// Who may have a manager: people who bring business in without leading a team (DSAs, by default).
+const takesManager = async (role) => (await refers(role)) && !(await roleHas(role, 'team.lead'))
+
+/** Throws unless `role` is an existing staff role. */
+const assertStaffRole = async (role) => {
+  if (!isStaffRole(role) || !(await getRole(role))) fail(400, 'Choose a staff role.', 'invalid_input')
+}
+
+/**
+ * Throws unless `actor` may give out `role`, or manage someone holding it: it must give
+ * nothing beyond their own access. So only administrators can make or change
+ * administrators, and a delegated users.manage can't be used to climb.
+ */
+const assertMayManageRole = async (actor, role, message) => assertRoleWithin(actor, await getRole(role), message)
+
+/**
+ * The band of loan amounts a person may finally approve. A blank maximum means no upper
+ * limit. Returns only the fields the request actually sent, and checks max >= min against
+ * whatever the record already holds for the field that is not being changed.
+ */
+const parseApprovalBand = (body, current) => {
+  const toAmount = (raw, label) => {
+    if (raw === '' || raw === null || raw === undefined) return null
+    const value = Number(raw)
+    if (!Number.isInteger(value) || value < 0) fail(400, `${label} must be a whole number of 0 or more.`, 'invalid_input')
+    return value
+  }
+  const changes = {}
+  if (body.approvalMin !== undefined) changes.approvalMin = toAmount(body.approvalMin, 'The minimum approval amount') ?? 0
+  if (body.approvalMax !== undefined) changes.approvalMax = toAmount(body.approvalMax, 'The maximum approval amount')
+  const min = changes.approvalMin ?? current?.approvalMin ?? 0
+  const max = changes.approvalMax !== undefined ? changes.approvalMax : current?.approvalMax ?? null
+  if (max != null && max < min) fail(400, 'The maximum approval amount cannot be less than the minimum.', 'invalid_input')
+  return changes
+}
 
 const userColumns = {
   user: users,
@@ -23,14 +61,14 @@ const userColumns = {
 const toListItem = ({ user, managerName }) => ({ ...publicUser(user), managerName: managerName ?? null })
 
 /**
- * Which users a role may list:
- *   admin          everyone, customers included when asked for
- *   sales_manager  all staff
- *   rm             themselves and the agents assigned to them
+ * Which users someone with users.view may list:
+ *   users.manage   everyone, customers included when asked for
+ *   scope "all"    all staff
+ *   otherwise      themselves and the people who report to them
  */
 const visibilityFilter = (viewer) => {
-  if (viewer.role === 'admin') return undefined
-  if (viewer.role === 'sales_manager') return inArray(users.role, STAFF_ROLES)
+  if (can(viewer, 'users.manage')) return undefined
+  if (viewer.scope === 'all') return ne(users.role, 'customer')
   return or(eq(users.id, viewer.id), eq(users.managerId, viewer.id))
 }
 
@@ -43,7 +81,7 @@ const listUsers = async (req, res, { query }) => {
   const search = text(query.get('q'), 100)
 
   const filters = [visibilityFilter(viewer)]
-  if (role && ROLES[role]) filters.push(eq(users.role, role))
+  if (role && (role === 'customer' || (await getRole(role)))) filters.push(eq(users.role, role))
   // Customers are only listed when asked for by name; the directory is about staff.
   else filters.push(ne(users.role, 'customer'))
   if (status) filters.push(eq(users.status, status))
@@ -63,10 +101,10 @@ const listUsers = async (req, res, { query }) => {
   return { users: rows.map(toListItem) }
 }
 
-/** Throws unless `managerId` is an active relationship manager. */
+/** Throws unless `managerId` is an active team lead (a relationship manager, by default). */
 const assertManager = async (db, managerId) => {
   const [candidate] = await db.select().from(users).where(eq(users.id, managerId)).limit(1)
-  if (!candidate || candidate.role !== 'rm' || candidate.status === 'disabled') {
+  if (!candidate || candidate.status === 'disabled' || !(await roleHas(candidate.role, 'team.lead'))) {
     fail(400, 'Choose an active relationship manager.', 'invalid_manager')
   }
 }
@@ -88,11 +126,12 @@ const inviteUser = async (req) => {
   const email = parseEmail(req.body?.email)
   const role = req.body?.role
   const phone = text(req.body?.phone, 30) || null
-  const managerId = role === 'dsa' ? req.body?.managerId || null : null
 
   if (name.length < 2) fail(400, 'Enter the person’s full name.', 'invalid_input')
   if (!email) fail(400, 'Enter a valid email address.', 'invalid_input')
-  if (!isStaffRole(role)) fail(400, 'Choose a staff role.', 'invalid_input')
+  await assertStaffRole(role)
+  await assertMayManageRole(actor, role, 'You can’t invite someone to a role with more access than your own.')
+  const managerId = (await takesManager(role)) ? req.body?.managerId || null : null
   if (managerId) await assertManager(db, managerId)
 
   const [existing] = await db.select({ id: users.id, role: users.role }).from(users).where(eq(users.email, email)).limit(1)
@@ -106,6 +145,8 @@ const inviteUser = async (req) => {
     )
   }
 
+  const band = parseApprovalBand(req.body || {}, null)
+
   const [user] = await db
     .insert(users)
     .values({
@@ -115,8 +156,9 @@ const inviteUser = async (req) => {
       phone,
       managerId,
       status: 'invited',
-      referralCode: REFERRING_ROLES.includes(role) ? await uniqueReferralCode(db) : null,
+      referralCode: (await refers(role)) ? await uniqueReferralCode(db) : null,
       createdBy: actor.id,
+      ...band,
     })
     .returning()
 
@@ -143,6 +185,9 @@ const updateUser = async (req, res, { params }) => {
   const db = await getDb()
   const [target] = await db.select().from(users).where(eq(users.id, params.id)).limit(1)
   if (!target) fail(404, 'User not found.', 'not_found')
+  if (isStaffRole(target.role) && target.id !== actor.id) {
+    await assertMayManageRole(actor, target.role, 'This person’s role has more access than your own, so only an administrator can change their account.')
+  }
 
   const body = req.body || {}
   const changes = {}
@@ -160,15 +205,17 @@ const updateUser = async (req, res, { params }) => {
   }
 
   if (body.role !== undefined && body.role !== target.role) {
-    if (!isStaffRole(target.role) || !isStaffRole(body.role)) fail(400, 'Choose a staff role.', 'invalid_input')
+    if (!isStaffRole(target.role)) fail(400, 'Choose a staff role.', 'invalid_input')
+    await assertStaffRole(body.role)
     if (target.id === actor.id) fail(400, 'You can’t change your own role.', 'self_change')
+    await assertMayManageRole(actor, body.role, 'You can’t give someone a role with more access than your own.')
     changes.role = body.role
-    if (REFERRING_ROLES.includes(body.role) && !target.referralCode) changes.referralCode = await uniqueReferralCode(db)
+    if ((await refers(body.role)) && !target.referralCode) changes.referralCode = await uniqueReferralCode(db)
   }
 
   const nextRole = changes.role || target.role
   if (body.managerId !== undefined || changes.role) {
-    const managerId = nextRole === 'dsa' ? body.managerId ?? target.managerId ?? null : null
+    const managerId = (await takesManager(nextRole)) ? body.managerId ?? target.managerId ?? null : null
     if (managerId) {
       if (managerId === target.id) fail(400, 'Someone can’t be their own manager.', 'invalid_manager')
       await assertManager(db, managerId)
@@ -182,6 +229,14 @@ const updateUser = async (req, res, { params }) => {
     // Re-enabling someone who never set a password puts them back to "invited", not active.
     changes.status = body.status === 'active' && !target.passwordHash ? 'invited' : body.status
   }
+
+  const band = parseApprovalBand(body, target)
+  // Nobody but an administrator (who holds everything by design) sets the loan amounts
+  // they may approve themselves.
+  if (target.id === actor.id && actor.role !== 'admin' && Object.entries(band).some(([key, value]) => value !== (target[key] ?? (key === 'approvalMin' ? 0 : null)))) {
+    fail(400, 'You can’t change your own approval limits.', 'self_change')
+  }
+  Object.assign(changes, band)
 
   if (!Object.keys(changes).length) return { user: publicUser(target) }
 
@@ -211,6 +266,7 @@ const sendPasswordLink = async (req, res, { params }) => {
   const [user] = await db.select().from(users).where(eq(users.id, params.id)).limit(1)
   if (!user || !isStaffRole(user.role)) fail(404, 'User not found.', 'not_found')
   if (user.status === 'disabled') fail(400, 'Enable the account before sending a link.', 'disabled')
+  if (user.id !== actor.id) await assertMayManageRole(actor, user.role, 'This person’s role has more access than your own, so only an administrator can send them a link.')
 
   const purpose = user.status === 'invited' ? 'invite' : 'reset'
   const link = await issuePasswordLink(req, { user, purpose, actor })
@@ -222,17 +278,22 @@ const sendPasswordLink = async (req, res, { params }) => {
     entityId: user.id,
     detail: { emailed: link.emailed },
   })
-  return { emailed: link.emailed, purpose, inviteUrl: link.emailed ? undefined : link.url }
+  // Only an unused invite is handed back when the email fails. A reset link for an account
+  // in use would let whoever holds it take the account over and act as that person — a
+  // second approver, say — so it only ever goes to the person's own mailbox.
+  return { emailed: link.emailed, purpose, inviteUrl: link.emailed || purpose !== 'invite' ? undefined : link.url }
 }
 
-/** Active relationship managers, for the "assign to RM" picker. */
+/** Active team leads, for the "reports to" picker. */
 const listManagers = async (req) => {
   await requireUser(req, { permission: 'users.manage' })
   const db = await getDb()
+  const leadRoles = await rolesWith('team.lead')
+  if (!leadRoles.length) return { managers: [] }
   const rows = await db
-    .select({ id: users.id, name: users.name, email: users.email })
+    .select({ id: users.id, name: users.name, email: users.email, role: users.role })
     .from(users)
-    .where(and(eq(users.role, 'rm'), ne(users.status, 'disabled')))
+    .where(and(inArray(users.role, leadRoles), ne(users.status, 'disabled')))
     .orderBy(asc(users.name))
   return { managers: rows }
 }

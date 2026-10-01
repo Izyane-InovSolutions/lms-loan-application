@@ -5,20 +5,22 @@ import { ArrowLeft, Loader2, MailCheck } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Logo } from '@/components/brand/Logo'
+import { useBranding } from '@/components/brand/BrandingProvider'
 import { cn } from '@/lib/utils'
 import { ROLES, roleLabel } from '@/config/roles'
 import { api } from '../api'
 import { useAuth } from '../auth'
-import { Field, FormError, ROLE_TONES } from '../components'
+import { Field, FormError, roleTone } from '../components'
 
 /** Two-panel frame for the signed-out pages: a navy brand panel and the form. */
 function AuthFrame({ title, description, children, footer }) {
+  const { name } = useBranding()
   return (
     <div className="grid min-h-screen bg-background lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
       <aside className="relative hidden overflow-hidden bg-[hsl(205_65%_14%)] p-10 text-white lg:flex lg:flex-col lg:justify-between">
         <Link to="/" className="flex items-center gap-3 text-sm font-medium text-white/80 hover:text-white">
           <Logo size="sm" showWordmark={false} />
-          iZyane loans
+          {name}
         </Link>
         <div className="max-w-sm">
           <p className="text-3xl font-semibold leading-tight tracking-tight">
@@ -40,7 +42,7 @@ function AuthFrame({ title, description, children, footer }) {
         <div className="w-full max-w-md">
           <div className="mb-8 flex items-center gap-3 lg:hidden">
             <Logo size="sm" showWordmark={false} />
-            <span className="font-semibold">Loan workspace</span>
+            <span className="font-semibold">Loan Workspace</span>
           </div>
           <h1 className="text-2xl font-semibold tracking-tight text-foreground">{title}</h1>
           {description ? <p className="mt-2 text-sm text-muted-foreground">{description}</p> : null}
@@ -61,8 +63,9 @@ export function LoginPage() {
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [demoPending, setDemoPending] = useState(null)
-  // Set after a correct password when the account uses two-step sign-in.
-  const [challenge, setChallenge] = useState(null)
+  // Set after a correct password when the account uses two-step sign-in — or handed over
+  // by the set-password page, since a reset link alone doesn't sign such an account in.
+  const [challenge, setChallenge] = useState(location.state?.challenge || null)
   const [code, setCode] = useState('')
 
   const destination = location.state?.from || '/admin'
@@ -108,7 +111,10 @@ export function LoginPage() {
 
   if (challenge) {
     return (
-      <AuthFrame title="Enter your code" description="Open your authenticator app and enter the six-digit code for the loan workspace. Lost your phone? Enter one of your recovery codes.">
+      <AuthFrame
+        title="Enter your code"
+        description={`${location.state?.challenge ? 'Your new password is saved. ' : ''}Open your authenticator app and enter the six-digit code for the loan workspace. Lost your phone? Enter one of your recovery codes.`}
+      >
         <form onSubmit={handleCode} className="space-y-5" noValidate>
           <Field id="login-code" label="Code">
             <Input
@@ -167,7 +173,7 @@ export function LoginPage() {
                   disabled={Boolean(demoPending) || submitting}
                   className="group flex items-start gap-3 rounded-lg border bg-card p-3 text-left transition-colors hover:border-primary/40 hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
                 >
-                  <span className={cn('mt-1.5 size-2 shrink-0 rounded-full', ROLE_TONES[role].dot)} aria-hidden="true" />
+                  <span className={cn('mt-1.5 size-2 shrink-0 rounded-full', roleTone(role).dot)} aria-hidden="true" />
                   <span className="min-w-0">
                     <span className="flex items-center gap-2 text-sm font-medium text-foreground">
                       {roleLabel(role)}
@@ -304,7 +310,11 @@ export function SetPasswordPage() {
     setError('')
     setSubmitting(true)
     try {
-      await api('/auth/password/set', { method: 'POST', body: { token, password } })
+      const result = await api('/auth/password/set', { method: 'POST', body: { token, password } })
+      if (result?.twoFactorRequired) {
+        navigate('/admin/login', { replace: true, state: { challenge: result.challenge } })
+        return
+      }
       await acceptSession()
       navigate('/admin', { replace: true })
     } catch (submitError) {

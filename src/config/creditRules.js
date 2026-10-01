@@ -188,3 +188,124 @@ export const describeCondition = (entry) => {
   if (operator.noValue) return `${fact.label} ${operator.label}`
   return `${fact.label} ${operator.label} ${formatNumber(entry.value, fact.unit)}`
 }
+
+// ---------------------------------------------------------------------------
+// Policies: named groups of rules, each tied to a product. A rule belongs to one
+// policy and inherits that policy's product, so the per-rule product no longer needs
+// to be set by hand. The engine still works on a flat rule list — policies are flattened
+// into one (each rule carrying its policy's loanTypes) before evaluation, so evaluateRules
+// and the prescreen are unchanged.
+// ---------------------------------------------------------------------------
+
+export const PRODUCTS = { personal: 'Personal', business: 'Business', both: 'Both' }
+export const PRODUCT_KEYS = ['personal', 'business', 'both']
+
+export const productToLoanTypes = (product) => (product === 'both' ? ['personal', 'business'] : [product])
+
+/** The facts a policy for this product may use (a 'both' policy needs facts that apply to both). */
+export const factsForProduct = (product) => {
+  const needed = productToLoanTypes(product)
+  return Object.fromEntries(Object.entries(FACTS).filter(([, fact]) => needed.every((type) => fact.loanTypes.includes(type))))
+}
+
+const productForLoanTypes = (loanTypes = []) => {
+  const personal = loanTypes.includes('personal')
+  const business = loanTypes.includes('business')
+  if (personal && business) return 'both'
+  return business ? 'business' : 'personal'
+}
+
+// A rule as stored inside a policy: the flat rule without its own loanTypes (the policy carries the product).
+const toPolicyRule = (rule) => {
+  const copy = { ...rule }
+  delete copy.loanTypes
+  return copy
+}
+
+const POLICY_META = {
+  personal: { id: 'personal', name: 'Personal Policy' },
+  business: { id: 'business', name: 'Business Policy' },
+  both: { id: 'general', name: 'General Policy' },
+}
+
+const groupRulesIntoPolicies = (rules) => {
+  const groups = { personal: [], business: [], both: [] }
+  for (const rule of rules) groups[productForLoanTypes(rule.loanTypes)].push(toPolicyRule(rule))
+  return PRODUCT_KEYS.filter((product) => groups[product].length).map((product) => ({
+    id: POLICY_META[product].id,
+    name: POLICY_META[product].name,
+    product,
+    enabled: true,
+    rules: groups[product],
+  }))
+}
+
+/** The starting policies, built by grouping the default flat rules by product. */
+export const DEFAULT_POLICIES = groupRulesIntoPolicies(DEFAULT_RULES)
+
+/**
+ * Reads whatever a ruleset stored — the new { policies } shape, or a legacy flat rule
+ * array — as a policies list, so old published rulesets still open in the new editor.
+ */
+export const rulesToPolicies = (stored) => {
+  if (stored && !Array.isArray(stored) && Array.isArray(stored.policies)) return stored.policies
+  return groupRulesIntoPolicies(Array.isArray(stored) ? stored : [])
+}
+
+/** Policies → a flat rule list for the engine: each rule gets its policy's product and on/off. */
+export const flattenPolicies = (policies) =>
+  (policies || []).flatMap((policy) => {
+    const loanTypes = productToLoanTypes(policy.product)
+    const policyOn = policy.enabled !== false
+    return (policy.rules || []).map((rule) => ({ ...rule, loanTypes, enabled: policyOn && rule.enabled !== false }))
+  })
+
+/** Total number of rules across all policies. */
+export const countPolicyRules = (policies) => (policies || []).reduce((total, policy) => total + (policy.rules?.length || 0), 0)
+
+let policySeed = 0
+
+/** Throws a readable message for the first problem in a policies list; returns the cleaned list. */
+export const validatePolicies = (policies) => {
+  if (!Array.isArray(policies) || policies.length > 50) throw new Error('Policies must be a list of at most 50.')
+  const policyIds = new Set()
+  const names = new Set()
+  return policies.map((policy, index) => {
+    const where = `Policy ${index + 1}`
+    const name = String(policy?.name || '').trim().slice(0, 100)
+    if (!name) throw new Error(`${where}: give the policy a name.`)
+    if (names.has(name.toLowerCase())) throw new Error(`Two policies are named “${name}”. Give each a different name.`)
+    names.add(name.toLowerCase())
+    const product = PRODUCT_KEYS.includes(policy?.product) ? policy.product : 'personal'
+    let id = String(policy?.id || '').slice(0, 40) || `p${(policySeed += 1)}`
+    while (policyIds.has(id)) id = `${id}x`
+    policyIds.add(id)
+
+    const allowed = factsForProduct(product)
+    const ruleIds = new Set()
+    const rules = (Array.isArray(policy?.rules) ? policy.rules : []).map((entry, ruleIndex) => {
+      const ruleWhere = `${where}, rule ${ruleIndex + 1}`
+      const fact = allowed[entry?.fact]
+      if (!fact) throw new Error(`${ruleWhere}: choose what it checks (it must apply to ${PRODUCTS[product]}).`)
+      if (!OPERATORS[entry.operator]) throw new Error(`${ruleWhere}: choose a comparison.`)
+      if (!OUTCOMES[entry.outcome]) throw new Error(`${ruleWhere}: choose what happens when it applies.`)
+      let value = null
+      if (!OPERATORS[entry.operator].noValue) {
+        if (fact.unit === 'boolean') {
+          if (typeof entry.value !== 'boolean') throw new Error(`${ruleWhere}: choose yes or no.`)
+          value = entry.value
+        } else {
+          value = Number(entry.value)
+          if (!Number.isFinite(value)) throw new Error(`${ruleWhere}: enter a number to compare with.`)
+        }
+      }
+      const message = String(entry.message || '').trim().slice(0, 300)
+      if (!message) throw new Error(`${ruleWhere}: say what the concern is, for the officer.`)
+      let ruleId = String(entry.id || '').slice(0, 40) || `${id}r${ruleIndex + 1}`
+      while (ruleIds.has(ruleId)) ruleId = `${ruleId}x`
+      ruleIds.add(ruleId)
+      return { id: ruleId, fact: entry.fact, operator: entry.operator, value, outcome: entry.outcome, message, enabled: entry.enabled !== false }
+    })
+    return { id, name, product, enabled: policy.enabled !== false, rules }
+  })
+}

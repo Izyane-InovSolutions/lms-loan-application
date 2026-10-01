@@ -37,14 +37,14 @@ const ACTION_LABELS = {
   'application.decide': 'Made a credit decision',
   'application.note': 'Added a note',
   'application.mark_disbursed': 'Marked a loan as paid out',
-  'application.prescreen_rerun': 'Re-ran the credit rules',
+  'application.prescreen_rerun': 'Re-ran the policy rules',
   'application.visit_logged': 'Logged a field visit',
   'application.crb_checked': 'Pulled a credit report',
   'application.lms_send': 'Sent a case to the LMS',
   'application.lms_reconciled': 'Reconciled an LMS hand-off',
-  'rules.draft_saved': 'Saved a draft of the credit rules',
-  'rules.draft_discarded': 'Discarded the credit rules draft',
-  'rules.published': 'Published new credit rules',
+  'rules.draft_saved': 'Saved a draft of the policy rules',
+  'rules.draft_discarded': 'Discarded the policy rules draft',
+  'rules.published': 'Published new policy rules',
   'settings.updated': 'Changed settings',
   'application.record_acceptance': 'Recorded a customer’s acceptance',
   'application.offer_accepted': 'Customer accepted an offer',
@@ -66,14 +66,19 @@ const ACTION_LABELS = {
   'system.maintenance_run': 'Ran the daily maintenance',
   'demo.seeded': 'Added sample applications',
   'demo.cleared': 'Removed sample applications',
+  'role.created': 'Added a role',
+  'role.updated': 'Changed a role',
+  'role.reset': 'Reset a role to its defaults',
+  'role.deleted': 'Deleted a role',
 }
 
 const CATEGORIES = [
   { value: 'all', label: 'All activity' },
   { value: 'auth.', label: 'Sign-ins and passwords' },
   { value: 'user.', label: 'Team changes' },
+  { value: 'role.', label: 'Roles and permissions' },
   { value: 'application.', label: 'Applications' },
-  { value: 'rules.', label: 'Credit rules' },
+  { value: 'rules.', label: 'Policy rules' },
   { value: 'settings.', label: 'Settings' },
   { value: 'privacy.', label: 'Data requests' },
 ]
@@ -94,6 +99,7 @@ export const describeAction = (entry) => {
   if (entry.action === 'user.invited' && detail.email) return `${base}: ${detail.email} as ${roleLabel(detail.role).toLowerCase()}`
   if (entry.action.startsWith('application.') && detail.reference) return `${base}: ${detail.reference}`
   if (entry.action === 'rules.published' && detail.version) return `${base} (version ${detail.version})`
+  if (entry.action.startsWith('role.') && (detail.after?.label || detail.label)) return `${base}: ${detail.after?.label || detail.label}`
   if (entry.action === 'user.updated' && detail.after) {
     const changes = Object.keys(detail.after).map((key) => (FIELD_LABELS[key] || key).toLowerCase())
     return `${base} (${changes.join(', ')})`

@@ -1,5 +1,6 @@
 import path from 'node:path'
 import * as schema from './schema.js'
+import { isDeployed } from '../runtime.js'
 
 /*
  * One database handle per process.
@@ -8,8 +9,9 @@ import * as schema from './schema.js'
  *                      through node-postgres. Migrate it with `npm run db:migrate`.
  *   unset, locally     in-process PGlite persisted to .local-pg/, migrated on first use,
  *                      so `npm run dev` needs no database install.
- *   unset, on Vercel   an error on first use. Each invocation has its own read-only
- *                      filesystem, so a file-backed database would silently lose data —
+ *   unset, deployed    an error on first use. On Vercel each invocation has its own
+ *                      read-only filesystem, and a container's filesystem goes with the
+ *                      container, so a file-backed database would silently lose data —
  *                      the same reasoning as kv.js.
  *
  * The handle is kept on globalThis because the dev server re-imports API modules after
@@ -23,9 +25,13 @@ const LOCAL_DATA_DIR = process.env.LOS_PGLITE_DIR || path.resolve(process.cwd(),
 const createPostgres = async (connectionString) => {
   const { default: pg } = await import('pg')
   const { drizzle } = await import('drizzle-orm/node-postgres')
-  // Small pool: serverless instances are many and short-lived, and Neon's pooler (use the
-  // -pooler host in DATABASE_URL) multiplexes them onto real connections.
-  const pool = new pg.Pool({ connectionString, max: 5, idleTimeoutMillis: 10000 })
+  // Small on Vercel, whose instances are many and short-lived (a pooler such as Neon's
+  // -pooler host multiplexes them). A long-running server gets more; DB_POOL_MAX
+  // overrides either, e.g. to keep replicas × pool under Postgres's max_connections.
+  const max = Number(process.env.DB_POOL_MAX) || (process.env.VERCEL ? 5 : 10)
+  const pool = new pg.Pool({ connectionString, max, idleTimeoutMillis: 10000 })
+  // An idle connection dropped by Postgres (a restart) must not crash the process.
+  pool.on('error', (error) => console.error(`[db] idle connection: ${error.message}`))
   return drizzle(pool, { schema })
 }
 
@@ -42,11 +48,11 @@ const createLocal = async () => {
 const connect = () => {
   const url = (process.env.DATABASE_URL || '').trim()
   if (url) return createPostgres(url)
-  if (process.env.VERCEL) {
+  if (isDeployed()) {
     return Promise.reject(
       new Error(
-        'No database is configured for this deployment. Add a Postgres database (Vercel → ' +
-          'Storage → Marketplace → Neon, or your own) and set DATABASE_URL.'
+        'No database is configured for this deployment. Set DATABASE_URL to its Postgres ' +
+          'database (the postgres service in docker-compose.yml, or any other).'
       )
     )
   }

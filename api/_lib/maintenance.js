@@ -1,6 +1,9 @@
-import { list, del } from '@vercel/blob'
+import { gt } from 'drizzle-orm'
 import kv from './kv.js'
+import { blobFolderName, deleteBlobs, listBlobs } from './blob.js'
+import { getDb, schema } from './db/client.js'
 import { purgeExpiredSessions } from './auth/sessions.js'
+import { DRAFT_TTL_SECONDS, purgeExpiredDraftSummaries } from './drafts.js'
 import { pullDisbursements, releaseStaleSends, retryDueSyncs } from './lms/sync.js'
 import { expireOffers } from '../_handlers/workflow.js'
 import { applyRetention } from './retention.js'
@@ -28,6 +31,14 @@ export const runDailyMaintenance = async (origin) => {
   } catch (error) {
     sessionsPurged = false
     console.warn(`[cron] session purge skipped: ${error?.message || error}`)
+  }
+
+  // Drafts Redis has let expire leave the pipeline too.
+  let draftsExpired = null
+  try {
+    draftsExpired = await purgeExpiredDraftSummaries()
+  } catch (error) {
+    console.warn(`[cron] draft expiry skipped: ${error?.message || error}`)
   }
 
   // Offers the customer did not accept in time lapse.
@@ -64,31 +75,43 @@ export const runDailyMaintenance = async (origin) => {
     console.warn(`[cron] LMS retry skipped: ${error?.message || error}`)
   }
 
-  // Nothing to sweep when no Blob store is linked (local runs, or a deployment before
-  // the store is attached) — and `list` would throw on the missing token.
-  if (!process.env.BLOB_READ_WRITE_TOKEN) {
-    return finish({ scanned: 0, deleted: 0, sessionsPurged, lms, offersExpired, retention, overdue, skipped: 'no blob store configured' })
+  let files = null
+  try {
+    files = await sweepDraftFiles()
+  } catch (error) {
+    console.warn(`[cron] draft file sweep skipped: ${error?.message || error}`)
   }
 
-  let cursor
-  let deleted = 0
+  return finish({ scanned: files?.scanned ?? 0, deleted: files?.deleted ?? 0, sessionsPurged, draftsExpired, lms, offersExpired, retention, overdue })
+}
+
+/*
+ * Files of drafts that expired out of Redis (stored files have no TTL). Draft files live
+ * under drafts/<email>/, but with the email made path-safe ("ada+loans@…" is stored as
+ * "ada-loans@…"), so a folder name is not always its draft's key. A file is kept while a
+ * draft has that key, while an unexpired indexed draft's email maps to the folder, or
+ * while it is younger than a draft can live: any one of them is enough.
+ */
+const sweepDraftFiles = async () => {
+  const db = await getDb()
+  const indexed = await db
+    .select({ email: schema.applicationDrafts.email })
+    .from(schema.applicationDrafts)
+    .where(gt(schema.applicationDrafts.expiresAt, new Date()))
+  const liveFolders = new Set(indexed.map(({ email }) => blobFolderName(email)))
+  const oldest = Date.now() - DRAFT_TTL_SECONDS * 1000
+  const draftExists = new Map()
+
   let scanned = 0
-
-  do {
-    const page = await list({ prefix: 'drafts/', cursor, limit: 1000 })
-    cursor = page.cursor
-
-    for (const blob of page.blobs) {
-      scanned += 1
-      const email = blob.pathname.split('/')[1]
-      if (!email) continue
-      const draftExists = await kv.exists(`draft:${email}`)
-      if (!draftExists) {
-        await del(blob.url)
-        deleted += 1
-      }
-    }
-  } while (cursor)
-
-  return finish({ scanned, deleted, sessionsPurged, lms, offersExpired, retention, overdue })
+  let deleted = 0
+  for await (const file of listBlobs('drafts/')) {
+    scanned += 1
+    const folder = file.pathname.split('/')[1]
+    if (!folder || liveFolders.has(folder) || file.uploadedAt.getTime() > oldest) continue
+    if (!draftExists.has(folder)) draftExists.set(folder, Boolean(await kv.exists(`draft:${folder}`)))
+    if (draftExists.get(folder)) continue
+    await deleteBlobs([file])
+    deleted += 1
+  }
+  return { scanned, deleted }
 }

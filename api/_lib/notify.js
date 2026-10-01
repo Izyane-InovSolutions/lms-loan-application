@@ -3,10 +3,9 @@ import { getDb, schema } from './db/client.js'
 import { getSetting } from './settings.js'
 import { sendStaffNotificationEmail } from './email.js'
 import { OPEN_STATUSES } from '../../src/config/applications.js'
+import { rolesWith } from './roles.js'
 
 const { notifications, users, applications } = schema
-
-const CREDIT_ROLES = ['admin', 'loan_officer']
 
 /**
  * Notifies staff: a row for each person's bell, and an email unless staff emails are
@@ -42,13 +41,18 @@ export const notifyUsers = async (userIds, { type, title, body = null, applicati
   }
 }
 
-/** Active loan officers and admins, optionally leaving someone out (e.g. who made the recommendation). */
-export const creditStaffIds = async ({ except } = {}) => {
+/**
+ * Active staff whose role holds `permission` — by default everyone who reviews cases —
+ * optionally leaving someone out (e.g. who made the recommendation).
+ */
+export const creditStaffIds = async ({ except, permission = 'cases.work' } = {}) => {
+  const roleKeys = await rolesWith(permission)
+  if (!roleKeys.length) return []
   const db = await getDb()
   const rows = await db
     .select({ id: users.id })
     .from(users)
-    .where(and(inArray(users.role, CREDIT_ROLES), eq(users.status, 'active'), except ? ne(users.id, except) : undefined))
+    .where(and(inArray(users.role, roleKeys), eq(users.status, 'active'), except ? ne(users.id, except) : undefined))
   return rows.map((row) => row.id)
 }
 

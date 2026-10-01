@@ -18,8 +18,9 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
-import { CHANNELS, LOAN_TYPE_LABELS, statusLabel } from '@/config/applications'
-import { roleLabel } from '@/config/roles'
+import { LOAN_TYPE_LABELS, OPEN_STATUSES, WITHDRAWABLE_STATUSES, channelLabel, statusLabel } from '@/config/applications'
+import { hasPermission, roleLabel } from '@/config/roles'
+import { SignaturePad } from '@/components/application/SignaturePad'
 import { findFormMismatches } from '@/utils/documentChecks'
 import { api } from '../api'
 import { useAuth } from '../auth'
@@ -35,10 +36,15 @@ import {
   LmsPanel,
   LocationPanel,
   RulesPanel,
+  SignaturesPanel,
+  StagesPanel,
 } from './CasePanels'
 import { sectionsFor } from './fields'
 
-const CREDIT_ROLES = ['admin', 'loan_officer']
+const withinAssignmentRange = (person, amount) =>
+  Number(amount) >= (person.approvalMin ?? 0) && (person.approvalMax == null || Number(amount) <= person.approvalMax)
+// A report younger than this is reused when a case is opened, as the Django adapter did.
+const CRB_FRESH_HOURS = 24
 
 export function CasePage() {
   const { id } = useParams()
@@ -69,11 +75,23 @@ export function CasePage() {
     return () => clearTimeout(timer)
   }, [state, load])
 
-  const isCredit = CREDIT_ROLES.includes(user.role)
+  // What this person's role lets them do here (Team → Roles); the server checks each again.
+  const may = useMemo(
+    () => ({
+      work: hasPermission(user, 'cases.work'),
+      assign: hasPermission(user, 'cases.assign'),
+      recommend: hasPermission(user, 'cases.recommend'),
+      decide: hasPermission(user, 'cases.decide'),
+      disburse: hasPermission(user, 'cases.disburse'),
+      record: hasPermission(user, 'offers.record'),
+      note: hasPermission(user, 'applications.note'),
+    }),
+    [user]
+  )
   useEffect(() => {
-    if (!isCredit) return
+    if (!may.assign) return
     api('/officers').then(({ officers: list }) => setOfficers(list)).catch(() => {})
-  }, [isCredit])
+  }, [may.assign])
 
   /** Posts a workflow action against the version on screen; a stale screen is told to refresh. */
   const act = useCallback(
@@ -99,6 +117,40 @@ export function CasePage() {
     [id, notify]
   )
 
+  const [crbPull, setCrbPull] = useState({ status: 'idle' })
+  const pullCrb = useCallback(
+    async (message) => {
+      setCrbPull({ status: 'pulling' })
+      try {
+        await post('/crb', {}, message)
+        setCrbPull({ status: 'idle' })
+      } catch (error) {
+        // Another officer (or tab) is already pulling: show their report once it lands.
+        if (error.code === 'crb_in_progress') {
+          setCrbPull({ status: 'pulling' })
+          setTimeout(() => load().finally(() => setCrbPull({ status: 'idle' })), 5000)
+          return
+        }
+        setCrbPull({ status: 'error', message: error.message })
+      }
+    },
+    [post, load]
+  )
+
+  // Opening a case pulls its credit report when credit staff open it, the applicant
+  // consented, and there is no report from the last CRB_FRESH_HOURS. Each pull is a
+  // billable enquiry, so it runs once per visit and never repeats a fresh report.
+  const autoPulledFor = useRef(null)
+  useEffect(() => {
+    if (state.status !== 'ready' || !may.work || autoPulledFor.current === id) return
+    autoPulledFor.current = id
+    const consented = state.consents.some((consent) => consent.type === 'crb' && consent.granted)
+    if (!state.crbProvider || !consented) return
+    const latest = state.crbReports[0]
+    const fresh = latest && Date.now() - new Date(latest.createdAt).getTime() < CRB_FRESH_HOURS * 3600000
+    if (!fresh) pullCrb()
+  }, [state, may.work, id, pullCrb])
+
   if (state.status === 'loading') {
     return (
       <p className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -116,11 +168,12 @@ export function CasePage() {
     )
   }
 
-  const { application, documents, events, prescreen, appraisals, consents, locations, crbReports, lmsConfigured, crbProvider, offersRequireAcceptance } = state
+  const { application, documents, events, prescreen, appraisals, consents, locations, crbReports, lmsConfigured, crbProvider, offersRequireSignature, signatures, workflow } = state
+  const eligibleOfficers = officers.filter((officer) => withinAssignmentRange(officer, application.amount))
+  const canTake = withinAssignmentRange(user, application.amount)
   const lastRecommendation = appraisals.find((appraisal) => appraisal.kind === 'recommendation')
-  const recommendedByMe = lastRecommendation?.officerId === user.id
   const hasCrbConsent = consents.some((consent) => consent.type === 'crb' && consent.granted)
-  const checklistEditable = isCredit && ['submitted', 'in_review', 'info_requested'].includes(application.status)
+  const checklistEditable = may.work && (['submitted', 'in_review', 'info_requested'].includes(application.status) || workflow?.state.checks.length > 0)
 
   return (
     <div className="space-y-6">
@@ -131,6 +184,7 @@ export function CasePage() {
           <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-[1.75rem] font-semibold leading-tight tracking-tight text-foreground">{application.companyName || application.applicantName}</h1>
             <StatusBadge status={application.status} label={statusLabel(application.status)} />
+            {workflow && workflow.state.label !== statusLabel(application.status) ? <span className="text-sm font-medium text-muted-foreground">{workflow.state.label}</span> : null}
           </div>
           <p className="mt-1.5 text-sm text-muted-foreground">
             {application.reference}, {LOAN_TYPE_LABELS[application.loanType].toLowerCase()}
@@ -140,7 +194,7 @@ export function CasePage() {
             <Fact label="Asked for" value={`${money(application.amount)} over ${application.tenure} months`} />
             {application.approvedAmount ? <Fact label="Approved" value={`${money(application.approvedAmount)} over ${application.approvedTenure} months`} /> : null}
             <Fact label="Monthly instalment" value={money(application.monthlyInstalment)} />
-            <Fact label="Brought in by" value={application.sourcedByName ? `${application.sourcedByName} (${roleLabel(application.sourcedByRole).toLowerCase()})` : CHANNELS[application.channel]} />
+            <Fact label="Brought in by" value={application.sourcedByName ? `${application.sourcedByName} (${roleLabel(application.sourcedByRole).toLowerCase()})` : channelLabel(application.channel)} />
             <Fact label="Officer" value={application.assignedOfficerName || 'Unassigned'} />
             {application.status === 'approved' && application.offerExpiresAt ? (
               <Fact label="Offer" value={`Waiting for the customer, until ${dateTime(application.offerExpiresAt)}`} />
@@ -150,12 +204,14 @@ export function CasePage() {
         </div>
         <CaseActions
           application={application}
-          offersRequireAcceptance={offersRequireAcceptance}
-          isCredit={isCredit}
-          recommendedByMe={recommendedByMe}
+          workflow={workflow}
+          may={may}
+          canTake={canTake}
+          hasEligibleOfficers={eligibleOfficers.length > 0}
           onOpen={setDialog}
-          onStart={() => act('start_review', {}, 'Review started')}
+          onClaim={(action) => act('transition', { actionId: action.id }, action.label === 'Start review' ? 'Review started' : `Moved to ${action.toLabel}`)}
           onTake={() => act('assign', { officerId: user.id }, 'The case is yours')}
+          onTakeHere={() => act('take', {}, 'The case is yours at this stage')}
         />
       </header>
 
@@ -195,32 +251,49 @@ export function CasePage() {
           </nav>
           {tab === 'details' ? <Details application={application} /> : null}
           {tab === 'documents' ? (
-            <Documents application={application} documents={documents} onUpload={(form) => uploadStaffDocument(id, form, setState, notify)} />
+            <Documents application={application} documents={documents} onUpload={may.note ? (form) => uploadStaffDocument(id, form, setState, notify) : null} />
           ) : null}
-          {tab === 'timeline' ? <Timeline events={events} onNote={(message) => act('note', { message }, 'Note added')} /> : null}
+          {tab === 'timeline' ? <Timeline events={events} onNote={may.note ? (message) => act('note', { message }, 'Note added') : null} /> : null}
         </div>
 
         <aside className="space-y-4">
-          <RulesPanel prescreen={prescreen} canRerun={isCredit} onRerun={() => post('/prescreen', {}, 'Credit rules run again')} />
+          <RulesPanel prescreen={prescreen} canRerun={may.work} onRerun={() => post('/prescreen', {}, 'Policy rules run again')} />
           <AffordabilityPanel application={application} prescreen={prescreen} />
-          {isCredit ? <AiReviewPanel prescreen={prescreen} /> : null}
+          {may.work || may.decide ? <AiReviewPanel prescreen={prescreen} /> : null}
+          <StagesPanel
+            workflow={workflow}
+            application={application}
+            canReopen={may.work}
+            onComplete={(stage) => setDialog({ type: 'complete_stage', stage })}
+            onReopen={(stage) => setDialog({ type: 'reopen_stage', stage })}
+          />
           <ChecklistPanel
             application={application}
+            stages={{ checklist: workflow?.checklist }}
             editable={checklistEditable}
             onToggle={(check, done) =>
               done ? setDialog({ type: 'check', check }) : act('check', { check, done: false }, 'Check reopened').catch((error) => notify(error.message, { tone: 'error' }))
             }
           />
           <AppraisalsPanel appraisals={appraisals} />
-          <CrbPanel reports={crbReports} provider={crbProvider} hasConsent={hasCrbConsent} canRun={isCredit} onRun={() => post('/crb', {}, 'Credit report added')} />
-          <LocationPanel points={locations} facts={prescreen?.facts} onLogVisit={(position) => post('/visits', position, 'Visit logged')} />
+          <CrbPanel
+            reports={crbReports}
+            provider={crbProvider}
+            hasConsent={hasCrbConsent}
+            canRun={may.work}
+            pulling={crbPull.status === 'pulling'}
+            error={crbPull.status === 'error' ? crbPull.message : null}
+            onRun={() => pullCrb('Credit report added')}
+          />
+          <LocationPanel points={locations} facts={prescreen?.facts} onLogVisit={may.note ? (position) => post('/visits', position, 'Visit logged') : null} />
           <LmsPanel
             application={application}
             lmsConfigured={lmsConfigured}
-            canAct={isCredit}
+            canAct={may.disburse}
             onSend={() => post('/lms/send', {}, 'Sent to the LMS').catch((error) => notify(error.message, { tone: 'error' }))}
             onReconcile={() => setDialog({ type: 'reconcile' })}
           />
+          <SignaturesPanel signatures={signatures} applicationId={application.id} />
           <ConsentPanel consents={consents} />
         </aside>
       </div>
@@ -230,29 +303,34 @@ export function CasePage() {
         onClose={() => setDialog(null)}
         application={application}
         lastRecommendation={lastRecommendation}
-        officers={officers}
+        officers={eligibleOfficers}
         user={user}
         act={act}
         post={post}
+        requireSignature={offersRequireSignature}
       />
     </div>
   )
 }
 
 /** Accepting the offer in person: the customer reads back the code emailed to them. */
-function AcceptOfferDialog({ open, onOpenChange, application, user, act }) {
+function AcceptOfferDialog({ open, onOpenChange, application, user, act, requireSignature }) {
   const [code, setCode] = useState('')
   const [sent, setSent] = useState(false)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [name, setName] = useState('')
+  const [signature, setSignature] = useState(null)
 
   useEffect(() => {
     if (open) {
       setCode('')
       setSent(false)
       setError('')
+      setName(application.applicantName || '')
+      setSignature(null)
     }
-  }, [open])
+  }, [open, application.applicantName])
 
   const sendCode = async () => {
     setError('')
@@ -267,7 +345,7 @@ function AcceptOfferDialog({ open, onOpenChange, application, user, act }) {
     setBusy(true)
     setError('')
     try {
-      await act('record_acceptance', { code }, 'Offer accepted')
+      await act('record_acceptance', requireSignature ? { code, signature: { name: name.trim(), ...signature } } : { code }, requireSignature ? 'Offer signed and accepted' : 'Offer accepted')
       onOpenChange(false)
     } catch (submitError) {
       setError(submitError.message)
@@ -280,13 +358,24 @@ function AcceptOfferDialog({ open, onOpenChange, application, user, act }) {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Record the customer’s acceptance</DialogTitle>
+          <DialogTitle>{requireSignature ? 'The customer signs and accepts' : 'Record the customer’s acceptance'}</DialogTitle>
           <DialogDescription>
             {money(application.approvedAmount ?? application.amount)} over {application.approvedTenure ?? application.tenure} months, {money(application.monthlyInstalment)} a month, {money(application.totalRepayable)} in total.
-            We email the customer a code; when they read it to you, enter it here.
+            {requireSignature
+              ? ' Go through the offer letter and agreement with the customer (Documents tab). They sign below on this device, then read back the code we email them.'
+              : ' We email the customer a code; when they read it to you, enter it here.'}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4">
+          {requireSignature ? (
+            <div className="space-y-3 rounded-lg border p-3">
+              <label htmlFor="accept-signer" className="text-sm font-medium text-foreground">
+                The customer’s full name
+              </label>
+              <Input id="accept-signer" value={name} maxLength={100} onChange={(event) => setName(event.target.value)} />
+              <SignaturePad name={name} onChange={setSignature} />
+            </div>
+          ) : null}
           <Button type="button" variant="outline" size="sm" onClick={sendCode}>
             {sent ? 'Send another code' : `Email the code to ${application.applicantEmail}`}
           </Button>
@@ -304,9 +393,9 @@ function AcceptOfferDialog({ open, onOpenChange, application, user, act }) {
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" disabled={code.length < 6 || busy}>
+            <Button type="submit" disabled={code.length < 6 || busy || (requireSignature && (!signature || name.trim().length < 3))}>
               {busy ? <Loader2 className="animate-spin" /> : null}
-              Record acceptance
+              {requireSignature ? 'Sign and accept' : 'Record acceptance'}
             </Button>
           </DialogFooter>
         </form>
@@ -341,8 +430,30 @@ function Fact({ label, value }) {
   )
 }
 
-/** The actions that make sense for this case, this person and this moment. */
-function CaseActions({ application, offersRequireAcceptance, isCredit, recommendedByMe, onOpen, onStart, onTake }) {
+/**
+ * Buttons for the current state's actions (the workflow, src/config/workflow.js), grouped
+ * the way people think of them: approve, decline and send back in one state are one
+ * "Decide"; one person's decision is a "Recommend"; a stage's own step is done from the
+ * Stages panel. Actions this person can't take say why, instead of disappearing.
+ */
+export const groupActions = (actions) => {
+  const decide = actions.filter((action) => ['approve', 'reject', 'return'].includes(action.kind) && !action.singleStep)
+  const hasDecision = decide.some((action) => action.kind === 'approve')
+  const single = actions.filter((action) => action.singleStep)
+  const groups = []
+  if (single.length) groups.push({ key: 'single', type: 'recommend', label: 'Recommend', actions: single, single: true })
+  for (const action of actions) {
+    if (action.singleStep || (hasDecision && decide.includes(action))) continue
+    if (action.kind === 'recommend') groups.push({ key: action.id, type: 'recommend', label: action.label, actions: [action] })
+    else if (action.kind === 'pay_out') groups.push({ key: action.id, type: 'pay_out', label: action.label, actions: [action] })
+    else if (action.kind === 'move') groups.push({ key: action.id, type: action.claim ? 'claim' : 'move', label: action.label, actions: [action] })
+    else groups.push({ key: action.id, type: action.kind, label: action.label, actions: [action] })
+  }
+  if (hasDecision) groups.push({ key: 'decide', type: 'decide', label: 'Decide', actions: decide })
+  return groups
+}
+
+function CaseActions({ application, workflow, may, canTake, hasEligibleOfficers, onOpen, onClaim, onTake, onTakeHere }) {
   const [busy, setBusy] = useState(null)
   const notify = useToast()
   const run = (key, fn) => async () => {
@@ -357,76 +468,127 @@ function CaseActions({ application, offersRequireAcceptance, isCredit, recommend
   }
   const { status } = application
   const unassigned = !application.assignedOfficer
-  const withdrawable = ['submitted', 'in_review', 'info_requested', 'pending_approval', 'approved'].includes(status)
-  const payable = offersRequireAcceptance ? status === 'accepted' : ['approved', 'accepted'].includes(status)
+  const open = OPEN_STATUSES.includes(status)
+  const withdrawable = WITHDRAWABLE_STATUSES.includes(status)
+  const waiting = status === 'info_requested'
+  const state = workflow?.state
+  // A stage's step is marked done from the Stages panel; here it only says what's next.
+  const stepHere = state?.trackProgress
+  const groups = groupActions((workflow?.actions || []).filter((action) => !(stepHere && action.kind === 'move')))
+  const hints = []
 
-  // Agents and RMs can record a customer's acceptance or withdrawal; the rest is credit staff.
-  if (!isCredit) {
+  const buttons = groups.map((group) => {
+    const usable = group.actions.filter((action) => !action.blocked)
+    if (!usable.length) {
+      if (!waiting) hints.push(group.actions[0].blocked)
+      return null
+    }
+    const [first] = usable
+    if (group.type === 'claim') {
+      return (
+        <Button key={group.key} onClick={run(group.key, () => onClaim(first))} disabled={Boolean(busy)}>
+          {busy === group.key ? <Loader2 className="animate-spin" /> : null}
+          {group.label}
+        </Button>
+      )
+    }
+    const dialogFor = { recommend: 'recommend', decide: 'decide', pay_out: 'disbursed', move: 'move', return: 'return', reject: 'reject' }
     return (
-      <div className="flex shrink-0 flex-wrap gap-2">
-        {withdrawable ? (
-          <Button variant="ghost" onClick={() => onOpen({ type: 'withdraw' })}>
-            Withdraw
-          </Button>
-        ) : null}
-        {status === 'approved' && offersRequireAcceptance ? <Button onClick={() => onOpen({ type: 'accept' })}>Record acceptance</Button> : null}
-      </div>
+      <Button
+        key={group.key}
+        variant={group.type === 'reject' ? 'outline' : group.type === 'pay_out' || group.type === 'return' ? 'outline' : 'default'}
+        onClick={() => onOpen({ type: dialogFor[group.type], group, action: first })}
+      >
+        {group.type === 'pay_out' ? <CheckCircle2 /> : null}
+        {group.label}
+      </Button>
     )
-  }
+  })
 
   return (
     <div className="flex shrink-0 flex-wrap gap-2">
-      {withdrawable ? (
+      {may.record && withdrawable ? (
         <Button variant="ghost" onClick={() => onOpen({ type: 'withdraw' })}>
           Withdraw
         </Button>
       ) : null}
-      {['submitted', 'in_review', 'info_requested', 'pending_approval'].includes(status) && unassigned ? (
-        <Button variant="outline" onClick={run('take', onTake)} disabled={Boolean(busy)}>
-          {busy === 'take' ? <Loader2 className="animate-spin" /> : <UserPlus />}
-          Take the case
-        </Button>
+      {state?.roles?.length && open && workflow.worksHere && !application.stateAssignee ? (
+        canTake ? (
+          <Button variant="outline" onClick={run('take-state', onTakeHere)} disabled={Boolean(busy)}>
+            {busy === 'take-state' ? <Loader2 className="animate-spin" /> : <UserPlus />}
+            Take the case
+          </Button>
+        ) : (
+          <p className="self-center text-sm text-muted-foreground">This amount is outside your assignment range.</p>
+        )
       ) : null}
-      {['submitted', 'in_review', 'info_requested', 'pending_approval'].includes(status) && !unassigned ? (
-        <Button variant="ghost" onClick={() => onOpen({ type: 'assign' })}>
-          Reassign
-        </Button>
+      {!state?.roles?.length && may.work && open && unassigned ? (
+        canTake ? (
+          <Button variant="outline" onClick={run('take', onTake)} disabled={Boolean(busy)}>
+            {busy === 'take' ? <Loader2 className="animate-spin" /> : <UserPlus />}
+            Take the case
+          </Button>
+        ) : (
+          <p className="self-center text-sm text-muted-foreground">This amount is outside your assignment range.</p>
+        )
       ) : null}
-      {['submitted', 'in_review'].includes(status) ? (
+      {may.assign && open ? (
+        hasEligibleOfficers ? (
+          <Button variant="ghost" onClick={() => onOpen({ type: 'assign' })}>
+            {unassigned ? 'Assign' : 'Reassign'}
+          </Button>
+        ) : (
+          <p className="self-center text-sm text-muted-foreground">No active loan officers match this amount.</p>
+        )
+      ) : null}
+      {may.work && state?.askApplicant && !waiting ? (
         <Button variant="outline" onClick={() => onOpen({ type: 'request_info' })}>
           Ask the applicant
         </Button>
       ) : null}
-      {status === 'submitted' ? (
-        <Button onClick={run('start', onStart)} disabled={Boolean(busy)}>
-          {busy === 'start' ? <Loader2 className="animate-spin" /> : null}
-          Start review
+      {may.work && waiting ? (
+        <Button variant="outline" onClick={() => onOpen({ type: 'cancel_request' })}>
+          Cancel the request
         </Button>
       ) : null}
-      {status === 'in_review' ? <Button onClick={() => onOpen({ type: 'recommend' })}>Recommend</Button> : null}
-      {status === 'pending_approval' ? (
-        recommendedByMe ? (
-          <p className="max-w-xs self-center text-sm text-muted-foreground">You recommended this case, so a colleague makes the decision.</p>
-        ) : (
-          <Button onClick={() => onOpen({ type: 'decide' })}>Decide</Button>
-        )
-      ) : null}
-      {status === 'approved' && offersRequireAcceptance ? (
+      {stepHere && !waiting ? <p className="max-w-xs self-center text-sm text-muted-foreground">Next: {state.stepName}</p> : null}
+      {may.record && state?.type === 'offer' ? (
         <Button variant="outline" onClick={() => onOpen({ type: 'accept' })}>
           Record acceptance
         </Button>
       ) : null}
-      {payable ? (
-        <Button variant="outline" onClick={() => onOpen({ type: 'disbursed' })}>
-          <CheckCircle2 />
-          Mark as paid out
-        </Button>
-      ) : null}
+      {buttons}
+      {[...new Set(hints)].slice(0, 1).map((hint) => (
+        <p key={hint} className="max-w-xs self-center text-sm text-muted-foreground">
+          {hint}
+        </p>
+      ))}
     </div>
   )
 }
 
-function CaseDialogs({ dialog, onClose, application, lastRecommendation, officers, user, act, post }) {
+/** The recommend dialog's choices: both verdicts for a recommendation, or the decision actions a person may take. */
+const recommendVerdicts = (dialog) => {
+  if (dialog?.type !== 'recommend') return []
+  const approve = { value: 'approve', label: 'Approve', hint: 'On the terms below' }
+  const decline = { value: 'decline', label: 'Decline', hint: 'The applicant is told it was not approved' }
+  if (!dialog?.group?.single) return [approve, decline]
+  const usable = dialog.group.actions.filter((action) => !action.blocked)
+  return [...(usable.some((action) => action.kind === 'approve') ? [approve] : []), ...(usable.some((action) => action.kind === 'reject') ? [decline] : [])]
+}
+
+/** The decide dialog's choices: the approve, decline and send-back actions this person may take, labelled as the workflow names them. */
+const decideVerdicts = (dialog) =>
+  (dialog?.type === 'decide' ? dialog.group?.actions || [] : [])
+    .filter((action) => !action.blocked)
+    .map((action) => ({
+      value: { approve: 'approve', reject: 'decline', return: 'return' }[action.kind],
+      label: action.kind === 'return' ? action.label : { approve: 'Approve', reject: 'Decline' }[action.kind],
+      hint: action.kind === 'return' ? `Back to “${action.toLabel}”` : undefined,
+      actionId: action.id,
+    }))
+
+function CaseDialogs({ dialog, onClose, application, lastRecommendation, officers, user, act, post, requireSignature }) {
   const open = (type) => dialog?.type === type
   const common = (type) => ({ open: open(type), onOpenChange: (value) => !value && onClose() })
   return (
@@ -448,19 +610,32 @@ function CaseDialogs({ dialog, onClose, application, lastRecommendation, officer
         onSubmit={(values) => act('check', { check: dialog?.check, done: true, note: values.note }, 'Check recorded')}
       />
       <ActionDialog
+        {...common('complete_stage')}
+        title={`Mark “${dialog?.stage?.label || ''}” as done`}
+        description={dialog?.stage?.description || 'Recorded with your name and the time, on the case timeline.'}
+        fields={[{ name: 'note', label: 'Note (optional)', type: 'textarea', rows: 3, optional: true, hint: 'For example: committee minutes reference, who you spoke to.' }]}
+        submitLabel="Mark as done"
+        onSubmit={(values) => act('transition', { actionId: dialog?.stage?.moveActionId, note: values.note }, `${dialog?.stage?.label} done`)}
+      />
+      <ActionDialog
+        {...common('reopen_stage')}
+        title={`Reopen “${dialog?.stage?.label || ''}”?`}
+        description="It, and any later stage in the same part of the flow, will need doing again."
+        fields={[{ name: 'reason', label: 'Why?', type: 'textarea', rows: 3 }]}
+        submitLabel="Reopen"
+        onSubmit={(values) => act('reopen_stage', { stage: dialog?.stage?.id, reason: values.reason }, 'Stage reopened')}
+      />
+      <ActionDialog
         {...common('recommend')}
-        title="Recommend a decision"
-        description="A colleague reviews your recommendation and makes the final decision."
-        initial={{ verdict: 'approve', amount: application.amount, tenure: application.tenure }}
+        title={dialog?.group?.single ? 'Make the decision' : dialog?.group?.label && dialog.group.label !== 'Recommend' ? dialog.group.label : 'Recommend a decision'}
+        description={dialog?.group?.single ? 'Your decision stands, within your approval limit.' : `A colleague reviews your recommendation and makes the final decision${dialog?.action?.toLabel ? ` (${dialog.action.toLabel})` : ''}.`}
+        initial={{ verdict: recommendVerdicts(dialog)[0]?.value || 'approve', amount: application.amount, tenure: application.tenure }}
         fields={[
           {
             name: 'verdict',
-            label: 'Your recommendation',
+            label: dialog?.group?.single ? 'Decision' : 'Your recommendation',
             type: 'choice',
-            options: [
-              { value: 'approve', label: 'Approve', hint: 'On the terms below' },
-              { value: 'decline', label: 'Decline', hint: 'The applicant is told it was not approved' },
-            ],
+            options: recommendVerdicts(dialog),
           },
           { name: 'amount', label: 'Amount (K)', type: 'number', showIf: (values) => values.verdict === 'approve', hint: `Asked for ${money(application.amount)}` },
           { name: 'tenure', label: 'Tenure (months)', type: 'number', showIf: (values) => values.verdict === 'approve' },
@@ -469,7 +644,12 @@ function CaseDialogs({ dialog, onClose, application, lastRecommendation, officer
         ]}
         submitLabel={(values) => (values.verdict === 'approve' ? 'Recommend approval' : 'Recommend decline')}
         tone={(values) => (values.verdict === 'decline' ? 'destructive' : 'default')}
-        onSubmit={(values) => act('recommend', { ...values, amount: Number(values.amount), tenure: Number(values.tenure) }, 'Recommendation recorded')}
+        onSubmit={(values) => {
+          const terms = { rationale: values.rationale, conditions: values.conditions, amount: Number(values.amount), tenure: Number(values.tenure) }
+          if (!dialog?.group?.single) return act('transition', { actionId: dialog?.action?.id, verdict: values.verdict, ...terms }, 'Recommendation recorded')
+          const chosen = dialog.group.actions.find((action) => (values.verdict === 'decline' ? action.kind === 'reject' : action.kind === 'approve'))
+          return act('transition', { actionId: chosen?.id, ...terms }, values.verdict === 'decline' ? 'Declined' : 'Approved')
+        }}
       />
       <ActionDialog
         {...common('decide')}
@@ -479,17 +659,13 @@ function CaseDialogs({ dialog, onClose, application, lastRecommendation, officer
             ? `${lastRecommendation.officerName} recommended ${lastRecommendation.verdict === 'approve' ? `approving ${money(lastRecommendation.amount)} over ${lastRecommendation.tenure} months` : 'declining'}: “${lastRecommendation.rationale}”`
             : undefined
         }
-        initial={{ verdict: lastRecommendation?.verdict || 'approve', amount: lastRecommendation?.amount ?? application.amount, tenure: lastRecommendation?.tenure ?? application.tenure }}
+        initial={{ verdict: lastRecommendation && decideVerdicts(dialog).some((option) => option.value === lastRecommendation.verdict) ? lastRecommendation.verdict : decideVerdicts(dialog)[0]?.value, amount: lastRecommendation?.amount ?? application.amount, tenure: lastRecommendation?.tenure ?? application.tenure }}
         fields={[
           {
             name: 'verdict',
             label: 'Decision',
             type: 'choice',
-            options: [
-              { value: 'approve', label: 'Approve' },
-              { value: 'decline', label: 'Decline' },
-              { value: 'return', label: 'Send back', hint: 'For more work' },
-            ],
+            options: decideVerdicts(dialog),
           },
           { name: 'amount', label: 'Amount (K)', type: 'number', showIf: (values) => values.verdict === 'approve' },
           { name: 'tenure', label: 'Tenure (months)', type: 'number', showIf: (values) => values.verdict === 'approve' },
@@ -498,7 +674,11 @@ function CaseDialogs({ dialog, onClose, application, lastRecommendation, officer
         submitLabel={(values) => ({ approve: 'Approve', decline: 'Decline', return: 'Send back' })[values.verdict]}
         tone={(values) => (values.verdict === 'decline' ? 'destructive' : 'default')}
         onSubmit={(values) =>
-          act('decide', { ...values, amount: Number(values.amount), tenure: Number(values.tenure) }, { approve: 'Approved', decline: 'Declined', return: 'Sent back for more work' }[values.verdict])
+          act(
+            'transition',
+            { actionId: decideVerdicts(dialog).find((option) => option.value === values.verdict)?.actionId, rationale: values.rationale, amount: Number(values.amount), tenure: Number(values.tenure) },
+            { approve: 'Approved', decline: 'Declined', return: 'Sent back for more work' }[values.verdict]
+          )
         }
       />
       <ActionDialog
@@ -515,7 +695,40 @@ function CaseDialogs({ dialog, onClose, application, lastRecommendation, officer
         description="Record the payout when the LMS doesn’t report it back."
         fields={[{ name: 'reference', label: 'Payout or LMS reference (optional)' }]}
         submitLabel="Mark as paid out"
-        onSubmit={(values) => act('mark_disbursed', values, 'Marked as paid out')}
+        onSubmit={(values) => act('transition', { actionId: dialog?.action?.id, reference: values.reference }, 'Marked as paid out')}
+      />
+      <ActionDialog
+        {...common('move')}
+        title={dialog?.action?.label || ''}
+        description={dialog?.action ? `The case moves to “${dialog.action.toLabel}”.` : undefined}
+        fields={[{ name: 'note', label: dialog?.action?.requireNote ? 'Note' : 'Note (optional)', type: 'textarea', rows: 3, optional: !dialog?.action?.requireNote }]}
+        submitLabel={dialog?.action?.label || 'Continue'}
+        onSubmit={(values) => act('transition', { actionId: dialog?.action?.id, note: values.note }, `Moved to ${dialog?.action?.toLabel}`)}
+      />
+      <ActionDialog
+        {...common('return')}
+        title={dialog?.action?.label || 'Send back'}
+        description={dialog?.action ? `The case goes back to “${dialog.action.toLabel}”. Steps done since then need doing again.` : undefined}
+        fields={[{ name: 'rationale', label: 'Why?', type: 'textarea', rows: 3 }]}
+        submitLabel={dialog?.action?.label || 'Send back'}
+        onSubmit={(values) => act('transition', { actionId: dialog?.action?.id, rationale: values.rationale }, `Sent back to ${dialog?.action?.toLabel}`)}
+      />
+      <ActionDialog
+        {...common('reject')}
+        title={dialog?.action?.label || 'Reject'}
+        description="The applicant is told it was not approved. They never see your reason."
+        fields={[{ name: 'rationale', label: 'Why', type: 'textarea', hint: 'Staff only.' }]}
+        submitLabel={dialog?.action?.label || 'Reject'}
+        tone="destructive"
+        onSubmit={(values) => act('transition', { actionId: dialog?.action?.id, rationale: values.rationale }, 'Declined')}
+      />
+      <ActionDialog
+        {...common('cancel_request')}
+        title="Cancel the request to the applicant?"
+        description="The case carries on without their reply. They're told nothing more is needed for now."
+        fields={[{ name: 'reason', label: 'Why (optional)', type: 'textarea', rows: 2, optional: true }]}
+        submitLabel="Cancel the request"
+        onSubmit={(values) => act('cancel_request', values, 'Request withdrawn')}
       />
       <ActionDialog
         {...common('withdraw')}
@@ -526,7 +739,7 @@ function CaseDialogs({ dialog, onClose, application, lastRecommendation, officer
         tone="destructive"
         onSubmit={(values) => act('withdraw', values, 'Withdrawn')}
       />
-      <AcceptOfferDialog open={open('accept')} onOpenChange={(value) => !value && onClose()} application={application} user={user} act={act} />
+      <AcceptOfferDialog open={open('accept')} onOpenChange={(value) => !value && onClose()} application={application} user={user} act={act} requireSignature={requireSignature} />
       <ActionDialog
         {...common('reconcile')}
         title="Is it in the LMS?"
@@ -621,7 +834,7 @@ function Documents({ application, documents, onUpload }) {
                   <FileText className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-foreground">{document.label}</span>
-                    <span className="block text-xs text-muted-foreground">{document.source === 'applicant' ? 'From the application' : document.source === 'info_response' ? 'Sent after a request' : 'Added by staff'}</span>
+                    <span className="block text-xs text-muted-foreground">{document.source === 'applicant' ? 'From the application' : document.source === 'info_response' ? 'Sent after a request' : document.source === 'system' ? (document.meta?.signed ? 'Signed by the customer' : `Generated, template version ${document.meta?.templateVersion ?? '?'}`) : 'Added by staff'}</span>
                   </span>
                   {flagged ? <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" aria-label="Has findings" /> : null}
                 </button>
@@ -629,12 +842,16 @@ function Documents({ application, documents, onUpload }) {
             )
           })}
         </ul>
-        <input ref={input} type="file" accept=".pdf,image/*" className="sr-only" onChange={upload} aria-label="Add a document" />
-        <Button variant="outline" size="sm" className="w-full" onClick={() => input.current?.click()} disabled={uploading}>
-          {uploading ? <Loader2 className="animate-spin" /> : <Paperclip />}
-          Add a document
-        </Button>
-        {error ? <p className="text-xs text-destructive">{error}</p> : null}
+        {onUpload ? (
+          <>
+            <input ref={input} type="file" accept=".pdf,image/*" className="sr-only" onChange={upload} aria-label="Add a document" />
+            <Button variant="outline" size="sm" className="w-full" onClick={() => input.current?.click()} disabled={uploading}>
+              {uploading ? <Loader2 className="animate-spin" /> : <Paperclip />}
+              Add a document
+            </Button>
+            {error ? <p className="text-xs text-destructive">{error}</p> : null}
+          </>
+        ) : null}
       </div>
 
       {selected ? (
@@ -763,7 +980,7 @@ function Timeline({ events, onNote }) {
 
   return (
     <div className="space-y-5">
-      <form onSubmit={submit} className="rounded-xl border bg-card p-4">
+      {onNote ? <form onSubmit={submit} className="rounded-xl border bg-card p-4">
         <label htmlFor="case-note" className="text-sm font-medium text-foreground">
           Add an internal note
         </label>
@@ -782,7 +999,7 @@ function Timeline({ events, onNote }) {
             Add note
           </Button>
         </div>
-      </form>
+      </form> : null}
       <ol className="relative space-y-5 before:absolute before:inset-y-2 before:left-[5px] before:w-px before:bg-border">
         {events.map((event) => {
           const Icon = EVENT_ICONS[event.type]

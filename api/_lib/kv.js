@@ -1,38 +1,50 @@
 import { createClient } from '@vercel/kv'
 import { createMemoryKv } from './memoryKv.js'
+import { connectRedis } from './redisKv.js'
+import { isDeployed } from './runtime.js'
 
-// @vercel/kv is a thin wrapper over @upstash/redis, so it talks to an Upstash Redis
-// store from the Vercel Marketplace unchanged — which is what "KV" means on Vercel
-// now that the first-party KV product was retired and existing stores were moved to
-// Upstash. The Marketplace integration injects KV_REST_API_URL/KV_REST_API_TOKEN; a
-// store provisioned directly from Upstash names the same pair UPSTASH_REDIS_REST_*,
-// so accept either rather than depending on which route was taken.
+/*
+ * Where drafts, one-time codes, locks and rate limits live, in order of preference:
+ *
+ *   REDIS_URL                       any Redis server (the `redis` service in
+ *                                   docker-compose.yml): redis://:password@host:6379
+ *   KV_REST_API_URL + _TOKEN        Upstash Redis over its REST API (@vercel/kv). A store
+ *   (or UPSTASH_REDIS_REST_*)       made directly at Upstash names the pair UPSTASH_REDIS_REST_*.
+ *   LOS_LOCAL_KV_FILE, or nothing   the JSON file in memoryKv.js. One process only: a
+ *   locally                         second container or instance would not see its writes.
+ *
+ * A deployment with none of these fails loudly on first use instead of half-working: on
+ * Vercel each invocation has its own read-only filesystem, and in containers each replica
+ * has its own, so a draft written by one request would be invisible to the next and the
+ * OTP step would keep reporting "No in-progress application found for this email". A
+ * single-server deployment may still choose the file by setting LOS_LOCAL_KV_FILE.
+ */
+const redisUrl = (process.env.REDIS_URL || '').trim()
 const url = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL
 const token = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN
 
-// The file-backed stand-in in memoryKv.js is a local-dev convenience only. On Vercel
-// every invocation gets its own instance on a read-only filesystem, so a draft written
-// by one request is invisible to the next — the OTP step would keep reporting "No
-// in-progress application found for this email" with no obvious cause. Fail loudly on
-// the first store access instead of half-working.
 const createUnconfiguredKv = () =>
   new Proxy(
     {},
     {
-      get() {
+      get(target, property) {
+        // Not a promise, and not inspectable: only a real store call should throw.
+        if (property === 'then' || typeof property === 'symbol') return undefined
         throw new Error(
-          'No Redis store is configured for this deployment. Add an Upstash Redis store ' +
-            '(Vercel dashboard → Storage → Marketplace) and link it to this project so ' +
-            'KV_REST_API_URL and KV_REST_API_TOKEN are injected.'
+          'No Redis store is configured for this deployment. Set REDIS_URL (the redis service ' +
+            'in docker-compose.yml, or any Redis server), or LOS_LOCAL_KV_FILE to keep them in a ' +
+            'file on a single server.'
         )
       },
     }
   )
 
-const kv = url && token
-  ? createClient({ url, token })
-  : process.env.VERCEL
-    ? createUnconfiguredKv()
-    : createMemoryKv()
+const kv = redisUrl
+  ? connectRedis(redisUrl)
+  : url && token
+    ? createClient({ url, token })
+    : isDeployed() && !process.env.LOS_LOCAL_KV_FILE
+      ? createUnconfiguredKv()
+      : createMemoryKv()
 
 export default kv

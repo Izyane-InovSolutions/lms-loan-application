@@ -3,6 +3,9 @@
  * document slots each product asks for, and how channels are named.
  */
 
+import { roleLabel } from './roles.js'
+import { DEFAULT_CHECKLIST } from './stages.js'
+
 /**
  * `customer` is what the applicant sees — plain, and never an internal verdict. A case
  * waiting on a second approver still reads as "Being reviewed" to them.
@@ -80,7 +83,18 @@ export const APPLICATION_STATUSES = {
   },
 }
 
-export const statusLabel = (status) => APPLICATION_STATUSES[status]?.label || status
+// Staff-facing names the workspace gave its statuses (Settings → Stages), once loaded.
+let renamed = {}
+
+export const registerStatusLabels = (labels) => {
+  renamed = Object.fromEntries(Object.entries(labels || {}).filter(([, label]) => typeof label === 'string' && label.trim()))
+}
+
+/** The workspace's own name for a status, or null when it kept the default. */
+export const renamedStatus = (status) => renamed[status] || null
+
+/** A status as staff see it. Customers see APPLICATION_STATUSES[status].customer instead. */
+export const statusLabel = (status) => renamed[status] || APPLICATION_STATUSES[status]?.label || status
 export const OPEN_STATUSES = Object.keys(APPLICATION_STATUSES).filter((status) => APPLICATION_STATUSES[status].open)
 /** Approved in some form: counted as approvals in dashboards. */
 export const APPROVED_STATUSES = ['approved', 'accepted', 'disbursed']
@@ -94,6 +108,9 @@ export const CHANNELS = {
   dsa: 'Direct sales agent',
   rm: 'Relationship manager',
 }
+
+/** An application's channel is "self" or the role of whoever brought it in, custom roles included. */
+export const channelLabel = (channel) => CHANNELS[channel] || roleLabel(channel)
 
 /** Upload slots per product: key (the wizard's field), label, whether required, and the AI doc type. */
 export const DOCUMENT_SLOTS = {
@@ -154,13 +171,8 @@ export const requiredSlots = (loanType, data) => {
  * The verification checklist an officer works through. `requiredToApprove` checks must
  * be ticked (with a note saying what was seen) before recommending approval.
  */
-export const CHECKS = {
-  identity: { label: 'Identity verified', hint: 'NRC matches the applicant and the photo.', requiredToApprove: true },
-  documents: { label: 'Documents reviewed', hint: 'Every document is present, genuine and current.', requiredToApprove: true },
-  income: { label: 'Income or cash flow verified', hint: 'Payslips or bank statements support the repayment.', requiredToApprove: true },
-  crb: { label: 'Credit bureau reviewed', hint: 'No adverse listings, or they are explained.', requiredToApprove: false },
-  site_visit: { label: 'Site visit', hint: 'Business premises or residence visited.', requiredToApprove: false },
-}
+/** The default checklist, by key. The live one is configurable (Settings → Stages, stages.js). */
+export const CHECKS = Object.fromEntries(DEFAULT_CHECKLIST.map(({ key, ...check }) => [key, check]))
 
 export const LMS_SYNC_LABELS = {
   not_configured: 'No LMS connected',

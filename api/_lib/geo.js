@@ -29,7 +29,7 @@ const geocodeNominatim = async (address) => {
   url.searchParams.set('limit', '1')
   url.searchParams.set('countrycodes', 'zm')
   const response = await fetch(url, {
-    headers: { 'User-Agent': 'iZyane-LOS/1.0 (loan origination; contact via APP_URL)' },
+    headers: { 'User-Agent': 'LoanOrigination/1.0 (contact via APP_URL)' },
     signal: AbortSignal.timeout(8000),
   })
   if (!response.ok) return null

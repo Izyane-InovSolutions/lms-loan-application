@@ -4,18 +4,25 @@ import { alias } from 'drizzle-orm/pg-core'
 import kv from '../_lib/kv.js'
 import { getDb, schema } from '../_lib/db/client.js'
 import { fail, text, email as parseEmail } from '../_lib/http.js'
-import { requireUser } from '../_lib/rbac.js'
-import { getSessionUser } from '../_lib/auth/sessions.js'
+import { can, requireUser, staffWith } from '../_lib/rbac.js'
+import { activeUser, attributionFor, resolveReferral } from '../_lib/attribution.js'
+import { unindexDraft } from '../_lib/drafts.js'
+import { ensureOfferDocuments } from '../_lib/offerDocuments.js'
+import { signaturesOf } from '../_lib/signing.js'
+import { TEMPLATE_KIND_KEYS } from '../../src/config/templates.js'
 import { recordAudit } from '../_lib/audit.js'
 import { copyBlob, deleteBlobsForDraft, readBlob } from '../_lib/blob.js'
 import { afterResponse } from '../_lib/after.js'
 import { addEvent, applicantFromData, findVisibleApplication, nextReference, scopeApplications } from '../_lib/applications.js'
 import { getLms } from '../_lib/lms/index.js'
-import { queueLmsSyncIfDue, syncApplicationToLms } from '../_lib/lms/sync.js'
+import { queueLmsSync, syncApplicationToLms } from '../_lib/lms/sync.js'
+import { getPublishedWorkflow } from '../_lib/workflowVersions.js'
+import { queueCondition, workflowView } from '../_lib/workflow.js'
+import { resolveState } from '../../src/config/workflow.js'
 import { runPrescreen } from '../_lib/prescreen/run.js'
 import { priceLoan } from '../../src/config/loanProducts.js'
 import { getProductConfig, getProducts } from '../_lib/products.js'
-import { APPLICATION_STATUSES, OPEN_STATUSES, WITHDRAWABLE_STATUSES, describeSlot, requiredSlots, slotFromDraftPath } from '../../src/config/applications.js'
+import { APPLICATION_STATUSES, APPROVED_STATUSES, OPEN_STATUSES, WITHDRAWABLE_STATUSES, describeSlot, requiredSlots, slotFromDraftPath } from '../../src/config/applications.js'
 import { isStaffRole } from '../../src/config/roles.js'
 import { CONSENT_NOTICES } from '../../src/config/consent.js'
 import { checkOtp, consumeOtp } from '../_lib/otp.js'
@@ -66,33 +73,11 @@ const stripAttachments = (value) => {
   return value
 }
 
-/** The agent or RM an application is credited to, from a referral code. */
-const resolveReferral = async (db, code) => {
-  const normalized = text(code, 20).toUpperCase()
-  if (!normalized) return null
-  const [referrer] = await db
-    .select()
-    .from(users)
-    .where(and(eq(users.referralCode, normalized), inArray(users.role, ['dsa', 'rm']), eq(users.status, 'active')))
-    .limit(1)
-  return referrer || null
-}
-
-/** channel / sourcedBy / assignedRm for an application brought in by `person` (a DSA or RM), or self-service. */
-const attributionFor = (person, referralCode = null) => {
-  if (!person) return { channel: 'self', sourcedBy: null, assignedRm: null, referralCode: null }
-  return {
-    channel: person.role,
-    sourcedBy: person.id,
-    assignedRm: person.role === 'rm' ? person.id : person.managerId || null,
-    referralCode,
-  }
-}
-
 const deleteDraft = async (email, draft, token) => {
   const aliases = [...new Set([...(draft?.aliases || []), email])]
   await Promise.all(aliases.map((key) => kv.del(`draft:${key}`)))
   if (token) await kv.del(`draftToken:${token}`)
+  await unindexDraft(draft?.id)
   if (draft) await deleteBlobsForDraft(draft).catch((error) => console.warn(`[submit] draft files not removed: ${error?.message}`))
 }
 
@@ -122,9 +107,9 @@ const submitApplication = async (req) => {
   const token = bearer(req)
   const tokenEmail = await draftEmailFor(token)
   if (!tokenEmail) fail(401, 'Your session has expired. Save your application again and resubmit.', 'invalid_token')
-  const session = body.assisted ? await getSessionUser(req) : null
-  if (body.assisted && !(session && ['dsa', 'rm'].includes(session.role))) {
-    fail(403, 'Sign in as an agent or relationship manager to submit for a customer.', 'forbidden')
+  const session = body.assisted ? await staffWith(req, 'applications.assist') : null
+  if (body.assisted && !session) {
+    fail(403, 'Your role can’t submit applications for customers. Sign in as an agent or relationship manager (with two-step sign-in set up, if your role needs it).', 'forbidden')
   }
   // Only set for assisted submissions; everything else is the applicant acting for themselves.
   const staff = session
@@ -181,7 +166,7 @@ const submitApplication = async (req) => {
   if (staff) {
     const code = text(body.consentCode, 12)
     if (!code) fail(400, 'Enter the code we emailed to the customer to confirm they agree.', 'consent_code_required')
-    const otpError = await checkOtp(applicant.email, code)
+    const otpError = await checkOtp({ email: applicant.email, code, purpose: 'consent', req })
     if (otpError) fail(otpError.status, otpError.message.replace('The code entered', 'The customer’s code'), 'invalid_consent_code')
   }
   const point = wanted.location ? body.location : null
@@ -189,11 +174,14 @@ const submitApplication = async (req) => {
     point && Number.isFinite(Number(point.latitude)) && Math.abs(Number(point.latitude)) <= 90 && Number.isFinite(Number(point.longitude)) && Math.abs(Number(point.longitude)) <= 180
 
   // Attribution: staff entering it themselves, else a referral code from the link they followed.
-  let attribution = attributionFor(null)
-  if (staff && ['dsa', 'rm'].includes(staff.role)) attribution = attributionFor(staff, staff.referralCode)
+  // A draft an agent started stays theirs when the customer finishes it on their own.
+  let attribution = await attributionFor(null)
+  const draftStarter = draft?.attribution?.startedByStaff ? await activeUser(draft.attribution.sourcedBy) : null
+  if (staff) attribution = await attributionFor(staff, staff.referralCode)
+  else if (draftStarter) attribution = await attributionFor(draftStarter, draftStarter.referralCode)
   else if (body.referralCode) {
-    const referrer = await resolveReferral(db, body.referralCode)
-    if (referrer) attribution = attributionFor(referrer, referrer.referralCode)
+    const referrer = await resolveReferral(body.referralCode)
+    if (referrer) attribution = await attributionFor(referrer, referrer.referralCode)
   }
 
   const id = crypto.randomUUID()
@@ -226,6 +214,10 @@ const submitApplication = async (req) => {
     .limit(1)
 
   const lmsConfigured = Boolean(await getLms())
+  // New applications follow the published workflow, from its start (a start state for
+  // other products is passed through).
+  const flow = await getPublishedWorkflow()
+  const startState = resolveState(flow.definition, flow.definition.start, loanType)
   // The terms and privacy notice versions in force right now are what the applicant saw.
   const dataProcessingVersion = await currentConsentVersion()
   const application = await db.transaction(async (tx) => {
@@ -248,6 +240,10 @@ const submitApplication = async (req) => {
         monthlyInstalment: price.monthly,
         data,
         ...attribution,
+        status: flow.analysis.categories[startState.id],
+        state: startState.id,
+        workflowVersion: flow.version,
+        stateEnteredAt: new Date(),
         lmsSyncStatus: lmsConfigured ? 'waiting' : 'not_configured',
       })
       .returning()
@@ -255,12 +251,14 @@ const submitApplication = async (req) => {
     const method = staff ? 'customer_code' : 'applicant_checkbox'
     const consentRows = [
       { type: 'data_processing', granted: true },
+      // Agreed on the first step: staff could see the draft and contact them about it.
+      ...(draft?.contactConsent ? [{ type: 'draft_contact', granted: true }] : []),
       { type: 'location', granted: Boolean(wanted.location && pointValid) },
       ...(getCrb() ? [{ type: 'crb', granted: Boolean(wanted.crb) }] : []),
     ].map((consent) => ({
       ...consent,
       applicationId: id,
-      noticeVersion: consent.type === 'data_processing' ? dataProcessingVersion : CONSENT_NOTICES[consent.type].version,
+      noticeVersion: consent.type === 'data_processing' ? dataProcessingVersion : consent.type === 'draft_contact' ? draft.contactConsent.version : CONSENT_NOTICES[consent.type].version,
       method,
       capturedBy: staff?.id ?? null,
       ip: clientIp(req),
@@ -290,7 +288,7 @@ const submitApplication = async (req) => {
     return row
   })
 
-  if (staff) await consumeOtp(applicant.email)
+  if (staff) await consumeOtp('consent', applicant.email)
   await deleteDraft(draftEmail, draft, token)
   await recordAudit({ req, actor: staff, action: 'application.submitted', entityType: 'application', entityId: application.id, detail: { reference: application.reference, channel: attribution.channel } })
 
@@ -302,7 +300,7 @@ const submitApplication = async (req) => {
     if (application.assignedRm && application.assignedRm !== application.sourcedBy) {
       await notifyUsers([application.assignedRm], { type: 'team_application', title: `${staff?.name || 'Your agent'} brought in ${application.reference}`, body: who, applicationId: application.id }, { origin })
     }
-    if (await queueLmsSyncIfDue(application, 'submit')) await syncApplicationToLms(application.id)
+    if (startState.handToLms && (await queueLmsSync(application))) await syncApplicationToLms(application.id)
   })
 
   return { id: application.id, reference: application.reference }
@@ -320,7 +318,7 @@ const SORTS = {
   updated: desc(applications.updatedAt),
 }
 
-const listFilters = (viewer, query) => {
+const listFilters = async (viewer, query) => {
   const filters = [scopeApplications(viewer)]
   const status = query.get('status')
   if (status === 'open') filters.push(inArray(applications.status, OPEN_STATUSES))
@@ -328,10 +326,15 @@ const listFilters = (viewer, query) => {
   const loanType = query.get('loanType')
   if (loanType === 'personal' || loanType === 'business') filters.push(eq(applications.loanType, loanType))
   const channel = query.get('channel')
-  if (['self', 'dsa', 'rm'].includes(channel)) filters.push(eq(applications.channel, channel))
+  // "self", or the role of whoever brought it in.
+  if (channel && /^[a-z0-9_]{2,40}$/.test(channel)) filters.push(eq(applications.channel, channel))
   const assigned = query.get('assigned')
   if (assigned === 'me') filters.push(eq(applications.assignedOfficer, viewer.id))
   else if (assigned === 'unassigned') filters.push(isNull(applications.assignedOfficer))
+  // The viewer's role queue: open cases in the workflow states they work on (workflow.js).
+  else if (assigned === 'queue') filters.push(await queueCondition(viewer))
+  const state = query.get('state')
+  if (state && /^[a-z0-9_]{1,60}$/.test(state)) filters.push(eq(applications.state, state))
   const lms = query.get('lms')
   if (lms) filters.push(eq(applications.lmsSyncStatus, lms))
   const sourcedBy = query.get('sourcedBy')
@@ -356,13 +359,13 @@ const listApplications = async (req, res, { query }) => {
   const db = await getDb()
   const page = Math.max(1, Number(query.get('page')) || 1)
   const pageSize = Math.min(200, Math.max(1, Number(query.get('pageSize')) || PAGE_SIZE))
-  const filters = listFilters(viewer, query)
+  const filters = await listFilters(viewer, query)
   const where = filters.length ? and(...filters) : undefined
 
   // Tab counts ignore the status filter so every tab shows its own total.
   const countQuery = new URLSearchParams(query)
   countQuery.delete('status')
-  const countFilters = listFilters(viewer, countQuery)
+  const countFilters = await listFilters(viewer, countQuery)
 
   const [rows, [{ total }], statusCounts] = await Promise.all([
     db
@@ -410,8 +413,23 @@ const auditView = async (req, viewer, application) => {
 
 const publicDocument = ({ url, pathname, lmsFileUrl, ...document }) => ({ ...document, inLms: Boolean(lmsFileUrl) })
 
+/**
+ * A bureau report's accounts, addresses and profile are for credit staff. Agents and
+ * RMs following the case see the headline only. Without a viewer, the headline too.
+ * Earlier pulls keep their figures but not the full report, which can be large.
+ */
+const crbReportFor = (viewer) => (row, index) => {
+  if (can(viewer, 'cases.work')) {
+    if (index === 0 || !row.report?.reportData) return row
+    const { reportData, ...headline } = row.report
+    return { ...row, report: headline }
+  }
+  const { band, summary, sample, found, grade, testIdentity } = row.report || {}
+  return { ...row, report: { band, summary, sample, found, grade, testIdentity: testIdentity ? { nrc: testIdentity.nrc } : undefined, restricted: true } }
+}
+
 /** Everything the case page shows. Exported for the workflow handlers, which return it after each change. */
-export const loadCase = async (applicationId) => {
+export const loadCase = async (applicationId, viewer) => {
   const db = await getDb()
   const [[row], documents, events, [prescreen], appraisalRows, consentRows, points, crbRows] = await Promise.all([
     db
@@ -444,9 +462,14 @@ export const loadCase = async (applicationId) => {
     appraisals: appraisalRows,
     consents: consentRows,
     locations: points,
-    crbReports: crbRows,
+    crbReports: crbRows.map(crbReportFor(viewer)),
     lmsConfigured: Boolean(await getLms()),
     offersRequireAcceptance: (await getSetting('offers')).requireAcceptance,
+    stages: await getSetting('stages'),
+    offersRequireSignature: (await getSetting('offers')).requireSignature,
+    signatures: await signaturesOf(applicationId),
+    // Where the case is in its workflow and what this viewer can do next (workflow.js).
+    workflow: viewer ? await workflowView(viewer, row.application, { recommendation: appraisalRows.find((appraisal) => appraisal.kind === 'recommendation') || null }) : null,
     crbProvider: getCrb()?.name || null,
   }
 }
@@ -455,7 +478,9 @@ const getApplication = async (req, res, { params }) => {
   const viewer = await requireUser(req, { staff: true })
   const application = await findVisibleApplication(viewer, params.id)
   await auditView(req, viewer, application)
-  return loadCase(application.id)
+  // Approvals from before offer documents existed, or whose generation failed, get them now.
+  if (APPROVED_STATUSES.includes(application.status)) await ensureOfferDocuments(application.id)
+  return loadCase(application.id, viewer)
 }
 
 // Only these open inline; anything else downloads, so an uploaded HTML or SVG file can
@@ -485,6 +510,10 @@ const getDocument = async (req, res, { params }) => {
     .where(and(eq(applicationDocuments.id, params.documentId), eq(applicationDocuments.applicationId, application.id)))
     .limit(1)
   if (!document) fail(404, 'Document not found.', 'not_found')
+  // Customers get what their own page lists (myApplication), not every file on the case.
+  if (!isStaffRole(viewer.role) && document.source === 'system' && !(await customerOfferDocuments(application)).some((offer) => offer.id === document.id)) {
+    fail(404, 'Document not found.', 'not_found')
+  }
   const stored = await readBlob(document)
   if (!stored) fail(410, 'This file is no longer in storage.', 'gone')
   if (isStaffRole(viewer.role)) {
@@ -497,11 +526,9 @@ const getDocument = async (req, res, { params }) => {
 // LMS actions (loan officer / admin)
 // ---------------------------------------------------------------------------
 
-const LMS_ROLES = ['admin', 'loan_officer']
-
 /** Send now: from waiting (not yet due), pending, or a clear failure. */
 const sendToLms = async (req, res, { params }) => {
-  const viewer = await requireUser(req, { roles: LMS_ROLES })
+  const viewer = await requireUser(req, { permission: 'cases.disburse' })
   const application = await findVisibleApplication(viewer, params.id)
   if (!(await getLms())) fail(400, 'No LMS is connected to this workspace.', 'lms_not_configured')
   if (!['waiting', 'pending', 'failed'].includes(application.lmsSyncStatus)) {
@@ -511,7 +538,7 @@ const sendToLms = async (req, res, { params }) => {
   await db.update(applications).set({ lmsSyncStatus: 'pending' }).where(eq(applications.id, application.id))
   await recordAudit({ req, actor: viewer, action: 'application.lms_send', entityType: 'application', entityId: application.id })
   await syncApplicationToLms(application.id, { actor: viewer })
-  return loadCase(application.id)
+  return loadCase(application.id, viewer)
 }
 
 /**
@@ -520,7 +547,7 @@ const sendToLms = async (req, res, { params }) => {
  *   { found: false }             it is not — allow sending again
  */
 const reconcileLms = async (req, res, { params }) => {
-  const viewer = await requireUser(req, { roles: LMS_ROLES })
+  const viewer = await requireUser(req, { permission: 'cases.disburse' })
   const application = await findVisibleApplication(viewer, params.id)
   if (application.lmsSyncStatus !== 'uncertain') fail(409, 'Only an unconfirmed hand-off needs reconciling.', 'lms_state')
   const db = await getDb()
@@ -538,7 +565,7 @@ const reconcileLms = async (req, res, { params }) => {
     message: found ? `Confirmed in the LMS as ${reference}` : 'Confirmed not in the LMS',
   })
   await recordAudit({ req, actor: viewer, action: 'application.lms_reconciled', entityType: 'application', entityId: application.id, detail: { found, reference: reference || null } })
-  return loadCase(application.id)
+  return loadCase(application.id, viewer)
 }
 
 // ---------------------------------------------------------------------------
@@ -606,6 +633,18 @@ const myApplications = async (req) => {
   return { applications: rows.map(customerSummary), earlier: await legacyLmsApplications(viewer.email, known) }
 }
 
+/**
+ * The offer letter and agreement the customer sees: offer letter first, then the
+ * agreement, each the signed copy once there is one. Made now if the approval didn't
+ * manage to. Other system files (earlier versions) stay staff-only.
+ */
+const customerOfferDocuments = async (application) => {
+  const offerDocs = APPROVED_STATUSES.includes(application.status) ? await ensureOfferDocuments(application.id) : {}
+  return TEMPLATE_KIND_KEYS.filter((kind) => offerDocs[kind]).map((kind) => [kind, offerDocs[kind]]).flatMap(([kind, versions]) =>
+    [versions.signed, versions.unsigned].filter(Boolean).slice(0, 1).map((row) => ({ id: row.id, kind, label: row.label, signed: Boolean(row.meta.signed) }))
+  )
+}
+
 const myApplication = async (req, res, { params }) => {
   const viewer = await requireUser(req, { roles: ['customer'] })
   const application = await findVisibleApplication(viewer, params.id)
@@ -619,11 +658,12 @@ const myApplication = async (req, res, { params }) => {
       // Staff wording (e.g. a decline rationale) is replaced by its customer copy where one exists.
       .then((rows) => rows.map(({ detail, ...event }) => ({ ...event, message: detail?.customerMessage || event.message }))),
     db
-      .select({ id: applicationDocuments.id, label: applicationDocuments.label, filename: applicationDocuments.filename, createdAt: applicationDocuments.createdAt, source: applicationDocuments.source })
+      .select({ id: applicationDocuments.id, label: applicationDocuments.label, filename: applicationDocuments.filename, createdAt: applicationDocuments.createdAt, source: applicationDocuments.source, meta: applicationDocuments.meta })
       .from(applicationDocuments)
       .where(eq(applicationDocuments.applicationId, application.id))
       .orderBy(asc(applicationDocuments.createdAt)),
   ])
+  const offerDocuments = await customerOfferDocuments(application)
   // Conditions the approver attached to the offer, shown with it.
   const [decision] = await db
     .select({ conditions: appraisals.conditions })
@@ -632,8 +672,11 @@ const myApplication = async (req, res, { params }) => {
     .orderBy(desc(appraisals.createdAt))
     .limit(1)
   const summary = customerSummary(application)
-  if (summary.offer) summary.offer.conditions = decision?.conditions || null
-  return { application: summary, events, documents }
+  if (summary.offer) {
+    summary.offer.conditions = decision?.conditions || null
+    summary.offer.requireSignature = (await getSetting('offers')).requireSignature
+  }
+  return { application: summary, events, documents: documents.filter((document) => document.source !== 'system').map(({ meta, ...document }) => document), offerDocuments }
 }
 
 // ---------------------------------------------------------------------------

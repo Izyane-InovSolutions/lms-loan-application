@@ -7,11 +7,12 @@ import { requireUser } from '../_lib/rbac.js'
 import { reportError } from '../_lib/errors.js'
 import { describeLms } from '../_lib/lms/index.js'
 import { describeAi } from '../_lib/ai/index.js'
-import { getCrb } from '../_lib/crb/index.js'
+import { describeCrb } from '../_lib/crb/index.js'
 import { getSms } from '../_lib/sms.js'
 import { CRON_LAST_RUN_KEY, runDailyMaintenance } from '../_lib/maintenance.js'
 import { appOrigin } from '../_lib/http.js'
 import { recordAudit } from '../_lib/audit.js'
+import { checkBlobStore } from '../_lib/blob.js'
 
 const { errorReports } = schema
 
@@ -36,7 +37,7 @@ const clientError = async (req) => {
 
 /** Admin → System health: connections, the daily job, and grouped errors. */
 const health = async (req, res, { query }) => {
-  await requireUser(req, { roles: ['admin'] })
+  await requireUser(req, { permission: 'system.health' })
   const db = await getDb()
   const showResolved = query.get('resolved') === '1'
   const started = Date.now()
@@ -55,21 +56,25 @@ const health = async (req, res, { query }) => {
       .orderBy(desc(errorReports.lastSeenAt))
       .limit(100),
     db.select({ open: sql`count(*)::int` }).from(errorReports).where(isNull(errorReports.resolvedAt)),
-    kv.get(CRON_LAST_RUN_KEY),
+    // A store that is down shows as a failed check below, not as a broken page.
+    Promise.resolve().then(() => kv.get(CRON_LAST_RUN_KEY)).catch(() => null),
     describeLms(),
   ])
+  const redisOk = await Promise.resolve()
+    .then(() => kv.exists('los:health:probe'))
+    .then(() => true, () => false)
   return {
     checks: {
       database: { ...database, kind: process.env.DATABASE_URL ? 'postgres' : 'local' },
-      storage: { ok: Boolean(process.env.BLOB_READ_WRITE_TOKEN) || !process.env.VERCEL, kind: process.env.BLOB_READ_WRITE_TOKEN ? (process.env.BLOB_ACCESS === 'private' ? 'Vercel Blob (private)' : 'Vercel Blob (public)') : 'local folder' },
-      redis: { ok: Boolean(process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL) || !process.env.VERCEL, kind: process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL ? 'Upstash Redis' : 'local file' },
+      storage: await checkBlobStore(),
+      redis: { ok: redisOk, kind: process.env.REDIS_URL ? 'Redis' : process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL ? 'Upstash Redis' : 'local file' },
       email: { ok: Boolean(process.env.EMAIL_HOST && process.env.EMAIL_HOST_USER) },
       lms,
       ai: await describeAi().then(({ active, fallbacks }) => ({
         ok: Boolean(active),
         kind: active ? [active, ...fallbacks].map((entry) => `${entry.label} (${entry.model})`).join(', then ') : null,
       })),
-      crb: { ok: Boolean(getCrb()), kind: getCrb()?.name || null },
+      crb: describeCrb(),
       sms: { ok: Boolean(await getSms()) },
       virusScan: { ok: Boolean(process.env.CLAMAV_HOST) },
       secretsKey: { ok: Boolean(process.env.LOS_SECRETS_KEY) },
@@ -81,7 +86,7 @@ const health = async (req, res, { query }) => {
 }
 
 const resolveError = async (req, res, { params }) => {
-  const actor = await requireUser(req, { roles: ['admin'] })
+  const actor = await requireUser(req, { permission: 'system.health' })
   const id = Number(params.id)
   if (!Number.isInteger(id)) fail(404, 'Not found.', 'not_found')
   const db = await getDb()
@@ -91,7 +96,7 @@ const resolveError = async (req, res, { params }) => {
 
 /** Runs the daily maintenance now (it otherwise runs on Vercel's cron). */
 const runMaintenance = async (req) => {
-  const actor = await requireUser(req, { roles: ['admin'] })
+  const actor = await requireUser(req, { permission: 'system.health' })
   const summary = await runDailyMaintenance(appOrigin(req))
   await recordAudit({ req, actor, action: 'system.maintenance_run', detail: summary })
   return summary

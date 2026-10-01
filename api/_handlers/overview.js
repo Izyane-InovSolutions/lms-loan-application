@@ -1,6 +1,6 @@
-import { and, desc, eq, gte, sql } from 'drizzle-orm'
+import { desc, eq, gte, sql } from 'drizzle-orm'
 import { getDb, schema } from '../_lib/db/client.js'
-import { requireUser } from '../_lib/rbac.js'
+import { can, requireUser } from '../_lib/rbac.js'
 import { userCounts } from './users.js'
 import { demoEnabled } from './auth.js'
 
@@ -15,9 +15,9 @@ const DAY_MS = 24 * 60 * 60 * 1000
 const overview = async (req) => {
   const viewer = await requireUser(req, { staff: true })
   const db = await getDb()
-  const result = { role: viewer.role }
+  const result = { role: viewer.role, permissions: viewer.permissions }
 
-  if (viewer.role === 'admin') {
+  if (can(viewer, 'audit.view')) {
     const since = new Date(Date.now() - 14 * DAY_MS)
     const [counts, recent, activity] = await Promise.all([
       // Where demo access is on, the sample staff count, so the walkthrough has a team.
@@ -37,11 +37,11 @@ const overview = async (req) => {
     })
   }
 
-  if (viewer.role === 'rm') {
+  if (can(viewer, 'team.lead')) {
     const team = await db
-      .select({ id: users.id, name: users.name, email: users.email, status: users.status, referralCode: users.referralCode })
+      .select({ id: users.id, name: users.name, email: users.email, role: users.role, status: users.status, referralCode: users.referralCode })
       .from(users)
-      .where(and(eq(users.managerId, viewer.id), eq(users.role, 'dsa')))
+      .where(eq(users.managerId, viewer.id))
       .orderBy(users.name)
     result.team = team
   }
