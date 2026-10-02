@@ -7,7 +7,7 @@ import { addEvent } from './applications.js'
 import { getSetting } from './settings.js'
 import { getPublishedWorkflow, getWorkflowVersion } from './workflowVersions.js'
 import { OPEN_STATUSES, WITHDRAWABLE_STATUSES } from '../../src/config/applications.js'
-import { ACTION_KINDS, PHASES, SYSTEM_FINAL_IDS, actionTarget, appliesTo, forwardEdges, resolveState, stateById } from '../../src/config/workflow.js'
+import { ACTION_KINDS, PHASES, actionPermission, SYSTEM_FINAL_IDS, actionTarget, appliesTo, forwardEdges, resolveState, stateById } from '../../src/config/workflow.js'
 import { checkOtp } from './otp.js'
 import { signatureFor } from './signing.js'
 import { priceLoan } from '../../src/config/loanProducts.js'
@@ -32,8 +32,9 @@ const { applications, appraisals, users } = schema
  * cancel_request (where the state allows asking the applicant), withdraw, and
  * record_acceptance on the offer state.
  *
- * Who may act: a state that names roles is theirs (and admins'); otherwise the action's
- * permission decides (src/config/roles.js). An approval always stays within the
+ * Who may act: whoever holds the action's permission (src/config/roles.js); a state that
+ * names roles narrows that to those roles (admins always). Naming a role never grants a
+ * permission it lacks. An approval always stays within the
  * approver's own band, and an action marked four-eyes can't be taken by whoever
  * recommended the case or brought it in.
  */
@@ -172,15 +173,16 @@ const progressWithout = (flow, application, fromId) => {
 // ---------------------------------------------------------------------------
 
 /**
- * Whether `viewer` works on cases in `state`: one of its roles, or — for a state that
- * names none — someone who may take one of its actions. Admins work everywhere.
+ * Whether `viewer` works on cases in `state`: someone who may take one of its actions (on
+ * the offer, record the acceptance) and, where the state names roles, holds one of them.
+ * Admins work everywhere.
  */
 export const worksOn = (viewer, state) => {
   if (!state || state.type === 'final') return false
   if (viewer.role === 'admin') return true
-  if (state.roles?.length) return state.roles.includes(viewer.role)
+  if (state.roles?.length && !state.roles.includes(viewer.role)) return false
   if (state.type === 'offer') return Boolean(viewer.permissions?.includes('offers.record'))
-  return (state.actions || []).some((action) => viewer.permissions?.includes(action.permission || ACTION_KINDS[action.kind]?.permission))
+  return (state.actions || []).some((action) => viewer.permissions?.includes(actionPermission(action)))
 }
 
 /**
@@ -207,15 +209,12 @@ export const queueCondition = async (viewer) => {
   return and(or(...parts), ne(applications.status, 'info_requested'))
 }
 
-/** A state that names roles is theirs (and admins'); otherwise the action's permission decides. */
+/** The action's permission, and one of the state's roles where it names any. Admins always. */
 const authorize = (viewer, state, action) => {
   if (viewer.role === 'admin') return
   const roles = state.roles || []
-  if (roles.length) {
-    if (!roles.includes(viewer.role)) fail(403, `Your role can’t complete “${stepName(state)}”.`, 'forbidden')
-    return
-  }
-  requireCase(viewer, action.permission || ACTION_KINDS[action.kind].permission)
+  if (roles.length && !roles.includes(viewer.role)) fail(403, `Your role can’t complete “${stepName(state)}”.`, 'forbidden')
+  requireCase(viewer, actionPermission(action))
 }
 
 const assertFourEyes = async (tx, viewer, application) => {
@@ -652,7 +651,7 @@ const blockedReason = (viewer, application, state, action, recommendation, roleN
   if (viewer.role !== 'admin') {
     const roles = state.roles || []
     if (roles.length && !roles.includes(viewer.role)) return `Waiting for ${roles.map((role) => roleName(role).toLowerCase()).join(' or ')}.`
-    if (!roles.length && !viewer.permissions?.includes(action.permission || ACTION_KINDS[action.kind].permission)) return 'Your role can’t do this.'
+    if (!viewer.permissions?.includes(actionPermission(action))) return 'Your role can’t do this.'
   }
   if (action.options?.fourEyes && (recommendation?.officerId === viewer.id || application.sourcedBy === viewer.id)) {
     return recommendation?.officerId === viewer.id ? 'You recommended this case, so a colleague makes the decision.' : 'You brought this case in, so a colleague makes the decision.'

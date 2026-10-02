@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { registeredRoles } from '@/config/roles'
-import { ACTION_KINDS, STATE_TYPES, SYSTEM_FINALS, stateById } from '@/config/workflow'
+import { ACTION_KINDS, STATE_TYPES, SYSTEM_FINALS, missingForState, stateById } from '@/config/workflow'
 import { addAction, changeAction, changeState, removeAction, removeState, setStateEnabled } from './editing'
 
 /*
@@ -174,16 +174,36 @@ export function StateDrawer({ definition, stateId, focusActionId, errors, onChan
               <>
                 <Section title="Who works on it">
                   <div className="grid gap-1.5 sm:grid-cols-2">
-                    {roles.map((role) => (
-                      <label key={role.key} className="flex items-center gap-2 text-sm">
-                        <input type="checkbox" className="size-4 accent-[hsl(var(--primary))]" checked={(state.roles || []).includes(role.key)} onChange={() => update({ roles: toggleIn(state.roles || [], role.key) })} />
-                        {role.label}
-                      </label>
-                    ))}
+                    {roles.map((role) => {
+                      const ticked = (state.roles || []).includes(role.key)
+                      // A role that can't take this state's actions can't work on it. One
+                      // already ticked stays clickable, so it can be unticked.
+                      const gaps = missingForState(role, state)
+                      const unable = gaps.length > 0
+                      return (
+                        <label key={role.key} className={`flex items-start gap-2 text-sm ${unable && !ticked ? 'text-muted-foreground' : ''}`}>
+                          <input
+                            type="checkbox"
+                            className="mt-0.5 size-4 accent-[hsl(var(--primary))]"
+                            checked={ticked}
+                            disabled={unable && !ticked}
+                            onChange={() => update({ roles: toggleIn(state.roles || [], role.key) })}
+                          />
+                          <span>
+                            {role.label}
+                            {unable ? (
+                              <span className={`block text-xs ${ticked ? 'text-destructive' : ''}`}>
+                                Can’t {gaps.flatMap((gap) => gap.actions).join(' or ').toLowerCase()} (lacks {gaps.map((gap) => gap.label.toLowerCase()).join(', ')})
+                              </span>
+                            ) : null}
+                          </span>
+                        </label>
+                      )
+                    })}
                   </div>
                   <p className="text-xs text-muted-foreground">
                     {(state.roles || []).length
-                      ? 'Cases here wait in these roles’ queue. Administrators can always act.'
+                      ? 'Cases here wait in these roles’ queue, for people whose role also allows the action. Administrators can always act.'
                       : 'None ticked: anyone whose role allows the action can take it.'}
                   </p>
                 </Section>

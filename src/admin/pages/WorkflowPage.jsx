@@ -156,7 +156,7 @@ export function WorkflowPage() {
     load()
   }, [load])
 
-  const roles = useMemo(() => registeredRoles().map((role) => role.key), [])
+  const roles = useMemo(() => registeredRoles(), [])
   const validation = useMemo(() => (definition ? validateWorkflow(definition, { roles }) : { errors: [], warnings: [] }), [definition, roles])
   const errorsByState = useMemo(() => {
     const counts = {}

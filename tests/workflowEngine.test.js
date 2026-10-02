@@ -261,3 +261,65 @@ describe('a state turned off', () => {
     expect(await consistent(id)).toMatchObject({ state: 'field_check', status: 'in_review' })
   })
 })
+
+describe('a role named on a state never grants a permission it lacks', () => {
+  const clerk = client(handler)
+  let clerkRole
+  // CUSTOM with underwriting given to a role that may work cases but not decide them.
+  const withClerk = () => ({
+    ...CUSTOM,
+    states: CUSTOM.states.map((state) => (state.id === 'underwriting' ? { ...state, roles: [clerkRole] } : state)),
+  })
+
+  beforeAll(async () => {
+    const created = await admin.post('/roles', { label: 'Credit clerk', scope: 'all', permissions: ['cases.work', 'applications.note'] })
+    expect(created.status, JSON.stringify(created.body)).toBe(200)
+    clerkRole = created.body.role.key
+    const invite = await admin.post('/users', { name: 'Chanda Clerk', email: 'clerk@example.com', role: clerkRole })
+    await clerk.post('/auth/password/set', { token: decodeURIComponent(invite.body.inviteUrl.split('token=')[1]), password: 'chanda-strong-pass' })
+  })
+
+  it('is refused by the editor when it can’t take the state’s actions', async () => {
+    const saved = await admin.put('/admin/workflow/draft', { definition: withClerk(), note: 'Clerk decides' })
+    expect(saved.status).toBe(200)
+    const problem = saved.body.validation.errors.find((error) => error.stateId === 'underwriting')
+    expect(problem.message).toMatch(/Credit clerk.*“Approve” or “Reject”.*Approve or decline/)
+    const published = await admin.post('/admin/workflow/publish', {})
+    expect(published.status).toBe(400)
+    expect(published.body.code).toBe('invalid_workflow')
+    await admin.del('/admin/workflow/draft')
+  })
+
+  it('can’t approve even on a workflow saved before that check', async () => {
+    await saveDraftWorkflow(withClerk(), 'Saved before the check', { id: null })
+    await publishDraftWorkflow({ id: null }, 'Saved before the check')
+    const id = await submit('clerk-case@example.com')
+    await move(officer, id, 'prescreen')
+    await act(officer, id, 'check', { check: 'identity', done: true, note: 'NRC seen' })
+    expect((await move(officer, id, 'underwrite', { verdict: 'approve', rationale: 'Affordable' })).status).toBe(200)
+    expect(await consistent(id)).toMatchObject({ state: 'underwriting' })
+
+    // The case page says so, and the server refuses.
+    const actions = (await clerk.get(`/applications/${id}`)).body.workflow.actions
+    expect(actions.find((action) => action.id === 'approve').blocked).toBe('Your role can’t do this.')
+    expect(actions.find((action) => action.id === 'back').blocked).toBeNull()
+    const attempt = await move(clerk, id, 'approve', { rationale: 'Clerk approves' })
+    expect(attempt.status).toBe(403)
+    expect(await consistent(id)).toMatchObject({ state: 'underwriting', status: 'pending_approval' })
+    // What the role does allow, it can still do there.
+    expect((await move(clerk, id, 'back', { rationale: 'Check the employer' })).status).toBe(200)
+  })
+
+  it('keeps roles from losing a permission the published workflow relies on', async () => {
+    // Prescreening is the loan officers', and its Reject needs "Approve or decline".
+    const officers = (await admin.get('/roles')).body.roles.find((role) => role.key === 'loan_officer')
+    const refused = await admin.patch('/roles/loan_officer', { permissions: officers.permissions.filter((permission) => permission !== 'cases.decide') })
+    expect(refused.status).toBe(409)
+    expect(refused.body.code).toBe('role_in_workflow')
+    expect(refused.body.message).toMatch(/Prescreening/)
+    expect((await admin.get('/roles')).body.roles.find((role) => role.key === 'loan_officer').permissions).toContain('cases.decide')
+    // A permission no state relies on can still go.
+    expect((await admin.patch('/roles/loan_officer', { permissions: officers.permissions.filter((permission) => permission !== 'rules.view') })).status).toBe(200)
+    await admin.post('/roles/loan_officer/reset', {})
+  })
+})

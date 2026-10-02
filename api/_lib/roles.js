@@ -149,8 +149,8 @@ export const createRole = async (input, actor) => {
   return getRole(key)
 }
 
-/** Changes a role. The administrator role is fixed. */
-export const updateRole = async (key, input, actor) => {
+/** Changes a role. The administrator role is fixed. `check(next)` may refuse the result before it is saved. */
+export const updateRole = async (key, input, actor, { check } = {}) => {
   const current = await getRole(key)
   if (!current) fail(404, 'Role not found.', 'not_found')
   if (current.locked) fail(403, 'The administrator role always has every permission.', 'locked_role')
@@ -158,6 +158,7 @@ export const updateRole = async (key, input, actor) => {
   const changes = parseRoleInput(input, { partial: true })
   const next = { label: current.label, description: current.description || null, scope: current.scope, permissions: current.permissions, ...changes }
   assertRoleWithin(actor, next, 'A role can’t be given more access than your own.')
+  if (check) await check({ key, ...next })
   const db = await getDb()
   await db
     .insert(roles)
@@ -167,13 +168,14 @@ export const updateRole = async (key, input, actor) => {
   return { before: current, after: await getRole(key) }
 }
 
-/** Restores a built-in role's defaults. */
-export const resetRole = async (key, actor) => {
+/** Restores a built-in role's defaults. `check(next)` may refuse them before they apply. */
+export const resetRole = async (key, actor, { check } = {}) => {
   const current = await getRole(key)
   if (!current?.builtIn) fail(404, 'Only built-in roles can be reset.', 'not_found')
   if (current.locked) fail(403, 'The administrator role always has every permission.', 'locked_role')
   assertRoleWithin(actor, current)
   assertRoleWithin(actor, fromBuiltIn(key, null), 'This role’s defaults have more access than your own, so only an administrator can reset it.')
+  if (check) await check(fromBuiltIn(key, null))
   const db = await getDb()
   await db.delete(roles).where(eq(roles.key, key))
   clearRolesCache()
