@@ -11,8 +11,10 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom'
 import {
   ArrowLeft,
   ArrowRight,
+  CheckCircle2,
   Loader2,
   LogOut,
+  ShieldCheck,
   Send,
 } from 'lucide-react'
 import TermsModal from '../components/TermsModal'
@@ -21,7 +23,7 @@ import SuccessModal from '../components/SuccessModal'
 const FaceCaptureCamera = lazy(() => import('../components/FaceCaptureCamera').then((module) => ({ default: module.FaceCaptureCamera })))
 import dayjs from 'dayjs'
 import footerLogo from '../assets/izyane-black.svg'
-import { submitApplication, fetchSession, requestConsentCode, extractApiError } from '../services/applicationsApi'
+import { submitApplication, fetchSession, requestConsentCode, lookupZraApplicant, extractApiError } from '../services/applicationsApi'
 import { extractFiles } from '../utils/fileTree'
 import { readReferral } from '../lib/referral'
 import { isAssistedFlagSet, clearAssistedFlag } from '../lib/assisted'
@@ -41,6 +43,8 @@ import { documentNotes, findFormMismatches } from '../utils/documentChecks'
 
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
+import { Select } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { StepProgress } from '@/components/application/StepProgress'
 import { ErrorSummary } from '@/components/application/ErrorSummary'
@@ -141,6 +145,9 @@ function DashboardPage() {
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState(null)
   const [validationErrors, setValidationErrors] = useState({})
+  const [zraLookupType, setZraLookupType] = useState(selectedLoanType === 'personal' ? 'NRC' : 'TPIN')
+  const [zraConsent, setZraConsent] = useState(false)
+  const [zraLookupState, setZraLookupState] = useState({ status: 'idle', message: '', taxpayer: null })
   const [submittedApplication, setSubmittedApplication] = useState(null)
   const [shareLocation, setShareLocation] = useState(false)
   // First step, self-service only: staff may see this draft and help finish it.
@@ -342,6 +349,82 @@ function DashboardPage() {
       }
       return next
     })
+  }
+
+  useEffect(() => {
+    setZraLookupType(selectedLoanType === 'personal' ? 'NRC' : 'TPIN')
+    setZraConsent(false)
+    setZraLookupState({ status: 'idle', message: '', taxpayer: null })
+  }, [selectedLoanType])
+
+  const changeZraLookupType = (type) => {
+    setZraLookupType(type)
+    setZraConsent(false)
+    setZraLookupState({ status: 'idle', message: '', taxpayer: null })
+  }
+
+  const zraLookupValue = selectedLoanType === 'personal'
+    ? zraLookupType === 'NRC'
+      ? personalData.personalInfo.nrc
+      : zraLookupType === 'TPIN'
+        ? personalData.personalInfo.tpin
+        : personalData.personalInfo.passportNumber
+    : zraLookupType === 'BRN'
+      ? businessData.businessInfo.brn
+      : businessData.businessInfo.tpin
+
+  const updateZraLookupValue = (value) => {
+    if (selectedLoanType === 'personal') {
+      const field = zraLookupType === 'NRC' ? 'nrc' : zraLookupType === 'TPIN' ? 'tpin' : 'passportNumber'
+      updateSectionField('personalInfo', field, value, field === 'nrc' ? 'nrc' : 'default')
+    } else {
+      updateSectionField('businessInfo', zraLookupType === 'BRN' ? 'brn' : 'tpin', value)
+    }
+    setZraLookupState({ status: 'idle', message: '', taxpayer: null })
+  }
+
+  const handleZraLookup = async () => {
+    if (!zraConsent || !zraLookupValue?.trim() || zraLookupState.status === 'loading') return
+    setZraLookupState({ status: 'loading', message: '', taxpayer: null })
+    try {
+      const result = await lookupZraApplicant(zraLookupType, zraLookupValue.trim())
+      if (!result?.found) {
+        setZraLookupState({ status: 'not-found', message: 'No ZRA record was found. Check the identifier and try again.', taxpayer: null })
+        return
+      }
+
+      const taxpayer = result.taxpayer || {}
+      if (!taxpayer.tpin?.trim()) {
+        setZraLookupState({ status: 'error', message: 'A ZRA record was found, but no TPIN mapping was returned. Check the identifier or contact support.', taxpayer: null })
+        return
+      }
+
+      if (selectedLoanType === 'personal') {
+        updateSectionField('personalInfo', 'tpin', taxpayer.tpin.trim())
+        if (taxpayer.name?.trim()) {
+          const nameParts = taxpayer.name.trim().split(/\s+/)
+          updateSectionField('personalInfo', 'zraVerifiedName', taxpayer.name.trim())
+          updateSectionField('personalInfo', 'firstName', nameParts[0], 'alpha')
+          updateSectionField('personalInfo', 'middleName', nameParts.length > 2 ? nameParts.slice(1, -1).join(' ') : '', 'alpha')
+          updateSectionField('personalInfo', 'surname', nameParts.length > 1 ? nameParts.at(-1) : '', 'alpha')
+        }
+      } else {
+        updateSectionField('businessInfo', 'tpin', taxpayer.tpin.trim())
+        if (taxpayer.name?.trim()) {
+          updateSectionField('businessInfo', 'zraVerifiedName', taxpayer.name.trim())
+          updateSectionField('businessInfo', 'companyName', taxpayer.name.trim())
+        }
+      }
+      setZraLookupState({
+        status: 'found',
+        message: taxpayer.name?.trim()
+          ? 'Identifier verified with ZRA. The returned details have been filled into the form.'
+          : 'TPIN verified with ZRA, but no name mapping was returned. Enter the name in the form.',
+        taxpayer,
+      })
+    } catch (error) {
+      setZraLookupState({ status: 'error', message: extractApiError(error), taxpayer: null })
+    }
   }
 
   const updateSectionField = (section, field, value, fieldType = 'default') => {
@@ -1286,6 +1369,89 @@ function DashboardPage() {
                 />
               ) : null}
 
+              {currentStep === 0 ? (
+                <section className="rounded-lg border border-blue-200 bg-blue-50/60 p-5 shadow-soft print:hidden sm:p-6 dark:border-blue-900/60 dark:bg-blue-950/20">
+                  <div className="mb-5 flex items-start gap-3">
+                    <span className="grid size-9 shrink-0 place-items-center rounded-md bg-blue-100 text-blue-800 dark:bg-blue-900/70 dark:text-blue-200">
+                      <ShieldCheck className="size-4" aria-hidden="true" />
+                    </span>
+                    <div>
+                      <h2 className="text-base font-semibold text-blue-950 dark:text-blue-100">ZRA taxpayer verification</h2>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        Verify your details before continuing. Your consent is required to check this identifier with ZRA.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <label className="grid gap-1.5 text-sm font-medium" htmlFor="zra-lookup-type">
+                      Identifier type
+                      <Select
+                        id="zra-lookup-type"
+                        value={zraLookupType}
+                        disabled={zraLookupState.status === 'loading'}
+                        onChange={(event) => changeZraLookupType(event.target.value)}
+                      >
+                        {(selectedLoanType === 'personal' ? ['NRC', 'TPIN', 'PASSPORT'] : ['TPIN', 'BRN']).map((option) => (
+                          <option key={option} value={option}>{option}</option>
+                        ))}
+                      </Select>
+                    </label>
+                    <label className="grid gap-1.5 text-sm font-medium" htmlFor="zra-lookup-value">
+                      {zraLookupType === 'PASSPORT' ? 'Passport number' : zraLookupType === 'BRN' ? 'Business registration number (BRN)' : zraLookupType}
+                      <Input
+                        id="zra-lookup-value"
+                        value={zraLookupValue ?? ''}
+                        disabled={zraLookupState.status === 'loading'}
+                        onChange={(event) => updateZraLookupValue(event.target.value)}
+                        autoComplete="off"
+                      />
+                    </label>
+                  </div>
+
+                  <div className="mt-4 flex flex-col gap-3 border-t border-border pt-4 sm:flex-row sm:items-center sm:justify-between">
+                    <label className="flex max-w-2xl items-start gap-2.5 text-sm text-muted-foreground">
+                      <input
+                        type="checkbox"
+                        checked={zraConsent}
+                        disabled={zraLookupState.status === 'loading'}
+                        onChange={(event) => setZraConsent(event.target.checked)}
+                        className="mt-0.5 size-4 shrink-0 accent-[hsl(var(--primary))]"
+                      />
+                      <span>I consent to this identifier being checked with the Zambia Revenue Authority (ZRA).</span>
+                    </label>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      disabled={!zraConsent || !zraLookupValue?.trim() || zraLookupState.status === 'loading'}
+                      onClick={handleZraLookup}
+                      className="shrink-0"
+                    >
+                      {zraLookupState.status === 'loading' ? <Loader2 className="animate-spin" /> : <ShieldCheck />}
+                      Verify with ZRA
+                    </Button>
+                  </div>
+
+                  {zraLookupState.status !== 'idle' ? (
+                    <div
+                      className={`mt-4 flex items-start gap-2 text-sm ${zraLookupState.status === 'found' ? 'text-success' : zraLookupState.status === 'loading' ? 'text-muted-foreground' : 'text-destructive'}`}
+                      role={zraLookupState.status === 'error' || zraLookupState.status === 'not-found' ? 'alert' : 'status'}
+                    >
+                      {zraLookupState.status === 'found' ? <CheckCircle2 className="mt-0.5 size-4 shrink-0" aria-hidden="true" /> : null}
+                      <span>
+                        {zraLookupState.message}
+                        {zraLookupState.status === 'found' ? (
+                          <span className="mt-1 block font-medium text-foreground">
+                            {zraLookupState.taxpayer?.name ? `ZRA name: ${zraLookupState.taxpayer.name} · ` : ''}
+                            TPIN: {zraLookupState.taxpayer?.tpin}
+                          </span>
+                        ) : null}
+                      </span>
+                    </div>
+                  ) : null}
+                </section>
+              ) : null}
+
               <WizardStep
                 addDirector={addDirector}
                 addDirectorUpload={addDirectorUpload}
@@ -1329,6 +1495,8 @@ function DashboardPage() {
                 updateDirectorField={updateDirectorField}
                 updateSectionField={updateSectionField}
                 validationErrors={validationErrors}
+                zraLookupState={zraLookupState}
+                zraLookupType={zraLookupType}
               />
 
               {submitError ? (
