@@ -351,7 +351,10 @@ added, removed, renamed and reordered.
   approver's limit), *reject*, or *mark as paid out*. Any action can require a second
   person: not whoever recommended the case or brought it in (four-eyes).
 - **A state** can name the roles that work on it (its cases wait in their queue, under
-  *In my queue*), apply to personal or business loans only, let staff ask the applicant
+  *In my queue*). Naming a role only narrows who may act; it never grants a permission:
+  the editor offers only roles whose permissions cover the state's actions (Approve and
+  Reject need *Approve or decline*, for example), and a role can't lose a permission
+  while the published workflow relies on it. A state can also apply to personal or business loans only, let staff ask the applicant
   for more, hand the loan to the LMS when a case arrives, require checklist items, and
   show as a step on the case with *Mark as done*.
 - **The Offer state** waits for the customer to accept, then sends the case on. An offer

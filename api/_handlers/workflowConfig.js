@@ -134,7 +134,8 @@ export const sanitizeWorkflow = (input) => {
   return { start: text(input?.start, 60), checklist, states }
 }
 
-const roleKeys = async () => (await listRoles()).map((role) => role.key)
+// With their permissions: a role named on a state must hold what its actions need.
+const workspaceRoles = async () => (await listRoles()).map(({ key, label, permissions }) => ({ key, label, permissions }))
 
 const describeVersion = (flow) => ({ version: flow.version, legacy: flow.legacy, definition: flow.definition, publishedAt: flow.publishedAt })
 
@@ -154,7 +155,7 @@ const saveDraft = async (req) => {
   const definition = sanitizeWorkflow(req.body?.definition)
   const draft = await saveDraftWorkflow(definition, text(req.body?.note, 300) || null, actor)
   await recordAudit({ req, actor, action: 'workflow.draft_saved', entityType: 'workflow', entityId: null, detail: { states: definition.states.length } })
-  return { draft: { definition: draft.definition, note: draft.note, updatedAt: draft.updatedAt }, validation: validateWorkflow(definition, { roles: await roleKeys() }) }
+  return { draft: { definition: draft.definition, note: draft.note, updatedAt: draft.updatedAt }, validation: validateWorkflow(definition, { roles: await workspaceRoles() }) }
 }
 
 const discardDraft = async (req) => {
@@ -169,7 +170,7 @@ const publish = async (req, res) => {
   const actor = await requireUser(req, { permission: 'settings.manage' })
   const draft = await getDraftWorkflow()
   if (!draft) fail(400, 'Save a draft before publishing.', 'no_draft')
-  const validation = validateWorkflow(draft.definition, { roles: await roleKeys() })
+  const validation = validateWorkflow(draft.definition, { roles: await workspaceRoles() })
   if (validation.errors.length) {
     res.status(400).json({ code: 'invalid_workflow', message: `Fix these first: ${validation.errors.map((error) => error.message).join(' ')}`, errors: validation.errors })
     return undefined

@@ -21,6 +21,7 @@
 
 import { APPLICATION_STATUSES } from './applications.js'
 import { DEFAULT_CHECKLIST } from './stages.js'
+import { PERMISSION_GROUPS } from './roles.js'
 
 export const STATE_TYPES = {
   work: { label: 'In progress' },
@@ -42,9 +43,10 @@ export const SYSTEM_FINALS = {
 export const SYSTEM_FINAL_IDS = Object.keys(SYSTEM_FINALS)
 
 /**
- * What an action does. `permission` is who may do it unless the state names roles (which
- * then narrow it); `forward` actions move the case on and must never loop back; `to`
- * fixes the target for the kinds that always end in the same place.
+ * What an action does. `permission` is who may do it; a state that names roles narrows
+ * that to those roles, and never stands in for the permission. `forward` actions move the
+ * case on and must never loop back; `to` fixes the target for the kinds that always end
+ * in the same place.
  */
 export const ACTION_KINDS = {
   move: { label: 'Move on', tone: 'forward', permission: 'cases.work', forward: true },
@@ -53,6 +55,29 @@ export const ACTION_KINDS = {
   approve: { label: 'Approve', tone: 'forward', permission: 'cases.decide', forward: true },
   reject: { label: 'Reject', tone: 'danger', permission: 'cases.decide', forward: true, to: 'declined' },
   pay_out: { label: 'Mark as paid out', tone: 'forward', permission: 'cases.disburse', forward: true, to: 'paid_out' },
+}
+
+/** The permission an action needs: its own, or its kind's. */
+export const actionPermission = (action) => action?.permission || ACTION_KINDS[action?.kind]?.permission || null
+
+const PERMISSION_LABELS = Object.fromEntries(PERMISSION_GROUPS.flatMap((group) => group.permissions.map((permission) => [permission.key, permission.label])))
+
+/**
+ * What a role named on `state` could not do there, as [{ permission, label, actions }]:
+ * each permission it lacks, with the actions that need it. Empty when it can do it all.
+ * On the offer state the work is recording the customer's acceptance.
+ */
+export const missingForState = (role, state) => {
+  if (!role?.permissions || !state || state.type === 'final') return []
+  const needs = new Map()
+  const need = (permission, label) => {
+    if (!permission || role.permissions.includes(permission)) return
+    if (!needs.has(permission)) needs.set(permission, [])
+    needs.get(permission).push(label)
+  }
+  for (const action of state.actions || []) need(actionPermission(action), action.label || ACTION_KINDS[action.kind]?.label)
+  if (state.type === 'offer') need('offers.record', 'Record acceptance')
+  return [...needs].map(([permission, actions]) => ({ permission, label: PERMISSION_LABELS[permission] || permission, actions }))
 }
 
 /** Where a case is in the journey: before the decision, approved (awaiting acceptance), or accepted. */
@@ -217,7 +242,8 @@ const reachableFrom = (definition, id) => {
 /**
  * Checks a workflow before it is published (and live in the editor). Returns
  * { errors, warnings, phases, categories, order }; each message may carry the stateId
- * and actionId it is about. `roles` is the list of role keys that exist.
+ * and actionId it is about. `roles` is the roles that exist, as { key, label, permissions }
+ * (or bare keys, which skips the permission check).
  */
 export const validateWorkflow = (definition, { roles } = {}) => {
   const errors = []
@@ -257,7 +283,9 @@ export const validateWorkflow = (definition, { roles } = {}) => {
   }
 
   const checkKeys = new Set((definition.checklist || []).map((check) => check.key))
-  const roleKeys = roles ? new Set(roles) : null
+  const roleList = roles ? roles.map((role) => (typeof role === 'string' ? { key: role } : role)) : null
+  const roleKeys = roleList ? new Set(roleList.map((role) => role.key)) : null
+  const roleByKey = new Map((roleList || []).map((role) => [role.key, role]))
   const offers = states.filter((state) => state.type === 'offer')
 
   for (const state of states) {
@@ -297,8 +325,20 @@ export const validateWorkflow = (definition, { roles } = {}) => {
       if (!checkKeys.has(key)) add(errors, `“${state.label}” needs a checklist item that no longer exists.`, state.id)
     }
     if (roleKeys) {
-      for (const role of state.roles || []) {
-        if (!roleKeys.has(role)) add(warnings, `“${state.label}” names a role that no longer exists; anyone with the permission can act.`, state.id)
+      for (const key of state.roles || []) {
+        if (!roleKeys.has(key)) {
+          add(warnings, `“${state.label}” names a role that no longer exists.`, state.id)
+          continue
+        }
+        // A named role only narrows who may act: it must hold what the state's actions need.
+        const role = roleByKey.get(key)
+        for (const gap of missingForState(role, state)) {
+          add(
+            errors,
+            `“${role.label || key}” works on “${state.label}” but can’t ${gap.actions.map((label) => `“${label}”`).join(' or ')}: the role lacks “${gap.label}”. Untick it here, or give it that permission in Team → Roles.`,
+            state.id
+          )
+        }
       }
     }
     if (!forwardEdges(state).length) add(errors, `“${state.label}” has no way forward. Add an action that moves the case on.`, state.id)
