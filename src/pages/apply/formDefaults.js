@@ -36,6 +36,9 @@ export const personalInitial = {
     phone: '',
     email: '',
     nrc: '',
+    tpin: '',
+    passportNumber: '',
+    zraVerifiedName: '',
     gender: '',
     maritalStatus: '',
     birthDate: '',
@@ -63,6 +66,9 @@ export const personalInitial = {
 export const businessInitial = {
   businessInfo: {
     companyName: '',
+    tpin: '',
+    brn: '',
+    zraVerifiedName: '',
     businessType: '',
     establishedDate: '',
     natureOfBusiness: '',
