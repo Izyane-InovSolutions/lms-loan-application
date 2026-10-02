@@ -25,6 +25,10 @@ export const fetchSession = () => client.get('/auth/me').then((r) => r.data.user
 export const requestConsentCode = (email, agentName) =>
   axios.post('/api/otp/request', { email, purpose: 'consent', agentName }).then((r) => r.data)
 
+/** Verifies an applicant-provided identifier after explicit consent. */
+export const lookupZraApplicant = (lookupType, lookupValue) =>
+  client.post('/zra/application-lookup', { lookupType, lookupValue, consent: true }).then((r) => r.data)
+
 export const extractApiError = (error) =>
   error?.response?.data?.message ||
   (error?.response ? 'Something went wrong. Please try again.' : 'We could not reach the server. Check your connection and try again.')
