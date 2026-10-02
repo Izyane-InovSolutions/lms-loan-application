@@ -52,6 +52,14 @@ export const SETTING_DEFAULTS = {
     disbursedStatuses: ['Disbursed'],
     timeoutSeconds: 60,
   },
+  zra: {
+    enabled: false,
+    baseUrl: '',
+    apiKey: '',
+    username: '',
+    password: '',
+    timeoutSeconds: 10,
+  },
   workflow: {
     // A second person must approve what an officer recommends (four-eyes).
     requireSecondApproval: true,
@@ -122,6 +130,7 @@ export const SETTING_DEFAULTS = {
 
 const SECRET_FIELDS = {
   lmsConnection: ['apiSecret', 'password'],
+  zra: ['apiKey', 'username', 'password'],
   sms: ['apiKey'],
   ai: AI_SECRET_FIELDS,
 }
