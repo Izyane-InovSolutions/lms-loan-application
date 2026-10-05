@@ -29,7 +29,8 @@
     "pdf-lib": "^1.17.1",
     "pg": "^8.23.0",
     "sirv": "^3.0.2",
-    "soap": "^1.13.1"
+    "soap": "^1.13.1",
+    "swagger-ui-dist": "^5.33.1"
   },
   "devDependencies": {
     "@emotion/react": "^11.14.0",

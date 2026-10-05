@@ -20,6 +20,7 @@ const TABS = [
   { id: 'workflow', label: 'Credit workflow' },
   { id: 'products', label: 'Loan products' },
   { id: 'lms', label: 'LMS connection' },
+  { id: 'zra', label: 'ZRA Web Services' },
   { id: 'notifications', label: 'Notifications and SMS' },
   { id: 'ai', label: 'AI document checks' },
   { id: 'retention', label: 'Data retention' },
@@ -141,6 +142,7 @@ export function SettingsPage() {
           {tab === 'workflow' ? <WorkflowTab settings={state.settings} notify={notify} /> : null}
           {tab === 'products' ? <ProductsTab initial={state.settings.products} notify={notify} /> : null}
           {tab === 'lms' ? <LmsTab settings={state.settings} integrations={state.integrations} notify={notify} onSaved={load} /> : null}
+          {tab === 'zra' ? <ZraTab settings={state.settings} integrations={state.integrations} notify={notify} onSaved={load} /> : null}
           {tab === 'notifications' ? <NotificationsTab settings={state.settings} integrations={state.integrations} notify={notify} /> : null}
           {tab === 'ai' ? <AiTab settings={state.settings} integrations={state.integrations} notify={notify} onSaved={load} /> : null}
           {tab === 'retention' ? <RetentionTab initial={state.settings.retention} notify={notify} /> : null}
@@ -465,6 +467,71 @@ function LmsTab({ settings, integrations, notify, onSaved }) {
         </div>
         <FormError message={timing.error} />
         <SaveBar dirty={timing.dirty} saving={timing.saving} onSave={() => timing.save()} />
+      </Panel>
+    </div>
+  )
+}
+
+function ZraTab({ settings, integrations, notify, onSaved }) {
+  const connection = useSettingGroup('zra', settings.zra, notify)
+  const [test, setTest] = useState(null)
+  const [testing, setTesting] = useState(false)
+  const value = connection.value
+  const sourceNote = integrations.zra.source === 'database'
+    ? 'Using the encrypted connection saved in this database.'
+    : integrations.zra.configured
+      ? 'Using the server environment connection. Enable and save this form to switch to database settings.'
+      : 'No complete connection is configured yet. Save one here or set server environment variables.'
+
+  const runTest = async () => {
+    setTesting(true)
+    setTest(null)
+    try {
+      const body = value.enabled || value.baseUrl ? value : {}
+      setTest(await api('/settings/zra/test', { method: 'POST', body }))
+    } catch (error) {
+      setTest({ ok: false, message: error.message })
+    } finally {
+      setTesting(false)
+    }
+  }
+
+  return (
+    <div className="max-w-3xl">
+      <Panel title="ZRA Web Services" description={sourceNote}>
+        <div className="space-y-5">
+          <Toggle
+            id="zra-enabled"
+            label="Use database connection settings"
+            description="When enabled, this encrypted database connection takes precedence over server environment variables."
+            checked={value.enabled}
+            onChange={(enabled) => connection.set({ enabled })}
+          />
+          <Field id="zra-base-url" label="ZRA HTTPS origin" hint="Use the approved HTTPS origin reachable through your ZRA VPN. Do not include an API path.">
+            <Input id="zra-base-url" value={value.baseUrl} onChange={(event) => connection.set({ baseUrl: event.target.value })} placeholder="https://zws.zra.org.zm" />
+          </Field>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <SecretField id="zra-api-key" label="ZRA API key" isSet={value.apiKeySet} value={value.apiKey} onChange={(apiKey) => connection.set({ apiKey })} />
+            <SecretField id="zra-username" label="ZRA username" isSet={value.usernameSet} value={value.username} onChange={(username) => connection.set({ username })} />
+            <SecretField id="zra-password" label="ZRA password" isSet={value.passwordSet} value={value.password} onChange={(password) => connection.set({ password })} />
+            <Field id="zra-timeout" label="Request timeout (seconds)">
+              <Input id="zra-timeout" type="number" min="5" max="120" value={value.timeoutSeconds} onChange={(event) => connection.set({ timeoutSeconds: event.target.value })} />
+            </Field>
+          </div>
+          {test ? (
+            <p role="status" className={cn('flex items-start gap-2 rounded-md p-3 text-sm', test.ok ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive')}>
+              {test.ok ? <Check className="mt-0.5 size-4 shrink-0" aria-hidden="true" /> : <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />}
+              {test.message}
+            </p>
+          ) : null}
+        </div>
+        <FormError message={connection.error} />
+        <SaveBar dirty={connection.dirty} saving={connection.saving} onSave={async () => (await connection.save()) && onSaved()}>
+          <Button variant="outline" size="sm" onClick={runTest} disabled={testing}>
+            {testing ? <Loader2 className="animate-spin" /> : <PlugZap />}
+            Test ZRA login
+          </Button>
+        </SaveBar>
       </Panel>
     </div>
   )

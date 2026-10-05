@@ -106,6 +106,8 @@ export function WizardStep(props) {
     retryPrescreen,
     selectedLoanType,
     sendConsentCode,
+    zraLookupState,
+    zraLookupType,
     setAllowCrb,
     setConsentCode,
     setLoanData,
@@ -501,7 +503,7 @@ export function WizardStep(props) {
               </FieldGroup>
 
               <FieldGroup title="Identity" icon={Fingerprint} columns={2}>
-                {renderField('NRC', personalData.personalInfo.nrc, (value) => updateSectionField('personalInfo', 'nrc', value, 'nrc'), 'text', '123456/78/9', { maxLength: 12 }, true, 'personalInfo.nrc')}
+                {renderField('NRC', personalData.personalInfo.nrc, (value) => updateSectionField('personalInfo', 'nrc', value, 'nrc'), 'text', '123456/78/9', { maxLength: 12, disabled: zraLookupState.status === 'loading' && zraLookupType === 'NRC' }, true, 'personalInfo.nrc')}
                 {renderBirthDateField('Birth date', personalData.personalInfo.birthDate, (value) => updateSectionField('personalInfo', 'birthDate', value), true, 'personalInfo.birthDate')}
                 {renderSelectField('Gender', personalData.personalInfo.gender, (value) => updateSectionField('personalInfo', 'gender', value, 'alpha'), GENDER_OPTIONS, 'Select gender', true, 'personalInfo.gender')}
                 {renderSelectField('Marital status', personalData.personalInfo.maritalStatus, (value) => updateSectionField('personalInfo', 'maritalStatus', value, 'alpha'), MARITAL_STATUS_OPTIONS, 'Select marital status', true, 'personalInfo.maritalStatus')}

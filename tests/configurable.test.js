@@ -14,6 +14,7 @@ const { priceLoan } = await import('../src/config/loanProducts.js')
 const { encryptSecret, decryptSecret } = await import('../api/_lib/secrets.js')
 const { runDailyMaintenance } = await import('../api/_lib/maintenance.js')
 const { getDb, schema } = await import('../api/_lib/db/client.js')
+const { getZraConfig } = await import('../api/_lib/zra/config.js')
 const { generateJson } = await import('../api/_lib/ai/index.js')
 const { signAwsRequest } = await import('../api/_lib/ai/cloud/aws.js')
 
@@ -96,6 +97,105 @@ describe('building blocks', () => {
     expect(stored).not.toContain('lms-secret')
     expect(decryptSecret(stored)).toBe('lms-secret')
     expect(decryptSecret('enc:v1:bad')).toBe(null)
+  })
+})
+
+describe('ZRA connection settings', () => {
+  it('stores credentials encrypted, masks them in settings responses, and prefers database config', async () => {
+    const values = {
+      enabled: true,
+      baseUrl: 'https://zws.test',
+      apiKey: 'zra-settings-api-key',
+      username: 'zra-settings-user',
+      password: 'zra-settings-password',
+      timeoutSeconds: 10,
+    }
+
+    const response = await admin.put('/settings/zra', values)
+
+    expect(response.status).toBe(200)
+    expect(response.body.zra).toMatchObject({
+      enabled: true,
+      baseUrl: values.baseUrl,
+      apiKey: '',
+      apiKeySet: true,
+      username: '',
+      usernameSet: true,
+      password: '',
+      passwordSet: true,
+    })
+    const db = await getDb()
+    const [row] = await db.select().from(schema.settings).where((await import('drizzle-orm')).eq(schema.settings.key, 'zra')).limit(1)
+    expect(row.value.apiKey).toMatch(/^enc:v1:/)
+    expect(row.value.username).toMatch(/^enc:v1:/)
+    expect(row.value.password).toMatch(/^enc:v1:/)
+
+    const resolved = await getZraConfig()
+    expect(resolved.source).toBe('database')
+    expect(resolved.config).toMatchObject({
+      baseUrl: values.baseUrl,
+      apiKey: values.apiKey,
+      username: values.username,
+      password: values.password,
+      timeoutSeconds: values.timeoutSeconds,
+    })
+
+    await admin.put('/settings/zra', { enabled: false, baseUrl: '', timeoutSeconds: 10 })
+  })
+
+  it('rejects a non-HTTPS ZRA address', async () => {
+    const response = await admin.put('/settings/zra', {
+      enabled: true,
+      baseUrl: 'http://zws.test',
+      timeoutSeconds: 10,
+    })
+
+    expect(response.status).toBe(400)
+    expect(response.body.code).toBe('invalid_input')
+  })
+
+  it('tests the saved database connection without returning ZRA tokens', async () => {
+    const originalSecretsKey = process.env.LOS_SECRETS_KEY
+    process.env.LOS_SECRETS_KEY = 'test-zra-settings-secrets-key'
+    const configured = await admin.put('/settings/zra', {
+      enabled: true,
+      baseUrl: 'https://zws.test',
+      apiKey: 'zra-settings-api-key',
+      username: 'zra-settings-user',
+      password: 'zra-settings-password',
+      timeoutSeconds: 10,
+    })
+    expect(configured.status).toBe(200)
+    const originalFetch = globalThis.fetch
+    const calls = []
+    globalThis.fetch = vi.fn(async (url, options) => {
+      calls.push({ url: String(url), options })
+      return new Response(JSON.stringify({
+        header: { status: 'SUCCESS' },
+        data: {
+          tokenType: 'bearer',
+          accessToken: 'test-access-token',
+          expiresIn: 300,
+          refreshToken: 'test-refresh-token',
+          refreshExpiresIn: 1800,
+        },
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+
+    try {
+      const result = await admin.post('/settings/zra/test', {})
+
+      expect(result.status).toBe(200)
+      expect(result.body, JSON.stringify(result.body)).toMatchObject({ ok: true })
+      expect(JSON.stringify(result.body)).not.toMatch(/test-access-token|test-refresh-token/)
+      expect(calls).toHaveLength(1)
+      expect(calls[0].url).toBe('https://zws.test/zws/auth/login')
+      expect(calls[0].options.headers['X-Api-Key']).toBe('zra-settings-api-key')
+    } finally {
+      globalThis.fetch = originalFetch
+      if (originalSecretsKey === undefined) delete process.env.LOS_SECRETS_KEY
+      else process.env.LOS_SECRETS_KEY = originalSecretsKey
+    }
   })
 })
 

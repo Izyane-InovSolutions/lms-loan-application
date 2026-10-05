@@ -15,6 +15,8 @@ import { validateStagesConfig } from '../_lib/stages.js'
 import { clearTwoFactorCache } from '../_lib/auth/twoFactor.js'
 import { brandName } from '../_lib/branding.js'
 import { regenerateLegacyWorkflow } from '../_lib/workflowVersions.js'
+import { createZraClient, missingZraConfig, readZraConfig, ZraError } from '../_lib/zra/client.js'
+import { getZraConfig } from '../_lib/zra/config.js'
 
 const LEGACY_WORKFLOW_KEYS = ['workflow', 'offers', 'stages', 'lms']
 import { BRAND_NAME_MAX } from '../../src/config/branding.js'
@@ -139,6 +141,28 @@ const VALIDATORS = {
       timeoutSeconds: number(value.timeoutSeconds, { min: 5, max: 300, integer: true, label: 'The timeout' }),
     }
   },
+  zra: (value) => {
+    const baseUrl = text(value.baseUrl, 300).replace(/\/+$/, '')
+    if (baseUrl) {
+      let url
+      try {
+        url = new URL(baseUrl)
+      } catch {
+        throw new Error('The ZRA address must be a valid HTTPS origin.')
+      }
+      if (url.protocol !== 'https:' || url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
+        throw new Error('The ZRA address must be an HTTPS origin without a path or credentials.')
+      }
+    }
+    return {
+      enabled: Boolean(value.enabled),
+      baseUrl,
+      apiKey: value.apiKey === null ? null : text(value.apiKey, 500),
+      username: value.username === null ? null : text(value.username, 200),
+      password: value.password === null ? null : String(value.password || '').slice(0, 500),
+      timeoutSeconds: number(value.timeoutSeconds, { min: 5, max: 120, integer: true, label: 'The ZRA timeout' }),
+    }
+  },
   workflow: (value) => ({
     requireSecondApproval: Boolean(value.requireSecondApproval),
     slaDays: number(value.slaDays, { min: 1, max: 60, integer: true, label: 'The target days' }),
@@ -186,10 +210,12 @@ const getSettings = async (req) => {
   await requireUser(req, { permission: 'settings.manage' })
   const entries = await Promise.all(Object.keys(SETTING_DEFAULTS).map(async (key) => [key, await getPublicSetting(key)]))
   const [lms, terms, privacy] = await Promise.all([describeLms(), getPublishedLegal('terms'), getPublishedLegal('privacy')])
+  const zraConfig = await getZraConfig()
   return {
     settings: Object.fromEntries(entries),
     integrations: {
       lms,
+      zra: { source: zraConfig.source, configured: missingZraConfig(zraConfig.config).length === 0 },
       crb: getCrb()?.name || null,
       ai: await describeAi(),
       geocoder: (process.env.GEOCODER || '').trim() || null,
@@ -259,6 +285,44 @@ const testLms = async (req) => {
   } catch (error) {
     await recordAudit({ req, actor, action: 'settings.lms_tested', detail: { ok: false } })
     return { ok: false, message: error.message || 'The LMS could not be reached.' }
+  }
+}
+
+const testZra = async (req) => {
+  const actor = await requireUser(req, { permission: 'settings.manage' })
+  let config
+  if (req.body && Object.keys(req.body).length) {
+    let form
+    try {
+      form = VALIDATORS.zra({ ...req.body, enabled: true })
+    } catch (error) {
+      fail(400, error.message, 'invalid_input')
+    }
+    const [saved, environment] = await Promise.all([getSetting('zra'), Promise.resolve(readZraConfig())])
+    const sameHost = Boolean(saved.baseUrl) && form.baseUrl === saved.baseUrl
+    const sameEnvironmentHost = Boolean(environment.baseUrl) && form.baseUrl === environment.baseUrl
+    const fallback = sameHost ? saved : sameEnvironmentHost ? environment : {}
+    config = {
+      ...form,
+      apiKey: form.apiKey || fallback.apiKey || '',
+      username: form.username || fallback.username || '',
+      password: form.password || fallback.password || '',
+    }
+  } else {
+    config = (await getZraConfig()).config
+  }
+
+  const missing = missingZraConfig(config)
+  if (missing.length) fail(400, `Configure the ZRA connection first (missing ${missing.join(', ')}).`, 'zra_not_configured')
+
+  const startedAt = Date.now()
+  try {
+    await createZraClient({ config }).authenticate()
+    await recordAudit({ req, actor, action: 'settings.zra_tested', detail: { ok: true } })
+    return { ok: true, message: `Authenticated with ZRA in ${Date.now() - startedAt} ms.` }
+  } catch (error) {
+    await recordAudit({ req, actor, action: 'settings.zra_tested', detail: { ok: false } })
+    return { ok: false, message: error instanceof ZraError ? error.message : 'ZRA could not be reached.' }
   }
 }
 
@@ -356,6 +420,7 @@ export const settingsRoutes = [
   ['GET', '/stages', stagesForStaff],
   ['PUT', '/settings/:key', saveSetting],
   ['POST', '/settings/lms/test', testLms],
+  ['POST', '/settings/zra/test', testZra],
   ['POST', '/settings/sms/test', testSms],
   ['POST', '/settings/ai/test', testAi],
   ['GET', '/legal/:kind', publishedLegal],
