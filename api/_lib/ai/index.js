@@ -82,6 +82,8 @@ const build = (catalog, factories, id, values) => {
 
 const resolveSetup = (setting) => {
   const values = resolveValues(setting)
+  // Switched off by an admin: no provider and no OCR, whatever is connected.
+  if (setting.enabled === false) return { choice: 'off', providers: [], ocr: null, ocrMode: 'when_needed' }
   const choice = setting.provider === 'environment' ? env('AI_PROVIDER') || 'gemini' : setting.provider
   const primary = build(AI_MODEL_PROVIDERS, PROVIDER_FACTORIES, choice, values)
   const fallbacks =

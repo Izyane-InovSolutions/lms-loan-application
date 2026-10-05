@@ -176,6 +176,7 @@ function WorkflowTab({ settings, notify }) {
   const workflow = useSettingGroup('workflow', settings.workflow, notify)
   const offers = useSettingGroup('offers', settings.offers, notify)
   const prescreen = useSettingGroup('prescreen', settings.prescreen, notify)
+  const customer = useSettingGroup('customerOptions', settings.customerOptions, notify)
   return (
     <div className="grid gap-6 lg:grid-cols-2">
       <Panel title="Credit decisions">
@@ -212,6 +213,17 @@ function WorkflowTab({ settings, notify }) {
           </div>
           <FormError message={offers.error} />
           <SaveBar dirty={offers.dirty} saving={offers.saving} onSave={() => offers.save()} />
+        </Panel>
+        <Panel title="Applicant experience">
+          <Toggle
+            id="help-with-finishing"
+            label="Help with finishing"
+            description="Applicants see a notice that the team may view their unfinished application and contact them to help finish it. They don’t choose. Off: unfinished applications stay private and staff can’t contact the applicant."
+            checked={customer.value.helpWithFinishing !== false}
+            onChange={(helpWithFinishing) => customer.set({ helpWithFinishing })}
+          />
+          <FormError message={customer.error} />
+          <SaveBar dirty={customer.dirty} saving={customer.saving} onSave={() => customer.save()} />
         </Panel>
         <Panel title="Automatic decisions">
           <Toggle
@@ -637,8 +649,15 @@ function AiTab({ settings, integrations, notify, onSaved }) {
 
   return (
     <div className="space-y-6">
-      <Panel title="How documents are read" description={status}>
+      <Panel title="How documents are read" description={value.enabled === false ? 'AI analysis is switched off for everyone. Applicants and staff see no AI notes; everything else works as usual.' : status}>
         <div className="space-y-5">
+          <Toggle
+            id="ai-enabled"
+            label="AI analysis"
+            description="Checks uploaded documents and prescreens applications. Applicants can’t turn it on or off; this switch decides for everyone."
+            checked={value.enabled !== false}
+            onChange={(enabled) => ai.set({ enabled })}
+          />
           <div className="grid gap-4 sm:grid-cols-2">
             <Field id="ai-provider" label="Model">
               <Select id="ai-provider" value={value.provider} onChange={(event) => ai.set({ provider: event.target.value })}>

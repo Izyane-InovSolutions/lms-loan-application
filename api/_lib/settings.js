@@ -99,6 +99,11 @@ export const SETTING_DEFAULTS = {
     apiKey: '',
     senderId: '',
   },
+  // What applicants are offered while applying. Set by admins; applicants don't choose.
+  customerOptions: {
+    // Staff may see unfinished applications and contact the applicant to help finish them.
+    helpWithFinishing: true,
+  },
   security: {
     // Roles that must use two-step sign-in. Members without it are asked to set it up.
     requireTwoFactorRoles: [],
@@ -109,6 +114,8 @@ export const SETTING_DEFAULTS = {
    * AI_PROVIDER; any field left blank falls back to its environment variable.
    */
   ai: {
+    // Admin switch for AI document checks and the AI prescreen, for applicants and staff alike.
+    enabled: true,
     provider: 'environment',
     // When the chosen model is overloaded, rate-limited or times out, try these in order.
     fallback: true,

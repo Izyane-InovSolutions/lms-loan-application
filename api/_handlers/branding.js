@@ -61,8 +61,12 @@ const removeLogo = async (req) => {
   return { branding: await publicBranding() }
 }
 
+/** Public: what applicants are offered, as set by admins (Settings → Workflow). */
+const getCustomerOptions = async () => getSetting('customerOptions')
+
 export const brandingRoutes = [
   ['GET', '/branding', getPublic],
+  ['GET', '/customer-options', getCustomerOptions],
   ['GET', '/branding/logo', getLogo],
   ['POST', '/admin/branding/logo', uploadLogo],
   ['DELETE', '/admin/branding/logo', removeLogo],

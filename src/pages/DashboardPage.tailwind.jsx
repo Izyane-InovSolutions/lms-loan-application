@@ -54,6 +54,7 @@ import {
 } from '@/config/applicationSteps'
 import { WizardStep } from './apply/WizardSteps'
 import { DraftContactConsent } from '@/components/application/DraftContactConsent'
+import { useCustomerOptions } from '@/hooks/useCustomerOptions'
 import { CRB_ENABLED, businessInitial, personalInitial } from './apply/formDefaults'
 
 /** The device's position for the location consent, or null if it is refused or unavailable. */
@@ -145,6 +146,7 @@ function DashboardPage() {
   const [shareLocation, setShareLocation] = useState(false)
   // First step, self-service only: staff may see this draft and help finish it.
   const [contactConsent, setContactConsent] = useState(false)
+  const customerOptions = useCustomerOptions()
   const [allowCrb, setAllowCrb] = useState(false)
   // One key per application: a retried submit files it once (see api/_handlers/applications.js).
   const submissionKeyRef = useRef(newSubmissionKey())
@@ -703,11 +705,6 @@ function DashboardPage() {
       if (!value?.toString().trim()) {
         recordError(key, message)
       }
-    }
-
-    // With an agent, the customer agrees at submit, by code; on their own, up front.
-    if (currentStep === 0 && !assistedBy && !contactConsent) {
-      recordError('contactConsent', 'Please agree that we may help you finish your application.')
     }
 
     if (selectedLoanType === 'personal') {
@@ -1275,16 +1272,7 @@ function DashboardPage() {
             <div className="grid gap-6">
               <ErrorSummary ref={errorSummaryRef} errors={validationErrors} />
 
-              {currentStep === 0 && !assistedBy ? (
-                <DraftContactConsent
-                  checked={contactConsent}
-                  onChange={(value) => {
-                    setContactConsent(value)
-                    if (value) setValidationError('contactConsent', '')
-                  }}
-                  error={validationErrors.contactConsent}
-                />
-              ) : null}
+              {currentStep === 0 && !assistedBy && customerOptions.helpWithFinishing ? <DraftContactConsent /> : null}
 
               <WizardStep
                 addDirector={addDirector}

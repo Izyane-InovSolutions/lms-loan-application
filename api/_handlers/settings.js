@@ -165,6 +165,7 @@ const VALIDATORS = {
   ai: (value) => {
     const providerIds = AI_MODEL_PROVIDERS.map((entry) => entry.id)
     return {
+      enabled: value.enabled !== false,
       provider: ['environment', 'off', ...providerIds].includes(value.provider) ? value.provider : 'environment',
       fallback: Boolean(value.fallback),
       fallbacks: (Array.isArray(value.fallbacks) ? value.fallbacks : []).filter((id, index, list) => providerIds.includes(id) && list.indexOf(id) === index),
@@ -173,6 +174,7 @@ const VALIDATORS = {
       ...aiFieldValues(value),
     }
   },
+  customerOptions: (value) => ({ helpWithFinishing: value.helpWithFinishing !== false }),
   stages: (value) => validateStagesConfig(value),
   security: async (value) => {
     const known = new Set((await listRoles()).map((role) => role.key))

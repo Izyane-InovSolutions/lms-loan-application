@@ -5,6 +5,7 @@ import { staffWith } from '../_lib/rbac.js'
 import { attributionFor, resolveReferral } from '../_lib/attribution.js'
 import { DRAFT_TTL_SECONDS, ensureDraftId, indexDraft, unindexDraft } from '../_lib/drafts.js'
 import { CONSENT_NOTICES } from '../../src/config/consent.js'
+import { getSetting } from '../_lib/settings.js'
 // Each alias is a full copy written on every save, so the list is capped rather than
 // growing once per edit to the email field. Keeping the most recent few covers the
 // realistic case (a typo corrected once or twice) without unbounded writes.
@@ -55,15 +56,17 @@ const withAttribution = async (req, draft) => {
 
 /**
  * The applicant's agreement, on the first step, that staff may see this draft and contact
- * them about finishing it. Recorded once, with the wording's version; a later save without
- * it does not undo it (discarding the draft does).
+ * them about finishing it. Admins decide whether the feature is on (Settings → Workflow);
+ * applicants are shown a notice, not a choice. Recorded once, with the notice's version; a
+ * later save does not undo it (discarding the draft does). Nothing is recorded when off.
  */
-const withContactConsent = (req, draft) => {
-  if (draft.contactConsent || req.body?.contactConsent !== true) return draft
+const withContactConsent = async (draft) => {
+  if (draft.contactConsent) return draft
+  if (!(await getSetting('customerOptions')).helpWithFinishing) return draft
   return { ...draft, contactConsent: { at: Date.now(), version: CONSENT_NOTICES.draft_contact.version } }
 }
 
-const prepare = async (req, draft) => ensureDraftId(withContactConsent(req, await withAttribution(req, draft)))
+const prepare = async (req, draft) => ensureDraftId(await withContactConsent(await withAttribution(req, draft)))
 
 const resolveTokenAuth = async (req) => {
   const auth = req.headers.authorization || ''
