@@ -34,6 +34,7 @@ export const FACTS = {
   authenticity_concerns: { label: 'Possible tampering flagged', unit: 'count', loanTypes: ['personal', 'business'] },
   location_provided: { label: 'Location shared at submission', unit: 'boolean', loanTypes: ['personal', 'business'] },
   location_distance_km: { label: 'Distance from stated address', unit: 'km', loanTypes: ['personal', 'business'] },
+  address_found: { label: 'Home address found on the map', unit: 'boolean', loanTypes: ['personal', 'business'] },
   crb_score: { label: 'Credit bureau score', unit: 'score', loanTypes: ['personal', 'business'] },
 }
 
@@ -86,6 +87,7 @@ export const DEFAULT_RULES = [
   rule('authenticity_concerns', 'gt', 0, 'refer', 'A document may have been edited. Check the original.'),
   rule('location_provided', 'eq', false, 'warn', 'The applicant did not share their location.'),
   rule('location_distance_km', 'gt', 50, 'warn', 'The applicant was more than 50 km from their stated address.'),
+  rule('address_found', 'eq', false, 'refer', 'The home address the applicant typed couldn’t be found on the map. Check it with them.'),
   rule('crb_score', 'lt', 500, 'refer', 'The credit bureau score is below 500.', { enabled: false }),
 ]
 

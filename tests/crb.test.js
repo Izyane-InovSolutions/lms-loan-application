@@ -198,7 +198,8 @@ const submit = async (email, { nrc = '123456/78/9', crb = true } = {}) => {
       submissionKey: crypto.randomUUID(),
       loanType: 'personal',
       loanData: { amount: 5000, tenure: 6 },
-      consents: { dataProcessing: true, location: false, crb },
+      consents: { dataProcessing: true, location: true, crb },
+      location: { latitude: -15.41, longitude: 28.28, accuracy: 20 },
       data: {
         personalInfo: { firstName: 'Ada', middleName: 'Mwila', surname: 'Banda', phone: '971234567', email, nrc, birthDate: '1990-05-01' },
         employmentInfo: { residentialAddress: 'Lusaka', occupation: 'Teacher', employerName: 'MoE' },

@@ -9,7 +9,9 @@ import { findFormMismatches } from '../../../src/utils/documentChecks.js'
 import { evaluateRules } from '../../../src/config/creditRules.js'
 import { computeFacts, expectedFor } from './facts.js'
 import { getPublishedRuleset, rulesetFlatRules } from './rulesets.js'
-import { addressDistanceKm } from '../geo.js'
+import { addressDistance } from '../geo.js'
+import { factReasons, factSources } from './reasons.js'
+import { getCrb } from '../crb/index.js'
 
 const { applications, applicationDocuments, prescreens, locations, crbReports } = schema
 
@@ -39,10 +41,19 @@ export const runPrescreen = async (applicationId, { actor = null } = {}) => {
   if (!application) return null
 
   const applicantPoint = points.find((point) => point.source === 'applicant') || points[0]
-  const locationDistanceKm = applicantPoint ? await addressDistanceKm(application, applicantPoint).catch(() => null) : null
-  const facts = computeFacts(application, documents, { locations: points, crbScore: crb?.score ?? null, locationDistanceKm })
+  const distance = await addressDistance(application, applicantPoint || null).catch(() => ({ km: null, gps: null, address: {}, reason: 'The distance couldn’t be worked out.' }))
+  const facts = computeFacts(application, documents, { locations: points, crbScore: crb?.score ?? null, locationDistanceKm: distance.km, addressFound: distance.address?.found ?? null })
   const ruleset = await getPublishedRuleset()
-  const { outcome, results } = evaluateRules(rulesetFlatRules(ruleset), facts, application.loanType)
+  const { outcome, results: evaluated } = evaluateRules(rulesetFlatRules(ruleset), facts, application.loanType)
+  // Each unknown fact says why, in words an officer can act on; each document figure says
+  // where it came from (read by the AI, or entered by an officer).
+  const reasons = factReasons(application, documents, facts, { aiOn: Boolean(await getAiProvider()), distance, crbProvider: Boolean(getCrb()) })
+  const sources = factSources(application, facts)
+  const results = evaluated.map((result) => ({
+    ...result,
+    ...(reasons[result.fact] && (result.state === 'not_evaluated' || result.operator === 'missing') ? { reason: reasons[result.fact] } : {}),
+    ...(sources[result.fact] ? { source: sources[result.fact] } : {}),
+  }))
 
   let aiReview = null
   let aiError = null
@@ -68,7 +79,8 @@ export const runPrescreen = async (applicationId, { actor = null } = {}) => {
     }
   }
 
-  const values = { rulesetVersion: ruleset.version, facts, ruleResults: results, outcome, aiReview, aiError, updatedAt: new Date() }
+  // Kept with the facts (no column of their own): why each unknown one is unknown, and where each document figure came from.
+  const values = { rulesetVersion: ruleset.version, facts: { ...facts, _notes: { reasons, sources, location: { gps: distance.gps, address: distance.address, km: distance.km } } }, ruleResults: results, outcome, aiReview, aiError, updatedAt: new Date() }
   const [stored] = await db
     .insert(prescreens)
     .values({ applicationId, ...values })

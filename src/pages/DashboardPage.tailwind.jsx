@@ -57,14 +57,23 @@ import { DraftContactConsent } from '@/components/application/DraftContactConsen
 import { useCustomerOptions } from '@/hooks/useCustomerOptions'
 import { CRB_ENABLED, businessInitial, personalInitial } from './apply/formDefaults'
 
-/** The device's position for the location consent, or null if it is refused or unavailable. */
+/**
+ * The device's position, which every submission records: { point } or { error } saying,
+ * in words the applicant can act on, why it couldn't be had.
+ */
 const currentPosition = () =>
   new Promise((resolve) => {
-    if (!navigator.geolocation) return resolve(null)
+    if (!navigator.geolocation) return resolve({ error: 'This browser can’t share a location. Open the application in another browser, such as Chrome, to submit.' })
     navigator.geolocation.getCurrentPosition(
-      (position) => resolve({ latitude: position.coords.latitude, longitude: position.coords.longitude, accuracy: position.coords.accuracy }),
-      () => resolve(null),
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+      (position) => resolve({ point: { latitude: position.coords.latitude, longitude: position.coords.longitude, accuracy: position.coords.accuracy } }),
+      (failure) =>
+        resolve({
+          error:
+            failure.code === 1
+              ? 'We need your location to submit. Allow location for this site (in your browser’s address bar or settings), then press Submit again.'
+              : 'We couldn’t get your location. Turn on location (GPS) on your device, then press Submit again.',
+        }),
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
     )
   })
 
@@ -143,7 +152,6 @@ function DashboardPage() {
   const [submitError, setSubmitError] = useState(null)
   const [validationErrors, setValidationErrors] = useState({})
   const [submittedApplication, setSubmittedApplication] = useState(null)
-  const [shareLocation, setShareLocation] = useState(false)
   // First step, self-service only: staff may see this draft and help finish it.
   const [contactConsent, setContactConsent] = useState(false)
   const customerOptions = useCustomerOptions()
@@ -1108,6 +1116,10 @@ function DashboardPage() {
     setSubmitting(true)
     setSubmitError(null)
     try {
+      // Asked first, so a refusal is explained before anything is uploaded.
+      const position = await currentPosition()
+      if (position.error) throw new Error(position.error)
+      const location = position.point
       const token = await flushRemoteDraft()
       if (!token) {
         throw new Error(
@@ -1116,7 +1128,6 @@ function DashboardPage() {
       }
       await ensureDocumentsUploaded(token)
 
-      const location = shareLocation ? await currentPosition() : null
       const scope = selectedLoanType === 'personal' ? 'personal' : 'business'
       const activeData = selectedLoanType === 'personal' ? personalData : businessData
       const result = await submitApplication(token, {
@@ -1125,7 +1136,7 @@ function DashboardPage() {
         data: extractFiles(activeData, scope).sanitized,
         loanData,
         referralCode: assistedBy ? null : readReferral(),
-        consents: { dataProcessing: true, location: Boolean(location), crb: CRB_ENABLED && allowCrb },
+        consents: { dataProcessing: true, location: true, crb: CRB_ENABLED && allowCrb },
         location,
         assisted: Boolean(assistedBy),
         consentCode: assistedBy ? consentCode.trim() : undefined,
@@ -1318,9 +1329,7 @@ function DashboardPage() {
                 setConsentCode={setConsentCode}
                 setLoanData={setLoanData}
                 setPreviewAttachment={setPreviewAttachment}
-                setShareLocation={setShareLocation}
                 setShowCameraCapture={setShowCameraCapture}
-                shareLocation={shareLocation}
                 totalRepayable={totalRepayable}
                 updateDirectorField={updateDirectorField}
                 updateSectionField={updateSectionField}

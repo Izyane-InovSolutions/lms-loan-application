@@ -53,6 +53,16 @@ export const expectedFor = (loanType, data, slot) => {
 const extracted = (documents, docType, field) =>
   parseAmount(documents.find((document) => document.docType === docType)?.aiAnalysis?.extracted?.[field])
 
+/**
+ * A figure from the documents: what an officer entered by hand (Figures from documents on
+ * the case, kept in checks.figures) wins over what the AI read, so a misread or an unread
+ * document can be put right.
+ */
+const figure = (application, documents, manualKey, docType, field) => {
+  const entered = application.checks?.figures?.[manualKey]?.value
+  return entered !== undefined && entered !== null ? parseAmount(entered) : extracted(documents, docType, field)
+}
+
 // Photos have nothing to extract and nothing for the model to get wrong worth counting.
 const CHECKABLE = (document) => !['passportPhoto', 'directorPassportPhoto'].includes(document.docType)
 
@@ -72,18 +82,18 @@ export const computeFacts = (application, documents, extras = {}) => {
   const birthDate = loanType === 'personal' ? data?.personalInfo?.birthDate : data?.directorInfo?.applicantBirthDate
   facts.applicant_age = wholeYearsSince(birthDate)
 
-  facts.average_monthly_credits = extracted(documents, 'bankStatements', 'averageMonthlyCredits')
+  facts.average_monthly_credits = figure(application, documents, 'averageMonthlyCredits', 'bankStatements', 'averageMonthlyCredits')
   facts.instalment_to_credits = ratio(application.monthlyInstalment, facts.average_monthly_credits)
 
   if (loanType === 'personal') {
     facts.age_at_maturity = facts.applicant_age === null ? null : Number((facts.applicant_age + application.tenure / 12).toFixed(1))
-    facts.net_monthly_pay = extracted(documents, 'payslips', 'netPay')
+    facts.net_monthly_pay = figure(application, documents, 'netPay', 'payslips', 'netPay')
     facts.debt_to_income = ratio(application.monthlyInstalment, facts.net_monthly_pay)
   } else {
     facts.business_age_months = monthsSince(data?.businessInfo?.establishedDate)
-    facts.annual_turnover = extracted(documents, 'latestTaxComplianceReturn', 'turnover')
+    facts.annual_turnover = figure(application, documents, 'annualTurnover', 'latestTaxComplianceReturn', 'turnover')
     facts.loan_to_turnover = ratio(application.amount, facts.annual_turnover)
-    facts.order_value = extracted(documents, 'orderOrInvoice', 'amount')
+    facts.order_value = figure(application, documents, 'orderValue', 'orderOrInvoice', 'amount')
     facts.loan_to_order = ratio(application.amount, facts.order_value)
     facts.directors_count = data?.directorInfo?.directors?.length ?? null
   }
@@ -104,6 +114,8 @@ export const computeFacts = (application, documents, extras = {}) => {
   const locations = extras.locations || []
   facts.location_provided = locations.length > 0
   facts.location_distance_km = extras.locationDistanceKm ?? null
+  // Whether the typed home address could be found on the map at all (null: not looked up).
+  facts.address_found = extras.addressFound ?? null
   facts.crb_score = extras.crbScore ?? null
 
   return facts

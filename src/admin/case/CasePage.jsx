@@ -267,7 +267,7 @@ export function CasePage() {
 
         <aside className="space-y-4">
           <RulesPanel prescreen={prescreen} canRerun={may.work} onRerun={() => post('/prescreen', {}, 'Policy rules run again')} />
-          <AffordabilityPanel application={application} prescreen={prescreen} />
+          <AffordabilityPanel application={application} prescreen={prescreen} onSaveFigures={may.work ? (values) => post('/figures', values, 'Figures saved; the rules ran again') : null} />
           {may.work || may.decide ? <AiReviewPanel prescreen={prescreen} /> : null}
           <StagesPanel
             workflow={workflow}

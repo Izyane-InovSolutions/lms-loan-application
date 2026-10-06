@@ -110,9 +110,7 @@ export function WizardStep(props) {
     setConsentCode,
     setLoanData,
     setPreviewAttachment,
-    setShareLocation,
     setShowCameraCapture,
-    shareLocation,
     totalRepayable,
     updateDirectorField,
     updateSectionField,
@@ -375,8 +373,6 @@ export function WizardStep(props) {
         </Button>
       </div>
       <SubmitConsents
-        shareLocation={shareLocation}
-        onShareLocation={setShareLocation}
         allowCrb={allowCrb}
         onAllowCrb={setAllowCrb}
         crbEnabled={CRB_ENABLED}

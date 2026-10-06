@@ -17,10 +17,10 @@ export const CONSENT_NOTICES = {
       'income, and manage any loan that follows, as described in the terms. Staff access is recorded.',
   },
   location: {
-    version: 'loc-2026-09',
+    version: 'loc-2026-10',
     text:
-      'Share my current location with this application. It helps prevent someone applying in my name and is only seen by ' +
-      'staff reviewing it. This is optional.',
+      'We record your current location when you submit, to help prevent someone applying in your name. Your browser will ' +
+      'ask you to allow it. Only staff reviewing your application see it.',
   },
   // Asked on the first step, before anything is saved to our servers.
   draft_contact: {

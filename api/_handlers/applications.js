@@ -172,9 +172,11 @@ const submitApplication = async (req) => {
     const otpError = await checkOtp({ email: applicant.email, code, purpose: 'consent', req })
     if (otpError) fail(otpError.status, otpError.message.replace('The code entered', 'The customer’s code'), 'invalid_consent_code')
   }
-  const point = wanted.location ? body.location : null
+  // Every submission records where it was made (the notice says so; the browser asks).
+  const point = body.location
   const pointValid =
     point && Number.isFinite(Number(point.latitude)) && Math.abs(Number(point.latitude)) <= 90 && Number.isFinite(Number(point.longitude)) && Math.abs(Number(point.longitude)) <= 180
+  if (!pointValid) fail(400, 'We need your location to submit. Allow location for this site, then submit again.', 'location_required')
 
   // Attribution: staff entering it themselves, else a referral code from the link they followed.
   // A draft an agent started stays theirs when the customer finishes it on their own.
@@ -256,7 +258,7 @@ const submitApplication = async (req) => {
       { type: 'data_processing', granted: true },
       // Agreed on the first step: staff could see the draft and contact them about it.
       ...(draft?.contactConsent ? [{ type: 'draft_contact', granted: true }] : []),
-      { type: 'location', granted: Boolean(wanted.location && pointValid) },
+      { type: 'location', granted: true },
       ...(getCrb() ? [{ type: 'crb', granted: Boolean(wanted.crb) }] : []),
     ].map((consent) => ({
       ...consent,
@@ -278,6 +280,15 @@ const submitApplication = async (req) => {
         note: staff ? 'Captured by the agent when submitting' : null,
         capturedBy: staff?.id ?? null,
         capturedByName: staff?.name ?? null,
+      })
+      // The coordinates on the case timeline too, for staff (with how precise the device said they were).
+      const accuracy = Number.isFinite(Number(point.accuracy)) ? `, accurate to about ${Math.round(Number(point.accuracy))} m` : ''
+      await addEvent(tx, {
+        applicationId: id,
+        actor: staff,
+        type: 'location',
+        message: `GPS location recorded at submission${staff ? ' by the agent’s device' : ''}: ${Number(point.latitude).toFixed(6)}, ${Number(point.longitude).toFixed(6)}${accuracy}`,
+        detail: { latitude: Number(point.latitude), longitude: Number(point.longitude), accuracy: Number(point.accuracy) || null },
       })
     }
     await addEvent(tx, {

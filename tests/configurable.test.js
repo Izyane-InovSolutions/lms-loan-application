@@ -38,7 +38,8 @@ const prepareDraft = async (email, extra = {}) => {
       submissionKey: crypto.randomUUID(),
       loanType: 'personal',
       loanData: { amount: 5000, tenure: 6 },
-      consents: { dataProcessing: true },
+      consents: { dataProcessing: true, location: true },
+      location: { latitude: -15.41, longitude: 28.28, accuracy: 20 },
       data: {
         personalInfo: { firstName: 'Ada', surname: 'Phiri', phone: '971234567', email, nrc: '123456/78/9', birthDate: '1990-05-01' },
         employmentInfo: { residentialAddress: 'Lusaka' },

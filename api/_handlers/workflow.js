@@ -14,6 +14,7 @@ import { rolesWith } from '../_lib/roles.js'
 import { queueLmsSync, syncApplicationToLms } from '../_lib/lms/sync.js'
 import { runPrescreen, loadFactInputs } from '../_lib/prescreen/run.js'
 import { computeFacts } from '../_lib/prescreen/facts.js'
+import { MANUAL_FIGURES } from '../_lib/prescreen/reasons.js'
 import { getDraftRuleset, getPublishedRuleset, listRulesetHistory, publishDraftRuleset, saveDraftRuleset } from '../_lib/prescreen/rulesets.js'
 import { getSetting } from '../_lib/settings.js'
 import { CrbError, getCrb } from '../_lib/crb/index.js'
@@ -165,6 +166,45 @@ const addStaffDocument = async (req, res, { params }) => {
   })
   await addEvent(db, { applicationId: application.id, actor: viewer, type: 'document', message: `Added a document: ${label}` })
   await recordAudit({ req, actor: viewer, action: 'application.document_added', entityType: 'application', entityId: application.id, detail: { label } })
+  return loadCase(application.id, viewer)
+}
+
+const FIGURE_LABELS = { netPay: 'Net monthly pay', averageMonthlyCredits: 'Average monthly bank credits', annualTurnover: 'Annual turnover', orderValue: 'Order or invoice value' }
+
+/**
+ * Figures from documents, entered by an officer: for when the AI couldn't read a payslip,
+ * bank statement, tax return or invoice (no model connected, the service down, an
+ * unreadable file), or read it wrongly. An entered figure is used by the credit rules in
+ * place of the AI's; a blank one goes back to the AI's. Who entered it, and when, is kept
+ * and shown, and the rules run again.
+ */
+const setFigures = async (req, res, { params }) => {
+  const viewer = await requireUser(req, { permission: 'cases.work' })
+  const application = await findVisibleApplication(viewer, params.id)
+  const allowed = MANUAL_FIGURES[application.loanType] || {}
+  const note = text(req.body?.note, 300) || null
+  const figures = { ...(application.checks?.figures || {}) }
+  const changed = []
+  for (const key of Object.keys(allowed)) {
+    if (!(key in (req.body || {}))) continue
+    const raw = req.body[key]
+    if (raw === null || raw === '') {
+      if (figures[key]) changed.push(`${FIGURE_LABELS[key]} cleared`)
+      delete figures[key]
+      continue
+    }
+    const value = Number(String(raw).replace(/[^0-9.]/g, ''))
+    if (!Number.isFinite(value) || value <= 0 || value > 1e9) fail(400, `${FIGURE_LABELS[key]} must be an amount in kwacha.`, 'invalid_figure')
+    figures[key] = { value, by: viewer.id, byName: viewer.name, at: new Date().toISOString(), note }
+    changed.push(`${FIGURE_LABELS[key]} K${value.toLocaleString()}`)
+  }
+  if (!changed.length) fail(400, 'Enter at least one figure.', 'nothing_to_save')
+
+  const db = await getDb()
+  await db.update(applications).set({ checks: { ...(application.checks || {}), figures }, updatedAt: new Date() }).where(eq(applications.id, application.id))
+  await addEvent(db, { applicationId: application.id, actor: viewer, type: 'note', message: `Figures from documents entered: ${changed.join(', ')}${note ? `. ${note}` : ''}` })
+  await recordAudit({ req, actor: viewer, action: 'application.figures_entered', entityType: 'application', entityId: application.id, detail: { reference: application.reference, figures: Object.fromEntries(Object.entries(figures).map(([key, entry]) => [key, entry.value])) } })
+  await runPrescreen(application.id, { actor: viewer })
   return loadCase(application.id, viewer)
 }
 
@@ -602,6 +642,7 @@ export const workflowRoutes = [
   ['POST', '/applications/:id/actions', act],
   ['POST', '/applications/:id/documents', addStaffDocument],
   ['POST', '/applications/:id/prescreen', rerunPrescreen],
+  ['POST', '/applications/:id/figures', setFigures],
   ['GET', '/applications/:id/facts', previewFacts],
   ['POST', '/applications/:id/visits', logVisit],
   ['POST', '/applications/:id/crb', runCreditCheck],
