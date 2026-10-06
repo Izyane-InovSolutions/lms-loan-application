@@ -5,6 +5,7 @@ import { auditRoutes } from '../_handlers/audit.js'
 import { overviewRoutes } from '../_handlers/overview.js'
 import { applicationRoutes } from '../_handlers/applications.js'
 import { workflowRoutes } from '../_handlers/workflow.js'
+import { stageDocumentRoutes } from '../_handlers/stageDocuments.js'
 import { dashboardRoutes } from '../_handlers/dashboard.js'
 import { demoRoutes } from '../_handlers/demo.js'
 import { settingsRoutes } from '../_handlers/settings.js'
@@ -32,6 +33,7 @@ export default createRouter([
   ...overviewRoutes,
   ...applicationRoutes,
   ...workflowRoutes,
+  ...stageDocumentRoutes,
   ...dashboardRoutes,
   ...demoRoutes,
   ...settingsRoutes,

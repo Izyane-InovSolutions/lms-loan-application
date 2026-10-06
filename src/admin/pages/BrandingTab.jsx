@@ -22,10 +22,15 @@ export function BrandingTab({ initial, notify }) {
   // { panel, message }: shown under the panel whose action failed.
   const [error, setError] = useState(null)
   const fileRef = useRef(null)
+  const letterheadOf = (source) => Object.fromEntries(LETTERHEAD_FIELDS.map(({ key }) => [key, source?.[key] || (key === 'colour' ? DEFAULT_COLOUR : '')]))
+  const [letterhead, setLetterhead] = useState(() => letterheadOf(initial))
+  const [savedLetterhead, setSavedLetterhead] = useState(() => letterheadOf(initial))
 
   useEffect(() => {
     setName(initial?.name || DEFAULT_BRAND_NAME)
     setSavedName(initial?.name || DEFAULT_BRAND_NAME)
+    setLetterhead(letterheadOf(initial))
+    setSavedLetterhead(letterheadOf(initial))
   }, [initial])
 
   const run = async (kind, action, message) => {
@@ -36,7 +41,7 @@ export function BrandingTab({ initial, notify }) {
       await branding.refresh()
       notify(message)
     } catch (runError) {
-      setError({ panel: kind === 'name' ? 'name' : 'logo', message: runError.message })
+      setError({ panel: kind === 'name' || kind === 'letterhead' ? kind : 'logo', message: runError.message })
     } finally {
       setBusy(null)
     }
@@ -53,6 +58,18 @@ export function BrandingTab({ initial, notify }) {
       'Name saved'
     )
 
+  const saveLetterhead = () =>
+    run(
+      'letterhead',
+      async () => {
+        const response = await api('/settings/branding', { method: 'PUT', body: { name: savedName, ...letterhead } })
+        setLetterhead(letterheadOf(response.branding))
+        setSavedLetterhead(letterheadOf(response.branding))
+      },
+      'Letterhead saved'
+    )
+  const letterheadDirty = JSON.stringify(letterhead) !== JSON.stringify(savedLetterhead)
+
   const upload = (event) => {
     const file = event.target.files?.[0]
     event.target.value = ''
@@ -61,7 +78,8 @@ export function BrandingTab({ initial, notify }) {
       'upload',
       async () => {
         const form = new FormData()
-        form.append('file', file)
+        // Documents (PDFs) can't carry WebP, so a WebP logo is stored as PNG.
+        form.append('file', file.type === 'image/webp' ? await webpToPng(file) : file)
         const response = await fetch('/api/v1/admin/branding/logo', { method: 'POST', body: form, credentials: 'same-origin' })
         const result = await response.json().catch(() => ({}))
         if (!response.ok) throw new Error(result.message || 'The upload failed.')
@@ -99,7 +117,7 @@ export function BrandingTab({ initial, notify }) {
           </span>
           <div className="space-y-2 text-sm text-muted-foreground">
             <p>{branding.customLogo ? 'Your uploaded logo.' : 'The default logo.'}</p>
-            <p>A square PNG, JPG or WebP image of 1 MB or less works best, at least 256 × 256 pixels.</p>
+            <p>A square PNG, JPG or WebP image of 1 MB or less works best, at least 256 × 256 pixels. Documents can only carry PNG and JPG logos.</p>
           </div>
         </div>
         <FormError message={error?.panel === 'logo' ? error.message : ''} />
@@ -117,6 +135,61 @@ export function BrandingTab({ initial, notify }) {
           </Button>
         </div>
       </Panel>
+
+      <Panel
+        title="Letterhead"
+        description="At the top of every offer letter, agreement and stage document the workspace writes: the logo and name on the left, these details on the right, and a band of the brand colour. Uploaded PDF templates keep their own letterhead."
+      >
+        <div className="grid gap-4 sm:grid-cols-2">
+          {LETTERHEAD_FIELDS.map((field) => (
+            <Field key={field.key} id={`letterhead-${field.key}`} label={field.label} hint={field.hint}>
+              {field.key === 'colour' ? (
+                <div className="flex items-center gap-2">
+                  <input
+                    type="color"
+                    aria-label="Pick the brand colour"
+                    value={/^#[0-9a-f]{6}$/i.test(letterhead.colour) ? letterhead.colour : DEFAULT_COLOUR}
+                    onChange={(event) => setLetterhead((prev) => ({ ...prev, colour: event.target.value }))}
+                    className="h-10 w-12 cursor-pointer rounded border bg-background p-1"
+                  />
+                  <Input id="letterhead-colour" value={letterhead.colour} maxLength={7} onChange={(event) => setLetterhead((prev) => ({ ...prev, colour: event.target.value }))} className="font-mono" />
+                </div>
+              ) : (
+                <Input id={`letterhead-${field.key}`} type={field.type || 'text'} value={letterhead[field.key]} maxLength={field.max} placeholder={field.placeholder} onChange={(event) => setLetterhead((prev) => ({ ...prev, [field.key]: event.target.value }))} />
+              )}
+            </Field>
+          ))}
+        </div>
+        <p className="mt-3 text-sm text-muted-foreground">Preview it from Settings → Documents, on any written template.</p>
+        <FormError message={error?.panel === 'letterhead' ? error.message : ''} />
+        <div className="mt-5 flex flex-wrap items-center justify-end gap-2 border-t pt-4">
+          <Button size="sm" onClick={saveLetterhead} disabled={busy !== null || !letterheadDirty}>
+            {busy === 'letterhead' ? <Loader2 className="animate-spin" /> : null}
+            Save
+          </Button>
+        </div>
+      </Panel>
     </div>
   )
 }
+
+const DEFAULT_COLOUR = '#1f4e79'
+
+/** A WebP image redrawn as a PNG file of the same size, in the browser. */
+const webpToPng = async (file) => {
+  const bitmap = await createImageBitmap(file)
+  const canvas = document.createElement('canvas')
+  canvas.width = bitmap.width
+  canvas.height = bitmap.height
+  canvas.getContext('2d').drawImage(bitmap, 0, 0)
+  const blob = await new Promise((resolve, reject) => canvas.toBlob((result) => (result ? resolve(result) : reject(new Error('The logo couldn’t be converted. Upload a PNG or JPG.'))), 'image/png'))
+  return new File([blob], file.name.replace(/\.webp$/i, '') + '.png', { type: 'image/png' })
+}
+
+const LETTERHEAD_FIELDS = [
+  { key: 'address', label: 'Address', placeholder: 'Plot 123, Cairo Road, Lusaka', max: 200, hint: 'One line.' },
+  { key: 'phone', label: 'Phone', placeholder: '+260 211 000 000', max: 40 },
+  { key: 'email', label: 'Email', type: 'email', placeholder: 'loans@example.com', max: 120 },
+  { key: 'website', label: 'Website', placeholder: 'www.example.com', max: 120 },
+  { key: 'colour', label: 'Brand colour', hint: 'Used for the name and the bands.' },
+]

@@ -1,17 +1,19 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
-import { AlertTriangle, Check, ExternalLink, FileUp, Loader2, Rocket, Save, Undo2 } from 'lucide-react'
+import { Archive, AlertTriangle, ArchiveRestore, Check, ExternalLink, FileUp, Loader2, Plus, Rocket, Save, Undo2 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
-import { TEMPLATE_KINDS } from '@/config/templates'
+import { documentKindKey } from '@/config/templates'
 import { api } from '../api'
 import { Field, FormError, Panel, dateTime } from '../components'
 
 /**
- * Settings → Documents: the offer letter and loan agreement every approved loan gets.
- * Either written here with {{fields}}, or the lender's own PDF uploaded. A draft is
- * previewed with sample values, then published; customers only ever get a published one.
+ * Settings → Documents: the offer letter and facility letter every approved loan gets, and
+ * the lender's own documents (a debit order mandate, a guarantee form), which the workflow
+ * sends at the stages that list them. Each is either written here with {{fields}}, or the
+ * lender's own PDF uploaded. A draft is previewed with sample values, then published;
+ * customers only ever get a published one.
  */
 export function DocumentTemplatesTab({ notify }) {
   const [state, setState] = useState({ status: 'loading' })
@@ -36,12 +38,114 @@ export function DocumentTemplatesTab({ notify }) {
   }
   if (state.status === 'error') return <FormError message={state.message} />
 
+  const describeKind = (kind) =>
+    kind.builtIn
+      ? kind
+      : {
+          ...kind,
+          description: `${kind.description ? `${kind.description} ` : ''}${
+            kind.requiresSignature ? 'The applicant signs it online, or prints, signs and uploads it.' : 'Sent for the applicant to read and keep.'
+          } Sent at the workflow stages that list it.`,
+        }
+
   return (
     <div className="space-y-6">
-      {Object.entries(TEMPLATE_KINDS).map(([kind, meta]) => (
-        <TemplateEditor key={kind} kind={kind} meta={meta} entry={state.kinds[kind]} fields={state.fields} signatureField={state.signatureField} notify={notify} onChanged={load} />
-      ))}
+      <DocumentKinds custom={state.custom} notify={notify} onChanged={load} />
+      {state.kindList
+        .filter((kind) => !kind.retired)
+        .map((kind) => (
+          <TemplateEditor key={kind.key} kind={kind.key} meta={describeKind(kind)} entry={state.kinds[kind.key]} fields={state.fields} signatureField={state.signatureField} notify={notify} onChanged={load} />
+        ))}
     </div>
+  )
+}
+
+/**
+ * The lender's own document kinds: add one, say whether the applicant signs it, retire it
+ * once no workflow stage sends it. The whole list is saved as the `documents` setting.
+ */
+function DocumentKinds({ custom, notify, onChanged }) {
+  const [label, setLabel] = useState('')
+  const [requiresSignature, setRequiresSignature] = useState(true)
+  const [busy, setBusy] = useState(null)
+  const [error, setError] = useState('')
+
+  const save = async (key, kinds, message) => {
+    setBusy(key)
+    setError('')
+    try {
+      await api('/settings/documents', { method: 'PUT', body: { kinds } })
+      notify(message)
+      onChanged()
+      return true
+    } catch (saveError) {
+      setError(saveError.message)
+      return false
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const change = (kind, changes, message) => save(kind.key, custom.map((entry) => (entry.key === kind.key ? { ...entry, ...changes } : entry)), message)
+
+  const add = async (event) => {
+    event.preventDefault()
+    const name = label.trim()
+    if (await save('add', [...custom, { key: documentKindKey(name), label: name, requiresSignature }], `${name} added. Write its wording below, then add it to a workflow stage.`)) {
+      setLabel('')
+      setRequiresSignature(true)
+    }
+  }
+
+  return (
+    <Panel title="Your own documents" description="Documents besides the offer letter and facility letter, such as a debit order mandate or a guarantee form. Choose which workflow stage sends each one in Workflow.">
+      <div className="space-y-4">
+        {custom.length ? (
+          <ul className="divide-y rounded-lg border">
+            {custom.map((kind) => (
+              <li key={kind.key} className={cn('flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 text-sm', kind.retired && 'text-muted-foreground')}>
+                <span className="min-w-0 flex-1">
+                  <span className="block font-medium">{kind.label}</span>
+                  {kind.retired ? <span className="block text-xs">Retired: no longer sent. Documents already sent keep its name.</span> : null}
+                </span>
+                {!kind.retired ? (
+                  <label className="flex items-center gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      className="size-4 accent-[hsl(var(--primary))]"
+                      checked={Boolean(kind.requiresSignature)}
+                      disabled={Boolean(busy)}
+                      onChange={(event) => change(kind, { requiresSignature: event.target.checked }, event.target.checked ? `${kind.label} needs a signature` : `${kind.label} no longer needs a signature`)}
+                    />
+                    Needs the applicant’s signature
+                  </label>
+                ) : null}
+                <Button variant="ghost" size="sm" disabled={Boolean(busy)} onClick={() => change(kind, { retired: !kind.retired }, kind.retired ? `${kind.label} brought back` : `${kind.label} retired`)}>
+                  {busy === kind.key ? <Loader2 className="animate-spin" /> : kind.retired ? <ArchiveRestore /> : <Archive />}
+                  {kind.retired ? 'Bring back' : 'Retire'}
+                </Button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-sm text-muted-foreground">None yet.</p>
+        )}
+        <form onSubmit={add} className="flex flex-wrap items-end gap-3">
+          <Field id="new-document" label="Add a document">
+            <Input id="new-document" value={label} maxLength={80} placeholder="e.g. Debit order mandate" onChange={(event) => setLabel(event.target.value)} className="w-72" />
+          </Field>
+          <label className="flex h-9 items-center gap-2 text-sm">
+            <input type="checkbox" className="size-4 accent-[hsl(var(--primary))]" checked={requiresSignature} onChange={(event) => setRequiresSignature(event.target.checked)} />
+            Needs the applicant’s signature
+          </label>
+          <Button type="submit" variant="outline" disabled={label.trim().length < 2 || Boolean(busy)}>
+            {busy === 'add' ? <Loader2 className="animate-spin" /> : <Plus />}
+            Add
+          </Button>
+        </form>
+        <FormError message={error} />
+      </div>
+    </Panel>
   )
 }
 
@@ -171,7 +275,11 @@ function TemplateEditor({ kind, meta, entry, fields, signatureField, notify, onC
               <Field id={`${kind}-title`} label="Title">
                 <Input id={`${kind}-title`} value={title} maxLength={200} onChange={(event) => setTitle(event.target.value)} />
               </Field>
-              <Field id={`${kind}-body`} label="Wording" hint="Each line prints as typed; a blank line starts a new paragraph. “## ” makes a heading and “- ” a bullet.">
+              <Field
+                id={`${kind}-body`}
+                label="Wording"
+                hint={`Each line prints as typed; a blank line starts a new paragraph. “## ” makes a heading and “- ” a bullet.${meta.requiresSignature !== false ? ` A line holding only {{${signatureField}}} is where the customer signs.` : ''}`}
+              >
                 <textarea
                   id={`${kind}-body`}
                   ref={bodyRef}
@@ -208,8 +316,12 @@ function TemplateEditor({ kind, meta, entry, fields, signatureField, notify, onC
             <div className="rounded-lg border bg-muted/30 p-4 text-sm text-muted-foreground">
               <p>
                 Use your own PDF. If it has fillable form fields, name them after the fields (for example <span className="font-mono text-foreground">customer_name</span> or{' '}
-                <span className="font-mono text-foreground">{'{{amount}}'}</span>) and they are filled in for each loan. Add a field called{' '}
-                <span className="font-mono text-foreground">{signatureField}</span> where the customer’s signature should appear.
+                <span className="font-mono text-foreground">{'{{amount}}'}</span>) and they are filled in for each loan.
+                {meta.requiresSignature !== false ? (
+                  <>
+                    {' '}Add a field called <span className="font-mono text-foreground">{signatureField}</span> where the customer’s signature should appear.
+                  </>
+                ) : null}
               </p>
               <p className="mt-2">A PDF without fields is used as it is, with a page of the loan’s terms added at the end. Every signed copy also gets a signature record page.</p>
             </div>

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { ArrowLeft, Check, CircleAlert, FileText, Inbox, Loader2, LogOut, MailCheck, Paperclip, Send, Upload } from 'lucide-react'
+import { ArrowLeft, Check, CircleAlert, FileText, Inbox, Loader2, LogOut, MailCheck, Paperclip, PenLine, Printer, Send, Upload } from 'lucide-react'
 
 import { Logo } from '@/components/brand/Logo'
 import { useBranding } from '@/components/brand/BrandingProvider'
@@ -349,6 +349,7 @@ function ApplicationDetail({ id, email, onBack }) {
 
           {state.application.offer ? <OfferPanel application={state.application} documents={state.offerDocuments || []} email={email} onDone={load} /> : null}
           {!state.application.offer && state.offerDocuments?.length ? <OfferDocuments documents={state.offerDocuments} applicationId={state.application.id} title="Your loan documents" /> : null}
+          {state.stageDocuments?.length ? <StageDocuments application={state.application} documents={state.stageDocuments} email={email} onDone={load} /> : null}
           {state.application.infoRequest ? <RespondToRequest application={state.application} onDone={load} /> : null}
 
           <section className="mt-10">
@@ -488,14 +489,14 @@ function OfferPanel({ application, documents, email, onDone }) {
       {documents.length ? (
         <OfferDocuments documents={documents} applicationId={application.id} title="Read before you accept" opened={opened} onOpen={(id) => setOpened((prev) => ({ ...prev, [id]: true }))} />
       ) : signing ? (
-        <p className="mt-6 text-sm text-muted-foreground">Your offer letter and loan agreement are being prepared. Refresh in a minute.</p>
+        <p className="mt-6 text-sm text-muted-foreground">Your offer letter is being prepared. Refresh in a minute.</p>
       ) : null}
 
       <label className="mt-5 flex cursor-pointer items-start gap-3 text-sm">
         <input type="checkbox" checked={agreed} onChange={(event) => setAgreed(event.target.checked)} className="mt-0.5 size-4 accent-[hsl(var(--primary))]" />
         <span>
           {signing
-            ? 'I have read the offer letter and loan agreement. I accept this loan on these terms, and agree to repay it in the monthly instalments shown.'
+            ? 'I have read the offer letter. I accept this loan on these terms, and agree to repay it in the monthly instalments shown.'
             : 'I accept this loan on these terms, and agree to repay it in the monthly instalments shown.'}
         </span>
       </label>
@@ -558,6 +559,216 @@ function OfferPanel({ application, documents, email, onDone }) {
         )}
       </div>
     </section>
+  )
+}
+
+const CLOSED_STATUSES = ['declined', 'withdrawn', 'expired']
+
+/** Where a document sent to the applicant stands, in their words. */
+const documentStatus = (document) =>
+  ({
+    signed: 'Signed',
+    received: 'Received, thank you',
+    uploaded: 'Signed copy sent: we’re checking it',
+  })[document.status] || (document.requiresSignature ? (document.required ? 'Please sign: we need this to continue' : 'Please sign') : 'To read and keep')
+
+/**
+ * Documents we sent the applicant at a stage of their application (besides the offer):
+ * each to read, and those marked to sign signed online with an emailed code, or printed,
+ * signed and uploaded.
+ */
+function StageDocuments({ application, documents, email, onDone }) {
+  const [open, setOpen] = useState(null)
+  const closed = CLOSED_STATUSES.includes(application.status)
+  const waiting = documents.some((document) => !document.done && document.requiresSignature && document.status !== 'uploaded')
+  return (
+    <section aria-labelledby="stage-documents-title" className={cn('mt-8 rounded-xl border p-5', waiting && !closed && 'border-primary/40 bg-primary/5')}>
+      <h2 id="stage-documents-title" className="flex items-center gap-2 font-semibold">
+        <FileText className="size-4 text-primary" aria-hidden="true" />
+        Documents
+      </h2>
+      <p className="mt-1 text-sm text-muted-foreground">
+        {waiting && !closed ? 'Read each document. Sign those marked to sign here, or print, sign and upload a copy.' : 'Documents we sent you about this application.'}
+      </p>
+      <ul className="mt-4 space-y-3">
+        {documents.map((document) => {
+          const actionable = !closed && document.requiresSignature && !document.done && document.status !== 'uploaded'
+          const href = `/api/v1/applications/${application.id}/documents/${document.id}`
+          return (
+            <li key={document.id} className="rounded-lg border bg-card p-4 text-sm">
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="min-w-0 flex-1">
+                  <span className="block font-medium">{document.label}</span>
+                  <span className={cn('block text-xs', document.done ? 'text-success' : 'text-muted-foreground')}>{documentStatus(document)}</span>
+                </span>
+                {document.signedDocumentId ? (
+                  <a href={`/api/v1/applications/${application.id}/documents/${document.signedDocumentId}`} target="_blank" rel="noreferrer" className="shrink-0 font-medium text-primary underline-offset-4 hover:underline">
+                    Download signed copy
+                  </a>
+                ) : (
+                  <a href={href} target="_blank" rel="noreferrer" className="shrink-0 font-medium text-primary underline-offset-4 hover:underline">
+                    Read
+                  </a>
+                )}
+              </div>
+              {actionable ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <Button size="sm" variant={open?.id === document.id && open.mode === 'sign' ? 'default' : 'outline'} onClick={() => setOpen({ id: document.id, mode: 'sign' })}>
+                    <PenLine />
+                    Sign online
+                  </Button>
+                  <Button size="sm" variant={open?.id === document.id && open.mode === 'upload' ? 'default' : 'ghost'} onClick={() => setOpen({ id: document.id, mode: 'upload' })}>
+                    <Printer />
+                    Print and sign instead
+                  </Button>
+                </div>
+              ) : null}
+              {actionable && open?.id === document.id ? (
+                open.mode === 'sign' ? (
+                  <SignDocument application={application} document={document} email={email} onDone={onDone} />
+                ) : (
+                  <UploadSignedCopy application={application} document={document} href={href} onDone={onDone} />
+                )
+              ) : null}
+            </li>
+          )
+        })}
+      </ul>
+    </section>
+  )
+}
+
+/** Signing one document online: a drawn or typed signature, confirmed with a code we email. */
+function SignDocument({ application, document, email, onDone }) {
+  const [agreed, setAgreed] = useState(false)
+  const [name, setName] = useState('')
+  const [signature, setSignature] = useState(null)
+  const [code, setCode] = useState('')
+  const [codeState, setCodeState] = useState({ status: 'idle', message: '' })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+
+  const sendCode = async () => {
+    setCodeState({ status: 'sending', message: '' })
+    const response = await fetch('/api/otp/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, purpose: 'sign' }) })
+    const result = await response.json().catch(() => ({}))
+    setCodeState(response.ok ? { status: 'sent', message: `We emailed a code to ${email}.` } : { status: 'error', message: result.message || 'The code could not be sent.' })
+  }
+
+  const sign = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      await api(`/me/applications/${application.id}/stage-documents/${document.id}/sign`, { method: 'POST', body: { agreed: true, code, signature: { name: name.trim(), ...signature } } })
+      onDone()
+    } catch (signError) {
+      setError(signError.message)
+      setBusy(false)
+    }
+  }
+
+  const ready = agreed && name.trim().length >= 3 && signature && code.length === 6
+  const id = `sign-${document.id}`
+  return (
+    <div className="mt-4 space-y-4 rounded-lg border bg-background p-4">
+      <label className="flex cursor-pointer items-start gap-3">
+        <input type="checkbox" checked={agreed} onChange={(event) => setAgreed(event.target.checked)} className="mt-0.5 size-4 accent-[hsl(var(--primary))]" />
+        <span>I have read the {document.label.toLowerCase()} and agree to it.</span>
+      </label>
+      <div className="space-y-1.5">
+        <Label htmlFor={`${id}-name`}>Your full name</Label>
+        <Input id={`${id}-name`} value={name} maxLength={100} autoComplete="name" onChange={(event) => setName(event.target.value)} />
+      </div>
+      <div className="space-y-1.5">
+        <p className="font-medium">Your signature</p>
+        <SignaturePad name={name} onChange={setSignature} />
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor={`${id}-code`}>Code from your email</Label>
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            id={`${id}-code`}
+            inputMode="numeric"
+            maxLength={6}
+            placeholder="6-digit code"
+            value={code}
+            onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 6))}
+            className="w-40 text-center font-semibold tracking-[0.3em]"
+          />
+          <Button type="button" variant="outline" size="sm" onClick={sendCode} disabled={codeState.status === 'sending'}>
+            {codeState.status === 'sending' ? <Loader2 className="animate-spin" /> : <MailCheck />}
+            {codeState.status === 'sent' ? 'Send another code' : 'Email me a code'}
+          </Button>
+        </div>
+        {codeState.message ? <p className={cn('text-xs', codeState.status === 'error' ? 'text-destructive' : 'text-muted-foreground')}>{codeState.message}</p> : null}
+      </div>
+      {error ? (
+        <p role="alert" className="font-medium text-destructive">
+          {error}
+        </p>
+      ) : null}
+      <Button onClick={sign} disabled={!ready || busy}>
+        {busy ? <Loader2 className="animate-spin" /> : <Check />}
+        Sign
+      </Button>
+      <p className="text-xs text-muted-foreground">Signing adds your signature, the time and a record of this device to a signed copy, which you can download afterwards.</p>
+    </div>
+  )
+}
+
+/** Printing, signing and uploading a document instead: a scan or photo, which we check. */
+function UploadSignedCopy({ application, document, href, onDone }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const fileInput = useRef(null)
+
+  const upload = async (event) => {
+    const file = event.target.files?.[0]
+    event.target.value = ''
+    if (!file) return
+    if (file.size > 4 * 1024 * 1024) {
+      setError('That file is larger than 4 MB. Upload a smaller scan or photo.')
+      return
+    }
+    setBusy(true)
+    setError('')
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const response = await fetch(`/api/v1/me/applications/${application.id}/stage-documents/${document.id}/upload`, { method: 'POST', body: form, credentials: 'same-origin' })
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(body.message || 'The upload failed. Try again.')
+      onDone()
+    } catch (uploadError) {
+      setError(uploadError.message)
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="mt-4 space-y-3 rounded-lg border bg-background p-4">
+      <ol className="list-decimal space-y-1 pl-5">
+        <li>
+          <a href={href} target="_blank" rel="noreferrer" className="font-medium text-primary underline-offset-4 hover:underline">
+            Download the {document.label.toLowerCase()}
+          </a>{' '}
+          and print it.
+        </li>
+        <li>Sign it where it asks.</li>
+        <li>Upload a scan of the signed document as a PDF, or a clear photo (JPG or PNG) if it is a single page. Up to 4 MB.</li>
+      </ol>
+      {error ? (
+        <p role="alert" className="font-medium text-destructive">
+          {error}
+        </p>
+      ) : null}
+      <input ref={fileInput} type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" className="sr-only" onChange={upload} aria-label={`Upload the signed ${document.label.toLowerCase()}`} />
+      <Button variant="outline" onClick={() => fileInput.current?.click()} disabled={busy}>
+        {busy ? <Loader2 className="animate-spin" /> : <Upload />}
+        Upload the signed copy
+      </Button>
+      <p className="text-xs text-muted-foreground">We check it and let you know if anything is missing. You can also hand in the signed paper copy.</p>
+    </div>
   )
 }
 

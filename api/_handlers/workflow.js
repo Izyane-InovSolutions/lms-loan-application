@@ -26,6 +26,7 @@ import { creditStaffIds, followerIds, notifyUsers } from '../_lib/notify.js'
 import { textCustomer } from '../_lib/sms.js'
 import { WITHDRAWABLE_STATUSES } from '../../src/config/applications.js'
 import { ensureOfferDocuments } from '../_lib/offerDocuments.js'
+import { issueStageDocuments } from '../_lib/stageDocuments.js'
 import { FACTS, evaluateRules, flattenPolicies, rulesToPolicies, validatePolicies } from '../../src/config/creditRules.js'
 
 const { applications, applicationDocuments, prescreens, users, locations, crbReports, consents } = schema
@@ -38,6 +39,10 @@ const { applications, applicationDocuments, prescreens, users, locations, crbRep
 const handToLms = async (application, actor = null) => {
   if (await queueLmsSync(application)) afterResponse('LMS hand-off', () => syncApplicationToLms(application.id, actor ? { actor } : undefined))
 }
+
+/** Makes and emails the documents the case's new state sends the applicant, if it sends any (stageDocuments.js). */
+const sendStageDocuments = (req, application, actor = null) =>
+  afterResponse('stage documents', () => issueStageDocuments(application.id, { origin: appOrigin(req), actor, req }))
 
 const notifyCustomer = (req, application, notify) =>
   afterResponse('customer email', async () => {
@@ -114,8 +119,9 @@ const act = async (req, res, { params }) => {
   await recordAudit({ req, actor: viewer, action: `application.${input.action}`, entityType: 'application', entityId: application.id, detail: { reference: application.reference, status: updated.status } })
 
   if (result.consumeOtpFor) await consumeOtp('offer', result.consumeOtpFor)
-  // The offer letter and agreement are made from the published templates straight away.
+  // The offer letter is made from the published template straight away.
   if (result.approved) afterResponse('offer documents', () => ensureOfferDocuments(updated.id))
+  if (updated.state !== application.state) sendStageDocuments(req, updated, viewer)
   notifyStaffAbout(req, viewer, input.action, result, updated)
   if (result.notify) notifyCustomer(req, updated, result.notify)
   // Whichever state the workflow marks for it (Workflow editor) hands the loan to the LMS.
@@ -378,7 +384,7 @@ const acceptOffer = async (req, res, { params }) => {
   const { requireSignature } = await getSetting('offers')
   let signed = null
   if (requireSignature) {
-    if (req.body?.agreed !== true) fail(400, 'Confirm that you have read the offer letter and loan agreement.', 'agreement_required')
+    if (req.body?.agreed !== true) fail(400, 'Confirm that you have read the offer letter.', 'agreement_required')
     const signature = parseSignature(req.body?.signature)
     const code = text(req.body?.code, 12)
     if (!code) fail(400, 'Enter the code we emailed you.', 'code_required')
@@ -418,6 +424,7 @@ const acceptOffer = async (req, res, { params }) => {
   afterResponse('staff notifications', async () =>
     notifyUsers(followerIds(application).length ? followerIds(application) : await creditStaffIds(), { type: 'offer_accepted', title: `${application.reference}: offer accepted`, body: 'Ready for payout.', applicationId: application.id }, { origin: appOrigin(req) })
   )
+  sendStageDocuments(req, accepted.application, viewer)
   if (accepted.target.handToLms) await handToLms(accepted.application)
   return { ok: true }
 }

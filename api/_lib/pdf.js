@@ -4,7 +4,7 @@ import { SIGNATURE_FIELD, fieldKeyFor, fillPlaceholders } from '../../src/config
 import { DEFAULT_BRAND_NAME } from '../../src/config/branding.js'
 
 /*
- * The PDFs the workspace makes: offer letters and loan agreements from a written template
+ * The PDFs the workspace makes: offer letters and facility letters from a written template
  * or an uploaded PDF, and the signature page added when the customer signs. Pure
  * JavaScript (pdf-lib), so it runs the same on Vercel and a plain Node server.
  *
@@ -43,8 +43,12 @@ const safeFor = (font) => {
       .join('')
 }
 
-/** Lays text out top to bottom across as many A4 pages as it needs. */
-const createWriter = async (doc) => {
+// Room kept at the top and bottom of each page for the letterhead.
+const HEADER_SPACE = 74
+const FOOTER_SPACE = 22
+
+/** Lays text out top to bottom across as many A4 pages as it needs. `letterhead` keeps room for one. */
+const createWriter = async (doc, { letterhead = false } = {}) => {
   const fonts = {
     regular: await doc.embedFont(StandardFonts.Helvetica),
     bold: await doc.embedFont(StandardFonts.HelveticaBold),
@@ -55,12 +59,14 @@ const createWriter = async (doc) => {
   let page = null
   let y = 0
 
+  const top = letterhead ? HEADER_SPACE : 0
+  const bottom = MARGIN + 24 + (letterhead ? FOOTER_SPACE : 0)
   const newPage = () => {
     page = doc.addPage(A4)
-    y = A4[1] - MARGIN
+    y = A4[1] - MARGIN - top
   }
   const ensure = (height) => {
-    if (!page || y - height < MARGIN + 24) newPage()
+    if (!page || y - height < bottom) newPage()
   }
 
   const wrap = (text, font, size, maxWidth) => {
@@ -143,6 +149,27 @@ const createWriter = async (doc) => {
       }
       y -= 4
     },
+    /**
+     * Where the customer signs: a box for the signature with their name under it, and a
+     * date line filled in when they sign. Returns the spot signPdf draws into.
+     */
+    signatureBlock: ({ heading = 'Signed by the borrower', name }) => {
+      ensure(132)
+      y -= 8
+      page.drawText(safe(heading), { x: MARGIN, y: y - 11, size: 11, font: fonts.bold, color: INK })
+      y -= 24
+      const box = { width: 220, height: 64 }
+      const boxBottom = y - box.height
+      page.drawRectangle({ x: MARGIN, y: boxBottom, ...box, borderColor: RULE, borderWidth: 0.75, borderDashArray: [3, 3] })
+      page.drawText('Signature', { x: MARGIN + 6, y: boxBottom + 6, size: 7, font: fonts.regular, color: MUTED })
+      const dateX = MARGIN + box.width + 40
+      page.drawLine({ start: { x: dateX, y: boxBottom }, end: { x: dateX + 150, y: boxBottom }, thickness: 0.75, color: RULE })
+      page.drawText('Date', { x: dateX, y: boxBottom - 11, size: 8, font: fonts.regular, color: MUTED })
+      page.drawText(safe(name || ''), { x: MARGIN, y: boxBottom - 14, size: 10, font: fonts.bold, color: INK })
+      y = boxBottom - 30
+      const pageIndex = doc.getPages().indexOf(page)
+      return { pageIndex, x: MARGIN + 4, y: boxBottom + 4, width: box.width - 8, height: box.height - 8, date: { x: dateX, y: boxBottom + 5 } }
+    },
     image: async (png, { maxWidth = 220, maxHeight = 80 } = {}) => {
       const embedded = await doc.embedPng(png)
       const scale = Math.min(maxWidth / embedded.width, maxHeight / embedded.height, 1)
@@ -151,6 +178,51 @@ const createWriter = async (doc) => {
       page.drawImage(embedded, { x: MARGIN, y: y - drawn.height, ...drawn })
       y -= drawn.height + 8
     },
+  }
+}
+
+/** A brand colour from Settings → Branding ("#1f4e79"), or the default ink. */
+const colourOf = (hex) => {
+  const match = /^#?([0-9a-f]{6})$/i.exec(String(hex || ''))
+  if (!match) return INK
+  const value = parseInt(match[1], 16)
+  return rgb(((value >> 16) & 255) / 255, ((value >> 8) & 255) / 255, (value & 255) / 255)
+}
+
+/**
+ * The lender's letterhead on every page: logo and name at the top left, address and
+ * contacts at the top right, a band of the brand colour under it, and a thinner one above
+ * the footer. `letterhead` is { name, logo: { bytes, contentType } | null, address, contacts, colour }.
+ */
+const addLetterhead = async (doc, fonts, letterhead) => {
+  const colour = colourOf(letterhead.colour)
+  const safe = safeFor(fonts.regular)
+  let logo = null
+  if (letterhead.logo?.bytes) {
+    try {
+      logo = letterhead.logo.contentType === 'image/jpeg' ? await doc.embedJpg(letterhead.logo.bytes) : await doc.embedPng(letterhead.logo.bytes)
+    } catch {
+      logo = null // An unreadable logo leaves the name on its own rather than failing the document.
+    }
+  }
+  const [width, height] = A4
+  const top = height - MARGIN + 18
+  const right = width - MARGIN
+  const contactLines = [letterhead.address, letterhead.contacts].map((line) => safe(line || '').trim()).filter(Boolean)
+  for (const page of doc.getPages()) {
+    let nameX = MARGIN
+    if (logo) {
+      const scale = Math.min(40 / logo.height, 120 / logo.width)
+      page.drawImage(logo, { x: MARGIN, y: top - 40, width: logo.width * scale, height: logo.height * scale })
+      nameX = MARGIN + logo.width * scale + 10
+    }
+    page.drawText(safe(letterhead.name || ''), { x: nameX, y: top - 25, size: 14, font: fonts.bold, color: colour })
+    contactLines.forEach((line, index) => {
+      const size = 8
+      page.drawText(line, { x: right - fonts.regular.widthOfTextAtSize(line, size), y: top - 12 - index * 11, size, font: fonts.regular, color: MUTED })
+    })
+    page.drawRectangle({ x: MARGIN, y: top - 52, width: width - MARGIN * 2, height: 3, color: colour })
+    page.drawRectangle({ x: MARGIN, y: MARGIN / 2 + 14, width: width - MARGIN * 2, height: 1, color: colour })
   }
 }
 
@@ -170,13 +242,15 @@ const addFooters = (doc, font, label) => {
  * {{fields}} are filled from `values`; a line left empty by its fields (a company name on
  * a personal loan) is dropped rather than leaving a gap.
  */
-export const renderTextTemplate = async ({ title, body, values, footer, producer = `${DEFAULT_BRAND_NAME} workspace` }) => {
+export const renderTextTemplate = async ({ title, body, values, footer, letterhead = null, signature = true, producer = `${DEFAULT_BRAND_NAME} workspace` }) => {
   const doc = await PDFDocument.create()
   doc.setTitle(fillPlaceholders(title, values))
   doc.setProducer(producer)
-  const writer = await createWriter(doc)
+  const writer = await createWriter(doc, { letterhead: Boolean(letterhead) })
   writer.newPage()
   writer.title(fillPlaceholders(title, values))
+  const signatureSpots = []
+  const signatureName = [values.customer_name, values.company_name && `for ${values.company_name}`].filter(Boolean).join(' ')
 
   let paragraph = []
   const flush = () => {
@@ -184,6 +258,12 @@ export const renderTextTemplate = async ({ title, body, values, footer, producer
     paragraph = []
   }
   for (const templateLine of String(body || '').split(/\r?\n/)) {
+    // A line holding only {{customer_signature}} is where the borrower signs.
+    if (templateLine.trim() === `{{${SIGNATURE_FIELD}}}`) {
+      flush()
+      signatureSpots.push(writer.signatureBlock({ name: signatureName }))
+      continue
+    }
     const line = fillPlaceholders(templateLine, values).trimEnd()
     // Headings and bullets come from how the template is written, never from a filled-in
     // value (an applicant naming themselves "## Clause 9").
@@ -198,8 +278,11 @@ export const renderTextTemplate = async ({ title, body, values, footer, producer
     } else paragraph.push(line.trim())
   }
   flush()
+  // A template that doesn't say where to sign is signed at the end.
+  if (signature && !signatureSpots.length) signatureSpots.push(writer.signatureBlock({ name: signatureName }))
+  if (letterhead) await addLetterhead(doc, writer.fonts, letterhead)
   addFooters(doc, writer.fonts.regular, footer)
-  return { bytes: await doc.save(), signatureSpots: [] }
+  return { bytes: await doc.save(), signatureSpots }
 }
 
 /** The form fields in an uploaded PDF, by name. Throws when the file isn't a usable PDF. */
@@ -269,14 +352,17 @@ export const fillUploadedPdf = async (bytes, { values, summary, footer }) => {
  * signature record page at the end saying who signed, when, how it was confirmed, and the
  * SHA-256 of the document they saw.
  */
-export const signPdf = async (bytes, { signature, record, signatureSpots = [] }) => {
+export const signPdf = async (bytes, { signature, record, signatureSpots = [], signedOn = '' }) => {
   const doc = await PDFDocument.load(bytes, { updateMetadata: false })
   const png = await doc.embedPng(signature)
+  const dateFont = await doc.embedFont(StandardFonts.Helvetica)
   for (const spot of signatureSpots) {
     const page = doc.getPages()[spot.pageIndex]
     if (!page) continue
     const scale = Math.min(spot.width / png.width, spot.height / png.height)
     page.drawImage(png, { x: spot.x, y: spot.y, width: png.width * scale, height: png.height * scale })
+    // Signature blocks the workspace drew have a date line beside the box.
+    if (spot.date && signedOn) page.drawText(safeFor(dateFont)(signedOn), { x: spot.date.x, y: spot.date.y, size: 10, font: dateFont, color: INK })
   }
 
   const writer = await createWriter(doc)

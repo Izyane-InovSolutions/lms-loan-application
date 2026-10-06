@@ -13,23 +13,26 @@ import { Field, FormError, PageHeader, Panel, roleTone, useToast } from '../comp
 
 /**
  * Team → Roles: what each role may do and which applications its members see. Built-in
- * roles can be changed and reset; admins add their own. The server applies a change to
- * everyone holding the role on their next request.
+ * roles can be changed and reset; admins add their own. Any role but the administrator can
+ * be deleted once nobody holds it and the workflow doesn't name it; a deleted built-in role
+ * can be brought back. The server applies a change to everyone holding the role on their
+ * next request.
  */
 export function RolesPage() {
   const { refresh } = useAuth()
   const notify = useToast()
-  const [state, setState] = useState({ status: 'loading', roles: [] })
+  const [state, setState] = useState({ status: 'loading', roles: [], removed: [] })
+  const [restoring, setRestoring] = useState(null)
   const [selectedKey, setSelectedKey] = useState('sales_manager')
   const [creating, setCreating] = useState(false)
 
   const load = useCallback(async () => {
     try {
-      const { roles } = await api('/roles')
-      setState({ status: 'ready', roles })
+      const { roles, removed = [] } = await api('/roles')
+      setState({ status: 'ready', roles, removed })
       return roles
     } catch (error) {
-      setState({ status: 'error', roles: [], message: error.message })
+      setState({ status: 'error', roles: [], removed: [], message: error.message })
       return []
     }
   }, [])
@@ -46,6 +49,18 @@ export function RolesPage() {
   }
 
   const selected = state.roles.find((role) => role.key === selectedKey) || state.roles[0]
+
+  const restore = async (role) => {
+    setRestoring(role.key)
+    try {
+      await api(`/roles/${role.key}/restore`, { method: 'POST' })
+      await afterChange(`${role.label} is back, with its default permissions`, role.key)
+    } catch (error) {
+      notify(error.message)
+    } finally {
+      setRestoring(null)
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -91,6 +106,22 @@ export function RolesPage() {
                 {role.locked ? <Lock className="size-3.5 shrink-0 text-muted-foreground" aria-label="Fixed" /> : null}
               </button>
             ))}
+            {state.removed.length ? (
+              <div className="mt-4 border-t pt-4">
+                <p className="px-3 text-xs font-medium text-muted-foreground">Deleted roles</p>
+                <ul className="mt-1 space-y-1">
+                  {state.removed.map((role) => (
+                    <li key={role.key} className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm">
+                      <span className="min-w-0 flex-1 truncate text-muted-foreground line-through decoration-muted-foreground/50">{role.label}</span>
+                      <Button variant="ghost" size="sm" onClick={() => restore(role)} disabled={Boolean(restoring)} aria-label={`Bring back ${role.label}`}>
+                        {restoring === role.key ? <Loader2 className="animate-spin" /> : <RotateCcw />}
+                        Restore
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
           </nav>
           {selected ? <RoleEditor key={selected.key} role={selected} onChanged={afterChange} /> : null}
         </div>
@@ -233,12 +264,10 @@ function RoleEditor({ role, onChanged }) {
                   Reset to defaults
                 </Button>
               ) : null}
-              {!role.builtIn ? (
-                <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => setConfirmDelete(true)} disabled={Boolean(busy)}>
-                  <Trash2 />
-                  Delete role
-                </Button>
-              ) : null}
+              <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={() => setConfirmDelete(true)} disabled={Boolean(busy)}>
+                <Trash2 />
+                Delete role
+              </Button>
             </div>
             <Button size="sm" onClick={save} disabled={!dirty || Boolean(busy) || form.label.trim().length < 2}>
               {busy === 'save' ? <Loader2 className="animate-spin" /> : null}
@@ -253,9 +282,15 @@ function RoleEditor({ role, onChanged }) {
           <DialogHeader>
             <DialogTitle>Delete {role.label}?</DialogTitle>
             <DialogDescription>
-              {role.members ? `${role.members} ${role.members === 1 ? 'person has' : 'people have'} this role. Give them another role in Team first.` : 'Nobody has this role, so nothing else changes.'}
+              {role.members
+                ? `${role.members} ${role.members === 1 ? 'person has' : 'people have'} this role. Give them another role in Team first.`
+                : role.builtIn
+                  ? 'Nobody has this role. It disappears from Team and the workflow editor; you can restore it later under Deleted roles, with its default permissions.'
+                  : 'Nobody has this role, so nothing else changes.'}
             </DialogDescription>
           </DialogHeader>
+          {/* Why the server refused, e.g. the workflow still names the role. */}
+          <FormError message={confirmDelete ? error : ''} />
           <DialogFooter>
             <Button variant="outline" onClick={() => setConfirmDelete(false)}>
               Cancel

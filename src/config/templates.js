@@ -1,11 +1,15 @@
 /**
- * The documents generated for an approved loan (Settings → Documents), shared by the API,
- * which renders them, and the workspace, which edits them.
+ * The documents generated for a loan (Settings → Documents), shared by the API, which
+ * renders them, and the workspace, which edits them.
  *
  * Each kind is either written in the workspace (text with {{fields}}, rendered to PDF) or
  * an uploaded PDF. An uploaded PDF's fillable form fields are filled when their names match
  * a field below (with or without the braces, any case); a PDF without fields is used as it
  * is, with a generated summary page added. The customer signs both when accepting.
+ *
+ * The offer letter and facility letter are built in. Admins add their own kinds (a debit
+ * order mandate, a guarantee form) in Settings → Documents; those are kept in the
+ * `documents` setting and sent at the workflow states that list them.
  */
 import { DEFAULT_BRAND_NAME } from './branding.js'
 
@@ -15,12 +19,60 @@ export const TEMPLATE_KINDS = {
     description: 'The terms you are offering: amount, tenure, cost and conditions. Generated when a loan is approved.',
   },
   loan_agreement: {
-    label: 'Loan agreement',
-    description: 'The agreement the customer signs when they accept the offer.',
+    label: 'Facility letter',
+    description: 'The facility’s terms and conditions. Sent once the customer accepts the offer, for them to sign before payout.',
   },
 }
 
 export const TEMPLATE_KIND_KEYS = Object.keys(TEMPLATE_KINDS)
+
+/**
+ * The documents signed by accepting the offer: the offer letter alone. The facility letter
+ * (key loan_agreement) follows once the offer is accepted, as a stage document of its own
+ * (src/config/workflow.js → stateDocuments).
+ */
+export const OFFER_DOCUMENT_KINDS = ['offer_letter']
+
+/** The built-in kind sent, by default, where a case goes once the customer accepts. */
+export const FACILITY_LETTER_KIND = 'loan_agreement'
+
+/** The key of a new document kind, from its name: "Debit order mandate" → "debit_order_mandate". */
+export const documentKindKey = (label) =>
+  String(label || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 40)
+
+/** The wording a new kind starts with, until the admin writes their own. */
+export const starterTemplate = ({ label, requiresSignature }) => ({
+  title: label,
+  body: `{{today}}
+
+{{customer_name}}
+{{company_name}}
+{{customer_address}}
+
+Reference: {{reference}}
+
+Dear {{customer_name}},
+
+Replace this with the wording of the ${String(label).toLowerCase()}. Use the fields on the right to fill in details from the application.${
+    requiresSignature
+      ? `
+
+## Signature
+Please sign below.
+
+{{customer_signature}}`
+      : `
+
+Yours sincerely,
+
+For {{lender_name}}`
+  }`,
+})
 
 /** Fields a template can use, with the sample value the preview shows. */
 export const MERGE_FIELDS = [
@@ -77,8 +129,8 @@ export const fillPlaceholders = (text, values) =>
     return MULTILINE_FIELDS.has(key) ? value : value.replace(/[\p{Cc}\u2028\u2029]+/gu, ' ')
   })
 
-/** Placeholders a text template uses that are not merge fields. */
+/** Placeholders a text template uses that are not merge fields (nor the line where the customer signs). */
 export const unknownPlaceholders = (text) =>
   [...new Set([...String(text || '').matchAll(/\{\{\s*([a-zA-Z0-9_ ]+?)\s*\}\}/g)].map((match) => fieldKeyFor(match[1])))].filter(
-    (key) => !MERGE_FIELD_KEYS.includes(key)
+    (key) => !MERGE_FIELD_KEYS.includes(key) && key !== SIGNATURE_FIELD
   )

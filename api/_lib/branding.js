@@ -1,10 +1,41 @@
 import { getSetting } from './settings.js'
+import { readFile } from 'node:fs/promises'
+import { readBlob } from './blob.js'
 import { DEFAULT_BRAND_NAME } from '../../src/config/branding.js'
 
 /** The brand as saved in Settings → Branding, with the shipped defaults filling any gap. */
 export const getBranding = async () => {
-  const { name, logo } = await getSetting('branding')
-  return { name: String(name || '').trim() || DEFAULT_BRAND_NAME, logo: logo?.pathname ? logo : null }
+  const { name, logo, address, phone, email, website, colour } = await getSetting('branding')
+  return { name: String(name || '').trim() || DEFAULT_BRAND_NAME, logo: logo?.pathname ? logo : null, address, phone, email, website, colour }
+}
+
+// PDFs can carry PNG and JPG; a WebP logo (uploaded before uploads were converted to PNG)
+// leaves the name on its own.
+const PDF_IMAGE_TYPES = ['image/png', 'image/jpeg']
+const BUNDLED_LOGO = new URL('../../src/assets/Icon.png', import.meta.url)
+
+/**
+ * The letterhead for generated documents (api/_lib/pdf.js): name, logo, address, contacts
+ * and colour from Settings → Branding. `name` is the lender as documents name it.
+ */
+export const getLetterhead = async (name) => {
+  const branding = await getBranding()
+  let logo = null
+  if (branding.logo && PDF_IMAGE_TYPES.includes(branding.logo.contentType)) {
+    const stored = await readBlob(branding.logo).catch(() => null)
+    if (stored) logo = { bytes: stored.data, contentType: branding.logo.contentType }
+  } else if (!branding.logo) {
+    // No upload: the bundled logo the site shows, so documents match it.
+    const bytes = await readFile(BUNDLED_LOGO).catch(() => null)
+    if (bytes) logo = { bytes, contentType: 'image/png' }
+  }
+  return {
+    name: name || branding.name,
+    logo,
+    address: branding.address,
+    contacts: [branding.phone, branding.email, branding.website].filter(Boolean).join('   ·   '),
+    colour: branding.colour,
+  }
 }
 
 /**

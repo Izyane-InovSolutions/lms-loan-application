@@ -5,15 +5,15 @@ import { fail, text, clientIp } from './http.js'
 import { deleteBlobs, putBlob, readBlob } from './blob.js'
 import { sha256, signPdf } from './pdf.js'
 import { ensureOfferDocuments } from './offerDocuments.js'
-import { TEMPLATE_KINDS, TEMPLATE_KIND_KEYS } from '../../src/config/templates.js'
+import { OFFER_DOCUMENT_KINDS, TEMPLATE_KINDS } from '../../src/config/templates.js'
 import { sealKey } from './secrets.js'
 
 const { applicationDocuments, signatures } = schema
 
 /*
  * The customer's signature on their offer (Settings → Credit workflow → "Accepting means
- * signing"). They read the offer letter and agreement, sign by drawing or typing, and
- * confirm with a code emailed to them. Each document gets a signed copy — the signature
+ * signing"), and on documents sent at a workflow stage (stageDocuments.js). They read the
+ * documents, sign by drawing or typing, and confirm with a code emailed to them. Each document gets a signed copy — the signature
  * drawn in its place and a signature record page added — and the `signatures` row keeps
  * who, when, how, from where, and the SHA-256 of each document before and after.
  */
@@ -71,31 +71,25 @@ const lusakaTime = (date) =>
   `${date.toLocaleString('en-GB', { dateStyle: 'long', timeStyle: 'medium', timeZone: 'Africa/Lusaka' })} (Lusaka), ${date.toISOString()}`
 
 /**
- * Signs every offer document of an application, before the acceptance is recorded (never
- * inside its transaction). `capturedBy` is the staff member present for an in-person
- * acceptance. Returns the signature row.
+ * Signs documents of an application: each `{ kind, label, original, slot }` gets a signed
+ * copy, and one sealed `signatures` row records them all. `reissue` ends the messages for
+ * a document that is missing or changed. Returns the signature row.
  */
-export const signOfferDocuments = async ({ application, signature, req, capturedBy = null, codeVerified = true }) => {
+const signDocuments = async ({ application, documents, signature, req, capturedBy = null, codeVerified = true, reissue }) => {
   const db = await getDb()
-  const docs = await ensureOfferDocuments(application.id)
-  const missing = TEMPLATE_KIND_KEYS.filter((kind) => !docs[kind]?.unsigned)
-  if (missing.length) fail(503, 'Your offer documents aren’t ready yet. Please try again in a minute.', 'documents_not_ready')
-
   const id = crypto.randomUUID()
   const signedAt = new Date()
   const ip = clientIp(req)
   const userAgent = String(req.headers['user-agent'] || '').slice(0, 300)
   const recorded = []
 
-  for (const kind of TEMPLATE_KIND_KEYS) {
-    const original = docs[kind].unsigned
+  for (const { kind, label, original, slot } of documents) {
     const stored = await readBlob(original)
-    if (!stored) fail(410, `The ${TEMPLATE_KINDS[kind].label.toLowerCase()} is missing from storage. Ask us to reissue your offer.`, 'gone')
+    if (!stored) fail(410, `The ${label.toLowerCase()} is missing from storage. ${reissue}`, 'gone')
     const before = sha256(stored.data)
     // What they sign must be the very file they were shown.
-    if (original.meta?.sha256 && before !== original.meta.sha256) fail(409, `The ${TEMPLATE_KINDS[kind].label.toLowerCase()} has changed since it was issued. Ask us to reissue your offer.`, 'document_changed')
+    if (original.meta?.sha256 && before !== original.meta.sha256) fail(409, `The ${label.toLowerCase()} has changed since it was issued. ${reissue}`, 'document_changed')
 
-    const label = TEMPLATE_KINDS[kind].label
     const rows = [
       ['Document', `${label}, ${application.reference}`],
       ['Signed by', signature.name],
@@ -113,6 +107,7 @@ export const signOfferDocuments = async ({ application, signature, req, captured
     const signedBytes = await signPdf(stored.data, {
       signature: signature.png,
       signatureSpots: original.meta?.signatureSpots || [],
+      signedOn: signedAt.toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Africa/Lusaka' }),
       record: {
         signerName: signature.name,
         statement: `${signature.name} signed this ${label.toLowerCase()} electronically, after confirming a one-time code sent to their email address. The fingerprint below identifies the exact document they were shown: any change to that document gives a different fingerprint.`,
@@ -121,12 +116,12 @@ export const signOfferDocuments = async ({ application, signature, req, captured
     })
     const after = sha256(signedBytes)
     const filename = original.filename.replace(/\.pdf$/i, '-signed.pdf')
-    const put = await putBlob(`applications/${application.id}/offer.${kind}-signed-${filename}`, Buffer.from(signedBytes), { contentType: 'application/pdf' })
+    const put = await putBlob(`applications/${application.id}/${slot}-signed-${filename}`, Buffer.from(signedBytes), { contentType: 'application/pdf' })
     const [row] = await db
       .insert(applicationDocuments)
       .values({
         applicationId: application.id,
-        slot: `offer.${kind}.signed`,
+        slot: `${slot}.signed`,
         docType: `${kind}_signed`,
         label: `${label} (signed)`,
         pathname: put.pathname,
@@ -161,6 +156,36 @@ export const signOfferDocuments = async ({ application, signature, req, captured
     .returning()
   return saved
 }
+
+/**
+ * Signs the offer documents of an application (the offer letter), before the acceptance is recorded (never
+ * inside its transaction). `capturedBy` is the staff member present for an in-person
+ * acceptance. Returns the signature row.
+ */
+export const signOfferDocuments = async ({ application, signature, req, capturedBy = null, codeVerified = true }) => {
+  const docs = await ensureOfferDocuments(application.id)
+  const missing = OFFER_DOCUMENT_KINDS.filter((kind) => !docs[kind]?.unsigned)
+  if (missing.length) fail(503, 'Your offer documents aren’t ready yet. Please try again in a minute.', 'documents_not_ready')
+  return signDocuments({
+    application,
+    documents: OFFER_DOCUMENT_KINDS.map((kind) => ({ kind, label: TEMPLATE_KINDS[kind].label, original: docs[kind].unsigned, slot: `offer.${kind}` })),
+    signature,
+    req,
+    capturedBy,
+    codeVerified,
+    reissue: 'Ask us to reissue your offer.',
+  })
+}
+
+/** Signs one document sent at a workflow stage (stageDocuments.js): its issued copy, `original`. */
+export const signStageDocument = ({ application, original, signature, req }) =>
+  signDocuments({
+    application,
+    documents: [{ kind: original.meta.kind, label: original.label, original, slot: original.slot }],
+    signature,
+    req,
+    reissue: 'Ask us to send it again.',
+  })
 
 /**
  * Undoes a signature whose acceptance then failed (a stale screen, an offer that lapsed

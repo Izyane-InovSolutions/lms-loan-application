@@ -1,7 +1,8 @@
 import React, { useState } from 'react'
-import { AlertTriangle, Check, CircleDashed, Loader2, MapPin, RefreshCw, ShieldAlert, ShieldCheck, Sparkles } from 'lucide-react'
+import { AlertTriangle, Check, CircleDashed, Loader2, MapPin, RefreshCw, Send, ShieldAlert, ShieldCheck, Sparkles } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { LMS_SYNC_LABELS } from '@/config/applications'
 import { checklistOf } from '@/config/stages'
@@ -585,6 +586,116 @@ export function SignaturesPanel({ signatures, applicationId }) {
           </li>
         ))}
       </ul>
+    </Panel>
+  )
+}
+
+const DOCUMENT_STATUS = {
+  ready: { label: 'Not sent yet', tone: 'bg-muted text-muted-foreground' },
+  sent: { label: 'Sent', tone: 'bg-accent text-accent-foreground' },
+  viewed: { label: 'Opened by the applicant', tone: 'bg-accent text-accent-foreground' },
+  uploaded: { label: 'Uploaded: awaiting check', tone: 'bg-warning/15 text-warning' },
+  signed: { label: 'Signed online', tone: 'bg-success/15 text-success' },
+  received: { label: 'Received', tone: 'bg-success/15 text-success' },
+}
+
+/**
+ * Documents sent to the applicant at workflow stages: where each stands, its files, and
+ * marking one received once a signed copy is checked or a paper one handed in.
+ */
+export function StageDocumentsPanel({ documents, applicationId, canWork, onResend, onReceived }) {
+  const [receiving, setReceiving] = useState(null)
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(null)
+  const [error, setError] = useState('')
+  if (!documents?.length) return null
+
+  const run = (key, task) => async () => {
+    setBusy(key)
+    setError('')
+    try {
+      await task()
+      setReceiving(null)
+      setNote('')
+    } catch (runError) {
+      setError(runError.message)
+    } finally {
+      setBusy(null)
+    }
+  }
+  const file = (id, label) => (
+    <a className="font-medium text-primary hover:underline" href={`/api/v1/applications/${applicationId}/documents/${id}`} target="_blank" rel="noreferrer">
+      {label}
+    </a>
+  )
+  const waiting = documents.some((document) => !document.done && !document.offer)
+
+  return (
+    <Panel
+      title="Documents to sign"
+      description="Sent to the applicant at workflow stages."
+      action={
+        canWork && waiting ? (
+          <Button variant="ghost" size="sm" onClick={run('resend', onResend)} disabled={Boolean(busy)}>
+            {busy === 'resend' ? <Loader2 className="animate-spin" /> : <Send />}
+            Resend email
+          </Button>
+        ) : null
+      }
+    >
+      <ul className="space-y-3">
+        {documents.map((document) => {
+          const status = DOCUMENT_STATUS[document.status] || DOCUMENT_STATUS.ready
+          return (
+            <li key={document.id} className="space-y-2 rounded-md border p-3 text-sm">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <span className="min-w-0">
+                  <span className="block font-medium text-foreground">{document.label}</span>
+                  <span className="block text-xs text-muted-foreground">
+                    {document.stageLabel ? `${document.stageLabel}` : 'With the offer'}
+                    {document.required ? ', required to move on' : ''}
+                    {!document.requiresSignature ? ', no signature needed' : ''}
+                  </span>
+                </span>
+                <span className={cn('shrink-0 rounded-full px-2 py-0.5 text-xs font-medium', status.tone)}>{status.label}</span>
+              </div>
+              <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                {file(document.id, 'As sent')}
+                {document.signedDocumentId ? file(document.signedDocumentId, 'Signed copy') : null}
+                {document.uploadedDocumentId ? file(document.uploadedDocumentId, 'Uploaded copy') : null}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {document.sentAt ? `Sent ${dateTime(document.sentAt)}` : 'Not emailed yet'}
+                {document.viewedAt ? `; opened ${dateTime(document.viewedAt)}` : ''}
+                {document.signedAt ? `; signed ${dateTime(document.signedAt)}` : ''}
+                {document.uploadedAt ? `; copy uploaded ${dateTime(document.uploadedAt)}` : ''}
+                {document.receivedAt ? `; received by ${document.receivedByName}, ${dateTime(document.receivedAt)}${document.receivedNote ? ` (${document.receivedNote})` : ''}` : ''}
+              </p>
+              {canWork && !document.done ? (
+                receiving === document.id ? (
+                  <div className="space-y-2">
+                    <Input aria-label="Note" placeholder={document.uploadedDocumentId ? 'What you checked (optional)' : 'e.g. Paper copy handed in at the branch'} value={note} maxLength={300} onChange={(event) => setNote(event.target.value)} />
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={run(document.id, () => onReceived(document, note.trim()))} disabled={Boolean(busy)}>
+                        {busy === document.id ? <Loader2 className="animate-spin" /> : <Check />}
+                        Mark received
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setReceiving(null)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <Button size="sm" variant="outline" onClick={() => setReceiving(document.id)}>
+                    {document.uploadedDocumentId ? 'Checked: mark received' : 'Mark received'}
+                  </Button>
+                )
+              ) : null}
+            </li>
+          )
+        })}
+      </ul>
+      {error ? <p className="mt-2 text-sm text-destructive">{error}</p> : null}
     </Panel>
   )
 }

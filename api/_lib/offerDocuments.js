@@ -5,15 +5,16 @@ import { getProductConfig } from './products.js'
 import { getPublishedTemplate } from './templates.js'
 import { fillUploadedPdf, renderTextTemplate, sha256 } from './pdf.js'
 import { addEvent } from './applications.js'
-import { brandName } from './branding.js'
+import { brandName, getLetterhead } from './branding.js'
 import { LOAN_TYPE_LABELS, APPROVED_STATUSES } from '../../src/config/applications.js'
-import { TEMPLATE_KINDS, TEMPLATE_KIND_KEYS } from '../../src/config/templates.js'
+import { OFFER_DOCUMENT_KINDS, TEMPLATE_KINDS } from '../../src/config/templates.js'
 import { describeInterest, priceLoan } from '../../src/config/loanProducts.js'
 
 const { applications, applicationDocuments, appraisals } = schema
 
 /*
- * The offer letter and loan agreement for an approved loan, made from the published
+ * The offer letter for an approved loan (the facility letter follows acceptance, as a stage
+ * document: stageDocuments.js), made from the published
  * templates (templates.js) and stored with the case as documents of source "system". Made
  * once per approval: right after the decision, or on first need (the customer opening the
  * offer, an older approval) if that did not happen. What the customer signs is exactly the
@@ -78,17 +79,21 @@ export const mergeValuesFor = async (application) => {
   }
 }
 
-/** Renders a template (any version) with the given values. Returns the PDF and where a signature goes. */
-export const renderTemplate = async (template, values) => {
+/**
+ * Renders a template (any version) with the given values. Returns the PDF and where a
+ * signature goes. `label` names the kind (the lender's own kinds aren't in TEMPLATE_KINDS);
+ * `signature: false` leaves out the signature block of a document nobody signs.
+ */
+export const renderTemplate = async (template, values, { label = TEMPLATE_KINDS[template.kind]?.label || template.title, signature = true } = {}) => {
   const footer = `${values.lender_name}   ·   ${values.reference}`
   if (template.source === 'pdf') {
     const stored = await readBlob({ pathname: template.pdfPathname, url: template.pdfUrl })
-    if (!stored) throw new Error(`The uploaded ${TEMPLATE_KINDS[template.kind].label.toLowerCase()} is no longer in storage. Upload it again.`)
+    if (!stored) throw new Error(`The uploaded ${label.toLowerCase()} is no longer in storage. Upload it again.`)
     return fillUploadedPdf(stored.data, {
       values,
       footer,
       summary: {
-        title: `${TEMPLATE_KINDS[template.kind].label}: summary`,
+        title: `${label}: summary`,
         intro: `The terms of the loan offered under application ${values.reference}.`,
         rows: [
           ['Borrower', [values.customer_name, values.company_name].filter(Boolean).join(', ')],
@@ -105,7 +110,7 @@ export const renderTemplate = async (template, values) => {
       },
     })
   }
-  return renderTextTemplate({ title: template.title, body: template.body, values, footer, producer: `${await brandName()} workspace` })
+  return renderTextTemplate({ title: template.title, body: template.body, values, footer, signature, letterhead: await getLetterhead(values.lender_name), producer: `${await brandName()} workspace` })
 }
 
 const slotFor = (kind) => `offer.${kind}`
@@ -119,7 +124,8 @@ export const offerDocumentsOf = async (applicationId) => {
     .where(and(eq(applicationDocuments.applicationId, applicationId), eq(applicationDocuments.source, 'system')))
     .orderBy(desc(applicationDocuments.createdAt))
   const latest = {}
-  for (const row of rows) {
+  // Only the offer's own copies (slot offer.*): a facility letter sent at a later stage is not part of it.
+  for (const row of rows.filter((entry) => entry.slot?.startsWith('offer.'))) {
     const kind = row.meta?.kind
     if (!kind) continue
     const bucket = row.meta.signed ? 'signed' : 'unsigned'
@@ -130,7 +136,7 @@ export const offerDocumentsOf = async (applicationId) => {
 }
 
 /**
- * Makes the offer letter and agreement for an approved application if they don't exist
+ * Makes the offer letter for an approved application if they don't exist
  * yet, and returns every kind's unsigned document. Never throws for a single failed kind:
  * the failure is logged on the case, and the next call tries again.
  */
@@ -153,7 +159,7 @@ const generateMissing = async (applicationId) => {
   const [application] = await db.select().from(applications).where(eq(applications.id, applicationId)).limit(1)
   if (!application || !APPROVED_STATUSES.includes(application.status)) return {}
   const existing = await offerDocumentsOf(applicationId)
-  const missing = TEMPLATE_KIND_KEYS.filter((kind) => !existing[kind]?.unsigned)
+  const missing = OFFER_DOCUMENT_KINDS.filter((kind) => !existing[kind]?.unsigned)
   if (!missing.length) return existing
 
   const values = await mergeValuesFor(application)

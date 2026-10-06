@@ -15,6 +15,7 @@ import { validateStagesConfig } from '../_lib/stages.js'
 import { clearTwoFactorCache } from '../_lib/auth/twoFactor.js'
 import { brandName } from '../_lib/branding.js'
 import { regenerateLegacyWorkflow } from '../_lib/workflowVersions.js'
+import { validateDocumentKinds } from '../_lib/templates.js'
 import { createZraClient, missingZraConfig, readZraConfig, ZraError } from '../_lib/zra/client.js'
 import { getZraConfig } from '../_lib/zra/config.js'
 
@@ -106,7 +107,11 @@ const VALIDATORS = {
   branding: (value) => {
     const name = text(value.name, BRAND_NAME_MAX).replace(/\s+/g, ' ')
     if (name.length < 2) throw new Error('Give the product a name of at least two characters.')
-    return { name }
+    const colour = String(value.colour || '').trim()
+    if (colour && !/^#[0-9a-f]{6}$/i.test(colour)) throw new Error('Give the brand colour as a hex value, like #1f4e79.')
+    const email = text(value.email, 120)
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('The letterhead email address doesn’t look right.')
+    return { name, address: text(value.address, 200), phone: text(value.phone, 40), email, website: text(value.website, 120), colour: colour || '#1f4e79' }
   },
   lms: (value) => {
     if (!['submit', 'approval'].includes(value.syncOn)) throw new Error('Choose when to send applications to the LMS.')
@@ -200,6 +205,7 @@ const VALIDATORS = {
   },
   customerOptions: (value) => ({ helpWithFinishing: value.helpWithFinishing !== false }),
   stages: (value) => validateStagesConfig(value),
+  documents: (value) => validateDocumentKinds(value),
   security: async (value) => {
     const known = new Set((await listRoles()).map((role) => role.key))
     return { requireTwoFactorRoles: (Array.isArray(value.requireTwoFactorRoles) ? value.requireTwoFactorRoles : []).filter((role) => known.has(role)) }

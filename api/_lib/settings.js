@@ -20,7 +20,17 @@ export const SETTING_DEFAULTS = {
    * file ({ pathname, url, contentType, size, filename, version }), or null for the
    * bundled one. Only the logo upload endpoint sets it (api/_handlers/branding.js).
    */
-  branding: { name: DEFAULT_BRAND_NAME, logo: null },
+  branding: {
+    name: DEFAULT_BRAND_NAME,
+    logo: null,
+    // The letterhead on generated documents: address and contacts at the top right, and a
+    // band of this colour under the header and above the footer.
+    address: '',
+    phone: '',
+    email: '',
+    website: '',
+    colour: '#1f4e79',
+  },
   // When to hand applications to the LMS: on submit, once approved, or once the customer
   // has accepted the offer (the default when acceptance is required).
   lms: { syncOn: 'approval', sendPrescreen: false },
@@ -73,10 +83,16 @@ export const SETTING_DEFAULTS = {
     requireAcceptance: true,
     // An unaccepted offer lapses after this many days.
     expiryDays: 14,
-    // Accepting means signing the offer letter and agreement (drawn or typed, confirmed
+    // Accepting means signing the offer letter (drawn or typed, confirmed
     // by an emailed code), stamped into signed copies kept with the case.
     requireSignature: true,
   },
+  /*
+   * The lender's own document kinds (Settings → Documents), beside the built-in offer
+   * letter and facility letter: [{ key, label, description, requiresSignature, retired }].
+   * Their templates live with the others (templates.js); the workflow says where each is sent.
+   */
+  documents: { kinds: [] },
   // The processing flow around the fixed backbone: renamed statuses, the checklist, and
   // the workspace's own stages (src/config/stages.js). Empty stage lists: the flow as built.
   stages: DEFAULT_STAGES_CONFIG,
@@ -112,6 +128,9 @@ export const SETTING_DEFAULTS = {
     // Staff may see unfinished applications and contact the applicant to help finish them.
     helpWithFinishing: true,
   },
+  // Built-in roles an admin deleted (Team → Roles). They stay in the code, so they can be
+  // brought back; until then they're left out of every list (api/_lib/roles.js).
+  removedRoles: { keys: [] },
   security: {
     // Roles that must use two-step sign-in. Members without it are asked to set it up.
     requireTwoFactorRoles: [],

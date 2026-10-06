@@ -346,7 +346,7 @@ function WorkflowTab({ settings, notify }) {
           <Toggle
             id="require-signature"
             label="Accepting means signing"
-            description="The customer reads the offer letter and loan agreement, signs (drawn or typed) and confirms with an emailed code. Signed copies, with a signature record page, are kept with the case."
+            description="The customer reads the offer letter, signs (drawn or typed) and confirms with an emailed code. Signed copies, with a signature record page, are kept with the case."
             checked={offers.value.requireSignature !== false}
             onChange={(requireSignature) => offers.set({ requireSignature })}
           />

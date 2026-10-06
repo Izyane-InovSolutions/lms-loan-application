@@ -4,6 +4,7 @@ import { fail, text } from '../_lib/http.js'
 import { requireUser } from '../_lib/rbac.js'
 import { recordAudit } from '../_lib/audit.js'
 import { listRoles } from '../_lib/roles.js'
+import { listDocumentKinds } from '../_lib/templates.js'
 import {
   discardDraftWorkflow,
   getDraftWorkflow,
@@ -74,6 +75,7 @@ const uniqueId = (wanted, taken, fallback) => {
 const MAX_STATES = 40
 const MAX_ACTIONS = 12
 const MAX_CHECKS = 30
+const MAX_DOCUMENTS = 10
 const PRODUCTS = ['personal', 'business']
 
 /**
@@ -112,6 +114,15 @@ export const sanitizeWorkflow = (input) => {
       trackProgress: Boolean(state?.trackProgress),
       ...(state?.disabled && !system ? { disabled: true } : {}),
       ...(type === 'offer' ? { offer: { onAccept: text(state?.offer?.onAccept, 60) } } : {}),
+      // Left out when the editor sent none, so an offer state keeps sending the offer documents.
+      ...(type !== 'final' && Array.isArray(state?.documents)
+        ? {
+            documents: state.documents
+              .slice(0, MAX_DOCUMENTS)
+              .filter((entry) => typeof entry?.kind === 'string' && /^[a-z][a-z0-9_]{1,39}$/.test(entry.kind))
+              .map((entry) => ({ kind: entry.kind, required: Boolean(entry.required) })),
+          }
+        : {}),
       actions:
         type === 'final'
           ? []
@@ -137,6 +148,11 @@ export const sanitizeWorkflow = (input) => {
 // With their permissions: a role named on a state must hold what its actions need.
 const workspaceRoles = async () => (await listRoles()).map(({ key, label, permissions }) => ({ key, label, permissions }))
 
+// Every document kind, retired ones too, so a state still sending one is told why it can't.
+const documentKinds = async () => (await listDocumentKinds({ includeRetired: true })).map(({ key, label, requiresSignature, retired }) => ({ key, label, requiresSignature, retired }))
+
+const validate = async (definition) => validateWorkflow(definition, { roles: await workspaceRoles(), documentKinds: await documentKinds() })
+
 const describeVersion = (flow) => ({ version: flow.version, legacy: flow.legacy, definition: flow.definition, publishedAt: flow.publishedAt })
 
 /** The editor's view: the published workflow, the draft (if any), and the version history. */
@@ -147,6 +163,7 @@ const getEditor = async (req) => {
     published: describeVersion(published),
     draft: draft ? { definition: draft.definition, note: draft.note, updatedAt: draft.updatedAt } : null,
     history,
+    documentKinds: await documentKinds(),
   }
 }
 
@@ -155,7 +172,7 @@ const saveDraft = async (req) => {
   const definition = sanitizeWorkflow(req.body?.definition)
   const draft = await saveDraftWorkflow(definition, text(req.body?.note, 300) || null, actor)
   await recordAudit({ req, actor, action: 'workflow.draft_saved', entityType: 'workflow', entityId: null, detail: { states: definition.states.length } })
-  return { draft: { definition: draft.definition, note: draft.note, updatedAt: draft.updatedAt }, validation: validateWorkflow(definition, { roles: await workspaceRoles() }) }
+  return { draft: { definition: draft.definition, note: draft.note, updatedAt: draft.updatedAt }, validation: await validate(definition) }
 }
 
 const discardDraft = async (req) => {
@@ -170,7 +187,7 @@ const publish = async (req, res) => {
   const actor = await requireUser(req, { permission: 'settings.manage' })
   const draft = await getDraftWorkflow()
   if (!draft) fail(400, 'Save a draft before publishing.', 'no_draft')
-  const validation = validateWorkflow(draft.definition, { roles: await workspaceRoles() })
+  const validation = await validate(draft.definition)
   if (validation.errors.length) {
     res.status(400).json({ code: 'invalid_workflow', message: `Fix these first: ${validation.errors.map((error) => error.message).join(' ')}`, errors: validation.errors })
     return undefined

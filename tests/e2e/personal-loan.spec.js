@@ -120,7 +120,7 @@ test('a referred personal loan goes from application to payout', async ({ browse
   await expect(applicant.getByRole('heading', { name: 'Your loan offer' })).toBeVisible()
   // They read the generated offer letter and agreement, then sign and confirm with a code.
   await expect(applicant.getByText('Offer letter', { exact: true })).toBeVisible()
-  await expect(applicant.getByText('Loan agreement', { exact: true })).toBeVisible()
+  await expect(applicant.getByText('Facility letter', { exact: true })).toBeVisible()
   await applicant.getByLabel(/I have read the offer letter/).check()
   await applicant.locator('#sign-name').fill('Ada Banda')
   const padBox = applicant.getByRole('img', { name: /Sign here/ })
@@ -135,7 +135,7 @@ test('a referred personal loan goes from application to payout', async ({ browse
   await applicant.screenshot({ path: 'test-results/offer-signing.png', fullPage: true })
   await applicant.getByRole('button', { name: 'Sign and accept' }).click()
   await expect(applicant.getByText('Offer accepted').first()).toBeVisible()
-  await expect(applicant.getByText('Loan agreement (signed)')).toBeVisible()
+  await expect(applicant.getByText('Facility letter (signed)')).toBeVisible()
 
   // The case keeps the signature and the signed copies.
   await approver.reload()

@@ -40,7 +40,7 @@ const approvedLoan = async (email) => {
   const decided = await act(admin, submitted.id, 'decide', { verdict: 'approve', rationale: 'Agreed' })
   expect(decided.body.application.status).toBe('approved')
   // The offer documents are made just after the decision.
-  await waitFor(async () => (await admin.get(`/applications/${submitted.id}`)).body.documents.filter((document) => document.source === 'system').length === 2)
+  await waitFor(async () => (await admin.get(`/applications/${submitted.id}`)).body.documents.filter((document) => document.source === 'system').length === 1)
   return submitted.id
 }
 
@@ -83,7 +83,7 @@ describe('the customer signs their offer', () => {
     expect(body.application.status).toBe('accepted')
     const [signature] = body.signatures
     expect(signature).toMatchObject({ signerName: 'Ada T. Banda', signerEmail: 'signer@example.com', method: 'drawn', codeVerified: true, capturedBy: null })
-    expect(signature.documents.map((entry) => entry.kind).sort()).toEqual(['loan_agreement', 'offer_letter'])
+    expect(signature.documents.map((entry) => entry.kind).sort()).toEqual(['offer_letter'])
 
     for (const entry of signature.documents) {
       const original = body.documents.find((document) => document.id === entry.documentId)
@@ -103,7 +103,7 @@ describe('the customer signs their offer', () => {
   it('shows the customer their signed copies', async () => {
     const { body } = await customer.get(`/me/applications/${id}`)
     expect(body.offerDocuments.every((document) => document.signed)).toBe(true)
-    expect(body.offerDocuments.map((document) => document.label).sort()).toEqual(['Loan agreement (signed)', 'Offer letter (signed)'])
+    expect(body.offerDocuments.map((document) => document.label).sort()).toEqual(['Offer letter (signed)'])
     // The copies they were shown before signing are kept for staff, not handed out by id.
     const [signature] = (await admin.get(`/applications/${id}`)).body.signatures
     expect((await customer.get(`/applications/${id}/documents/${signature.documents[0].signedDocumentId}`)).status).toBe(200)

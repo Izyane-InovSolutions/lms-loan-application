@@ -9,6 +9,8 @@ import { activeUser, attributionFor, resolveReferral } from '../_lib/attribution
 import { unindexDraft } from '../_lib/drafts.js'
 import { ensureOfferDocuments } from '../_lib/offerDocuments.js'
 import { signaturesOf } from '../_lib/signing.js'
+import { customerMaySee, findStageDocument, issueStageDocuments, stageDocumentsOf, updateDocumentMeta } from '../_lib/stageDocuments.js'
+import { stateDocuments } from '../../src/config/workflow.js'
 import { TEMPLATE_KIND_KEYS } from '../../src/config/templates.js'
 import { recordAudit } from '../_lib/audit.js'
 import { copyBlob, deleteBlobsForDraft, readBlob } from '../_lib/blob.js'
@@ -305,6 +307,7 @@ const submitApplication = async (req) => {
     }
     if (startState.handToLms && (await queueLmsSync(application))) await syncApplicationToLms(application.id)
   })
+  if (stateDocuments(startState, flow.definition).length) afterResponse('stage documents', () => issueStageDocuments(application.id, { origin, actor: staff, req }))
 
   return { id: application.id, reference: application.reference }
 }
@@ -474,6 +477,8 @@ export const loadCase = async (applicationId, viewer) => {
     stages: await getSetting('stages'),
     offersRequireSignature: (await getSetting('offers')).requireSignature,
     signatures: await signaturesOf(applicationId),
+    // Documents sent to the applicant at workflow stages, with where each stands (stageDocuments.js).
+    stageDocuments: await stageDocumentsOf(applicationId),
     // Where the case is in its workflow and what this viewer can do next (workflow.js).
     workflow: viewer ? await workflowView(viewer, row.application, { recommendation: appraisalRows.find((appraisal) => appraisal.kind === 'recommendation') || null }) : null,
     crbProvider: getCrb()?.name || null,
@@ -517,13 +522,22 @@ const getDocument = async (req, res, { params }) => {
     .limit(1)
   if (!document) fail(404, 'Document not found.', 'not_found')
   // Customers get what their own page lists (myApplication), not every file on the case.
-  if (!isStaffRole(viewer.role) && document.source === 'system' && !(await customerOfferDocuments(application)).some((offer) => offer.id === document.id)) {
+  if (
+    !isStaffRole(viewer.role) &&
+    document.source === 'system' &&
+    !(await customerOfferDocuments(application)).some((offer) => offer.id === document.id) &&
+    !(await customerMaySee(application, document))
+  ) {
     fail(404, 'Document not found.', 'not_found')
   }
   const stored = await readBlob(document)
   if (!stored) fail(410, 'This file is no longer in storage.', 'gone')
   if (isStaffRole(viewer.role)) {
     await recordAudit({ req, actor: viewer, action: 'application.document_viewed', entityType: 'application', entityId: application.id, detail: { document: document.label } })
+  } else if (document.source === 'system' && document.meta?.stage && !document.meta.viewedAt) {
+    // The first time the applicant opens a document sent to them, staff see it was viewed.
+    const found = await findStageDocument(application.id, document.id)
+    if (found) await updateDocumentMeta(found.row, { viewedAt: new Date().toISOString() })
   }
   sendFile(res, { data: stored.data, contentType: document.contentType || stored.contentType, filename: document.filename })
 }
@@ -682,7 +696,11 @@ const myApplication = async (req, res, { params }) => {
     summary.offer.conditions = decision?.conditions || null
     summary.offer.requireSignature = (await getSetting('offers')).requireSignature
   }
-  return { application: summary, events, documents: documents.filter((document) => document.source !== 'system').map(({ meta, ...document }) => document), offerDocuments }
+  // Documents sent to sign or keep; the offer letter and agreement are in `offerDocuments`.
+  const stageDocuments = (await stageDocumentsOf(application.id))
+    .filter((document) => !document.offer)
+    .map(({ id, kind, label, stageLabel, required, requiresSignature, status, done, sentAt, signedDocumentId, uploadedAt, receivedAt }) => ({ id, kind, label, stageLabel, required, requiresSignature, status, done, sentAt, signedDocumentId, uploadedAt, receivedAt }))
+  return { application: summary, events, documents: documents.filter((document) => document.source !== 'system').map(({ meta, ...document }) => document), offerDocuments, stageDocuments }
 }
 
 // ---------------------------------------------------------------------------

@@ -562,7 +562,7 @@ export const legalDocuments = pgTable(
 )
 
 /**
- * The offer letter and loan agreement templates (Settings → Documents), versioned like the
+ * The offer letter and facility letter templates (Settings → Documents), versioned like the
  * terms: one draft and one published version per kind; publishing retires the last one.
  * `source` is text (written in the workspace, `body` with {{fields}}) or pdf (uploaded;
  * `pdfPathname` in storage, `fields` the form field names found in it).

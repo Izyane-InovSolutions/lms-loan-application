@@ -5,7 +5,7 @@ const kv = createMemoryKv()
 vi.mock('../api/_lib/kv.js', () => ({ default: kv }))
 
 const { default: handler } = await import('../api/v1/[...path].js')
-const { brandName } = await import('../api/_lib/branding.js')
+const { brandName, getLetterhead } = await import('../api/_lib/branding.js')
 const { lenderName } = await import('../api/_lib/offerDocuments.js')
 const { consentText } = await import('../src/config/consent.js')
 const { DEFAULT_BRAND_NAME } = await import('../src/config/branding.js')
@@ -25,6 +25,12 @@ afterEach(() => {
 })
 
 describe('branding', () => {
+  it('puts the shipped logo on documents until one is uploaded', async () => {
+    const { logo } = await getLetterhead('Lender')
+    expect(logo?.contentType).toBe('image/png')
+    expect(logo.bytes.subarray(1, 4).toString()).toBe('PNG')
+  })
+
   it('starts with the shipped name and logo', async () => {
     expect((await visitor.get('/branding')).body).toEqual({ name: DEFAULT_BRAND_NAME, logoUrl: null })
     expect((await visitor.get('/branding/logo')).status).toBe(404)

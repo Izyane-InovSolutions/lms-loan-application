@@ -7,9 +7,11 @@ import { addEvent } from './applications.js'
 import { getSetting } from './settings.js'
 import { getPublishedWorkflow, getWorkflowVersion } from './workflowVersions.js'
 import { OPEN_STATUSES, WITHDRAWABLE_STATUSES } from '../../src/config/applications.js'
-import { ACTION_KINDS, PHASES, actionPermission, SYSTEM_FINAL_IDS, actionTarget, appliesTo, forwardEdges, resolveState, stateById } from '../../src/config/workflow.js'
+import { ACTION_KINDS, PHASES, actionPermission, SYSTEM_FINAL_IDS, actionTarget, appliesTo, awaitsDocuments, forwardEdges, resolveState, stateById } from '../../src/config/workflow.js'
 import { checkOtp } from './otp.js'
 import { signatureFor } from './signing.js'
+import { outstandingDocuments } from './stageDocuments.js'
+import { listDocumentKinds } from './templates.js'
 import { priceLoan } from '../../src/config/loanProducts.js'
 import { getProducts } from './products.js'
 
@@ -31,6 +33,9 @@ const { applications, appraisals, users } = schema
  * Always available, whatever the state: assign, check, note, request_info /
  * cancel_request (where the state allows asking the applicant), withdraw, and
  * record_acceptance on the offer state.
+ *
+ * A state's required documents (stageDocuments.js) hold its forward actions, other than
+ * turning the case down, until each is signed or received.
  *
  * Who may act: whoever holds the action's permission (src/config/roles.js); a state that
  * names roles narrows that to those roles (admins always). Naming a role never grants a
@@ -298,6 +303,10 @@ const runTransition = async (tx, viewer, application, flow, state, action, input
     fail(400, `Complete these checks first: ${missing.map(label).join(', ')}.`, 'checks_incomplete')
   }
   if (action.options?.fourEyes) await assertFourEyes(tx, viewer, application)
+  if (awaitsDocuments(action, verdict)) {
+    const outstanding = await outstandingDocuments(tx, application, state, settings.documentKinds, flow.definition)
+    if (outstanding.length) fail(409, `These documents must be signed or received before the case moves on: ${outstanding.join(', ')}.`, 'documents_outstanding')
+  }
 
   const changes = {}
   let event
@@ -542,7 +551,13 @@ const UTILITY = {
   },
 }
 
-const loadSettings = async () => ({ workflow: await getSetting('workflow'), offers: await getSetting('offers'), products: await getProducts() })
+const loadSettings = async () => ({
+  workflow: await getSetting('workflow'),
+  offers: await getSetting('offers'),
+  products: await getProducts(),
+  // Read here, not in the transaction: the names of documents a state still waits for.
+  documentKinds: await listDocumentKinds({ includeRetired: true }),
+})
 
 /**
  * Applies one action. `input.version` must match the row, so an action taken on a stale
@@ -646,7 +661,7 @@ export const caseWorkflow = locate
 // ---------------------------------------------------------------------------
 
 /** Why `viewer` can't take `action` here, or null when they can (the server checks again on the day). */
-const blockedReason = (viewer, application, state, action, recommendation, roleName) => {
+const blockedReason = (viewer, application, state, action, recommendation, roleName, outstanding) => {
   if (application.status === 'info_requested') return 'Waiting on the applicant.'
   if (viewer.role !== 'admin') {
     const roles = state.roles || []
@@ -656,6 +671,8 @@ const blockedReason = (viewer, application, state, action, recommendation, roleN
   if (action.options?.fourEyes && (recommendation?.officerId === viewer.id || application.sourcedBy === viewer.id)) {
     return recommendation?.officerId === viewer.id ? 'You recommended this case, so a colleague makes the decision.' : 'You brought this case in, so a colleague makes the decision.'
   }
+  // A recommendation may still be to decline, so it stays open; the server holds an approval.
+  if (outstanding.length && action.kind !== 'recommend' && awaitsDocuments(action)) return `Waiting for signed documents: ${outstanding.join(', ')}.`
   return null
 }
 
@@ -671,6 +688,7 @@ export const workflowView = async (viewer, application, { recommendation = null 
   const roleName = (key) => labels[key] || key
   const phase = analysis.phases[state.id] || null
   const stepStates = analysis.order.map((id) => stateById(definition, id)).filter((entry) => entry?.trackProgress && appliesTo(entry, product))
+  const outstanding = state.type === 'final' ? [] : await outstandingDocuments(await getDb(), application, state, await listDocumentKinds({ includeRetired: true }), definition)
   const currentStretch = new Set([state.id, ...laterStates(definition, state.id, product)])
   return {
     version: flow.version,
@@ -688,6 +706,8 @@ export const workflowView = async (viewer, application, { recommendation = null 
       requiredChecks: state.requiredChecks || [],
       checks: [...new Set([...(state.requiredChecks || []), ...(state.actions || []).flatMap((action) => action.options?.checks || [])])],
       onAcceptLabel: state.type === 'offer' ? resolveState(definition, state.offer?.onAccept, product)?.label || null : null,
+      // Required documents not yet signed or received, which hold the case here.
+      documentsOutstanding: outstanding,
     },
     phase,
     worksHere: worksOn(viewer, state),
@@ -720,7 +740,7 @@ export const workflowView = async (viewer, application, { recommendation = null 
               claim: Boolean(action.options?.claim),
               requireNote: Boolean(action.options?.requireNote),
               checks: action.options?.checks || [],
-              blocked: blockedReason(viewer, application, state, action, recommendation, roleName),
+              blocked: blockedReason(viewer, application, state, action, recommendation, roleName, outstanding),
             }
           }),
   }

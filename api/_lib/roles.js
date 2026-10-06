@@ -2,6 +2,7 @@ import { eq, sql } from 'drizzle-orm'
 import { getDb, schema } from './db/client.js'
 import { fail, text } from './http.js'
 import { BUILT_IN_ROLES, PERMISSIONS, SCOPES, isPermission } from '../../src/config/roles.js'
+import { getSetting, setSetting } from './settings.js'
 
 const { roles, users } = schema
 
@@ -50,14 +51,22 @@ const fromCustom = (row) => ({
   permissions: cleanPermissions(row.permissions),
 })
 
+/** Built-in roles an admin deleted; never the administrator. */
+const removedBuiltIns = async () => ((await getSetting('removedRoles')).keys || []).filter((key) => BUILT_IN_ROLES[key] && key !== 'admin')
+
+/** The deleted built-in roles, to bring back on the Roles page. */
+export const listRemovedRoles = async () => (await removedBuiltIns()).map((key) => ({ key, label: BUILT_IN_ROLES[key].label, description: BUILT_IN_ROLES[key].description }))
+
 /** Every staff role, built-ins first. */
 export const listRoles = async () => {
   if (cache.list && Date.now() - cache.at < TTL_MS) return cache.list
   const db = await getDb()
-  const rows = await db.select().from(roles)
+  const [rows, removed] = await Promise.all([db.select().from(roles), removedBuiltIns()])
   const byKey = Object.fromEntries(rows.map((row) => [row.key, row]))
   const list = [
-    ...Object.keys(BUILT_IN_ROLES).map((key) => fromBuiltIn(key, byKey[key])),
+    ...Object.keys(BUILT_IN_ROLES)
+      .filter((key) => !removed.includes(key))
+      .map((key) => fromBuiltIn(key, byKey[key])),
     ...rows.filter((row) => !BUILT_IN_ROLES[row.key]).map(fromCustom).sort((a, b) => a.label.localeCompare(b.label)),
   ]
   cache = { at: Date.now(), list }
@@ -182,18 +191,41 @@ export const resetRole = async (key, actor, { check } = {}) => {
   return { before: current, after: await getRole(key) }
 }
 
-/** Removes a custom role nobody holds. */
-export const deleteRole = async (key, actor) => {
+/**
+ * Deletes a role nobody holds: a custom role for good, a built-in one by hiding it until
+ * it is restored (restoreRole). The administrator role can't be deleted. `check` refuses
+ * when the workflow still names the role (api/_handlers/roles.js).
+ */
+export const deleteRole = async (key, actor, { check } = {}) => {
   const current = await getRole(key)
   if (!current) fail(404, 'Role not found.', 'not_found')
+  if (current.locked) fail(403, 'The administrator role can’t be deleted.', 'locked_role')
   assertRoleWithin(actor, current)
-  if (current.builtIn) fail(400, 'Built-in roles can’t be deleted. You can change what they may do, or reset them.', 'built_in_role')
   const db = await getDb()
+  // Invited and switched-off members count too: deleting the role would strand them.
   const [{ count }] = await db.select({ count: sql`count(*)::int` }).from(users).where(eq(users.role, key))
   if (count > 0) fail(409, `${count} ${count === 1 ? 'person has' : 'people have'} this role. Give them another role first.`, 'role_in_use')
+  if (check) await check(current)
+
+  // A built-in role's saved changes go with it, so a restore starts from its defaults.
   await db.delete(roles).where(eq(roles.key, key))
+  if (current.builtIn) await setSetting('removedRoles', { keys: [...new Set([...(await removedBuiltIns()), key])] }, actor)
+  // Nobody can be asked for two-step sign-in by a role that no longer exists.
+  const security = await getSetting('security')
+  if ((security.requireTwoFactorRoles || []).includes(key)) {
+    await setSetting('security', { requireTwoFactorRoles: security.requireTwoFactorRoles.filter((entry) => entry !== key) }, actor)
+  }
   clearRolesCache()
   return current
+}
+
+/** Brings back a deleted built-in role, with its default permissions. */
+export const restoreRole = async (key, actor) => {
+  const removed = await removedBuiltIns()
+  if (!removed.includes(key)) fail(404, 'That role hasn’t been deleted.', 'not_found')
+  await setSetting('removedRoles', { keys: removed.filter((entry) => entry !== key) }, actor)
+  clearRolesCache()
+  return getRole(key)
 }
 
 /** How many people hold each role, for the Roles page. */

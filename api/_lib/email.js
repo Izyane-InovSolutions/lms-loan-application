@@ -30,9 +30,9 @@ export const sendOtpEmail = async (email, code, { purpose = 'resume', agentName 
     await getTransporter().sendMail({
       from: FROM_EMAIL,
       to: email,
-      subject: 'Your code to sign your loan offer',
-      text: `Your code to sign your loan offer and agreement is ${code}. It expires in 10 minutes. If you did not ask for it, do not share it with anyone.`,
-      html: `<p>Your code to sign your loan offer and agreement is <strong>${code}</strong>. It expires in 10 minutes.</p><p style="color:#64748b">If you did not ask for it, do not share it with anyone.</p>`,
+      subject: 'Your code to sign your loan documents',
+      text: `Your code to sign your loan documents is ${code}. It expires in 10 minutes. If you did not ask for it, do not share it with anyone.`,
+      html: `<p>Your code to sign your loan documents is <strong>${code}</strong>. It expires in 10 minutes.</p><p style="color:#64748b">If you did not ask for it, do not share it with anyone.</p>`,
     })
     return
   }
@@ -114,6 +114,30 @@ export const sendApplicationUpdateEmail = async (email, { reference, headline, b
     subject: `${headline} — application ${reference}`,
     text: `${body}\n\nSee your application: ${url}\n\nReference: ${reference}`,
     html: `<p>${escapeHtml(body)}</p><p><a href="${escapeHtml(url)}">See your application</a></p><p style="color:#64748b">Reference: ${escapeHtml(reference)}</p>`,
+  })
+}
+
+/**
+ * The documents a workflow stage sends the applicant (stageDocuments.js), as one email:
+ * what each is and whether to sign it, the unsigned PDFs attached, and a button to sign
+ * them online. `documents` is [{ label, sign }]; `attachments` is nodemailer's
+ * [{ filename, content, contentType }].
+ */
+export const sendStageDocumentsEmail = async (email, { reference, documents, url, attachments = [] }) => {
+  const toSign = documents.some((document) => document.sign)
+  const subject = toSign ? `Documents to sign for ${reference}` : `Documents for ${reference}`
+  const lead = toSign
+    ? 'We have attached documents for your loan application. Please read them, then sign online, or print, sign and upload a scan or photo of each one marked to sign.'
+    : 'We have attached documents for your loan application. Please read them and keep them for your records.'
+  const lines = documents.map((document) => `${document.label}${document.sign ? ' (to sign)' : ''}`)
+  const action = toSign ? 'Sign your documents' : 'See your application'
+  await getTransporter().sendMail({
+    from: FROM_EMAIL,
+    to: email,
+    subject,
+    text: `${lead}\n\n${lines.map((line) => `- ${line}`).join('\n')}\n\n${action}: ${url}\n\nReference: ${reference}`,
+    html: `<p>${escapeHtml(lead)}</p><ul>${lines.map((line) => `<li>${escapeHtml(line)}</li>`).join('')}</ul><p><a href="${escapeHtml(url)}" style="display:inline-block;padding:10px 18px;border-radius:6px;background:#1f4e79;color:#ffffff;text-decoration:none;font-weight:600">${action}</a></p><p style="color:#64748b">Reference: ${escapeHtml(reference)}</p>`,
+    attachments,
   })
 }
 

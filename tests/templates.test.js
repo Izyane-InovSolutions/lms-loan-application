@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { PDFDocument } from 'pdf-lib'
-import { createMemoryKv, client, draftPreparer, emailCode } from './helpers.js'
+import { createMemoryKv, client, draftPreparer, emailCode, signedAcceptance } from './helpers.js'
 
 const kv = createMemoryKv()
 vi.mock('../api/_lib/kv.js', () => ({ default: kv }))
@@ -98,17 +98,19 @@ describe('templates in the workspace', () => {
 describe('an approved loan', () => {
   let id
 
-  it('gets its offer letter and agreement from the published templates', async () => {
+  it('gets its offer letter from the published template, and the facility letter once the offer is accepted', async () => {
     id = await approvedLoan('offered@example.com')
-    const documents = await waitFor(async () => {
-      const { body } = await admin.get(`/applications/${id}`)
-      const system = body.documents.filter((document) => document.source === 'system')
-      return system.length === 2 ? system : null
-    })
-    const letter = documents.find((document) => document.docType === 'offer_letter')
+    const system = async () => (await admin.get(`/applications/${id}`)).body.documents.filter((document) => document.source === 'system')
+    const [letter] = await waitFor(async () => ((await system()).length === 1 ? system() : null))
     expect(letter.meta).toMatchObject({ kind: 'offer_letter', templateVersion: 2, templateSource: 'text', signed: false })
-    const agreement = documents.find((document) => document.docType === 'loan_agreement')
-    expect(agreement.meta).toMatchObject({ templateVersion: 2, templateSource: 'pdf' })
+
+    // Only the offer letter is read and signed at the offer; the facility letter follows acceptance.
+    const customer = client(handler)
+    await emailCode(kv, 'login', 'offered@example.com', '424242')
+    await customer.post('/auth/customer', { email: 'offered@example.com', code: '424242' })
+    expect((await customer.post(`/me/applications/${id}/accept`, await signedAcceptance(kv, 'offered@example.com'))).status).toBe(200)
+    const agreement = await waitFor(async () => (await system()).find((document) => document.docType === 'loan_agreement'))
+    expect(agreement.meta).toMatchObject({ templateVersion: 2, templateSource: 'pdf', signed: false })
     expect(agreement.meta.signatureSpots).toHaveLength(1)
 
     // The fingerprint is of the stored file itself.
@@ -133,7 +135,7 @@ describe('an approved loan', () => {
     await emailCode(kv, 'login', 'offered@example.com', '424242')
     await customer.post('/auth/customer', { email: 'offered@example.com', code: '424242' })
     const { body } = await customer.get(`/me/applications/${id}`)
-    expect(body.offerDocuments.map((document) => document.kind).sort()).toEqual(['loan_agreement', 'offer_letter'])
+    expect(body.offerDocuments.map((document) => document.kind)).toEqual(['offer_letter'])
     expect(body.documents.every((document) => document.source !== 'system')).toBe(true)
     const letter = await customer.get(`/applications/${id}/documents/${body.offerDocuments.find((document) => document.kind === 'offer_letter').id}`)
     expect(letter.headers['content-type']).toBe('application/pdf')
