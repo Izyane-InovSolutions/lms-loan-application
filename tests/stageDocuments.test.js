@@ -110,7 +110,7 @@ describe('the offer, on a workflow from before stage documents', () => {
 
     // The offer: the offer letter alone.
     const offerEmail = await waitFor(() => sent.find((entry) => entry.subject === `Documents to sign for ${reference}`))
-    expect(offerEmail.attachments).toHaveLength(1)
+    expect(offerEmail.attachments.filter((file) => !file.cid)).toHaveLength(1)
     const issued = await waitFor(async () => {
       const { stageDocuments: documents } = await caseOf(id)
       return documents.length === 1 && documents[0].status === 'sent' && documents
@@ -128,7 +128,7 @@ describe('the offer, on a workflow from before stage documents', () => {
 
     // Accepted: the facility letter goes out by itself, for the customer to sign.
     const facilityEmail = await waitFor(() => sent.filter((entry) => entry.subject === `Documents to sign for ${reference}`)[1])
-    expect(facilityEmail.attachments).toHaveLength(1)
+    expect(facilityEmail.attachments.filter((file) => !file.cid)).toHaveLength(1)
     const facility = await waitFor(async () => (await customer.get(`/me/applications/${id}`)).body.stageDocuments.find((document) => document.kind === 'loan_agreement'))
     expect(facility).toMatchObject({ label: 'Facility letter', status: 'sent' })
     const { code, signature } = await signedAcceptance(kv, email)
@@ -235,8 +235,8 @@ describe('a stage that sends documents', () => {
     expect((await move(officer, id, 'prescreen')).status).toBe(200)
     const message = await waitFor(() => sent.find((entry) => entry.subject === `Documents to sign for ${reference}`))
     expect(message.to).toBe(email)
-    expect(message.attachments.map((attachment) => attachment.filename)).toEqual([`debit-order-mandate-${reference}.pdf`, `key-facts-${reference}.pdf`])
-    expect(message.attachments.every((attachment) => attachment.content.subarray(0, 4).toString() === '%PDF')).toBe(true)
+    expect(message.attachments.filter((file) => !file.cid).map((attachment) => attachment.filename)).toEqual([`debit-order-mandate-${reference}.pdf`, `key-facts-${reference}.pdf`])
+    expect(message.attachments.filter((file) => !file.cid).every((attachment) => attachment.content.subarray(0, 4).toString() === '%PDF')).toBe(true)
     expect(message.html).toContain('/my-applications')
 
     const body = await waitFor(async () => {
@@ -298,7 +298,7 @@ describe('a stage that sends documents', () => {
     sent.length = 0
     expect((await officer.post(`/applications/${id}/stage-documents/send`, {})).status).toBe(200)
     expect(sent.at(-1)).toMatchObject({ subject: `Documents for ${reference}` })
-    expect(sent.at(-1).attachments.map((attachment) => attachment.filename)).toEqual([`key-facts-${reference}.pdf`])
+    expect(sent.at(-1).attachments.filter((file) => !file.cid).map((attachment) => attachment.filename)).toEqual([`key-facts-${reference}.pdf`])
     const moved = await move(officer, id, 'underwrite', { verdict: 'approve', rationale: 'Affordable' })
     expect(moved.status, JSON.stringify(moved.body)).toBe(200)
   })
