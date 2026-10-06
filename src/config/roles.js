@@ -80,6 +80,15 @@ export const PERMISSIONS = PERMISSION_GROUPS.flatMap((group) => group.permission
 
 export const isPermission = (key) => PERMISSIONS.includes(key)
 
+/**
+ * What administrators never do: bring business in. They oversee the people who do, so no
+ * application is ever credited to an administrator, and none leads a team of agents.
+ */
+export const ADMIN_EXCLUDED_PERMISSIONS = ['applications.assist', 'team.lead']
+
+/** The administrator's fixed set: everything else. */
+export const ADMIN_PERMISSIONS = PERMISSIONS.filter((key) => !ADMIN_EXCLUDED_PERMISSIONS.includes(key))
+
 /** Which applications a role's members see. */
 export const SCOPES = {
   all: { label: 'Every application' },
@@ -94,9 +103,9 @@ const OFFICER_PERMISSIONS = ['applications.note', 'offers.record', 'cases.work',
 export const BUILT_IN_ROLES = {
   admin: {
     label: 'Administrator',
-    description: 'Manages users, roles, policy rules and settings. Sees everything.',
+    description: 'Manages users, roles, policy rules and settings. Sees everything, but doesn’t bring business in.',
     scope: 'all',
-    permissions: PERMISSIONS,
+    permissions: ADMIN_PERMISSIONS,
   },
   sales_manager: {
     label: 'Sales manager',

@@ -8,11 +8,12 @@ import { useBranding } from '@/components/brand/BrandingProvider'
 import { BRAND_NAME_MAX, DEFAULT_BRAND_NAME, LOGO_TYPES } from '@/config/branding'
 import { api } from '../api'
 import { Field, FormError, Panel } from '../components'
+import { ThemePanel } from './ThemePanel'
 
 /**
- * Settings → Branding: the product's name and logo, as applicants and staff see them —
- * the site header, sign-in pages, emails, consent wording, generated documents and the
- * authenticator app. Changes show everywhere as soon as they are saved.
+ * Settings → Branding: the theme, name, logo and letterhead, as applicants and staff see
+ * them — the workspace, the site, sign-in pages, emails, consent wording, generated
+ * documents and the authenticator app. Changes show everywhere as soon as they are saved.
  */
 export function BrandingTab({ initial, notify }) {
   const branding = useBranding()
@@ -22,7 +23,7 @@ export function BrandingTab({ initial, notify }) {
   // { panel, message }: shown under the panel whose action failed.
   const [error, setError] = useState(null)
   const fileRef = useRef(null)
-  const letterheadOf = (source) => Object.fromEntries(LETTERHEAD_FIELDS.map(({ key }) => [key, source?.[key] || (key === 'colour' ? DEFAULT_COLOUR : '')]))
+  const letterheadOf = (source) => Object.fromEntries(LETTERHEAD_FIELDS.map(({ key }) => [key, source?.[key] || '']))
   const [letterhead, setLetterhead] = useState(() => letterheadOf(initial))
   const [savedLetterhead, setSavedLetterhead] = useState(() => letterheadOf(initial))
 
@@ -62,7 +63,7 @@ export function BrandingTab({ initial, notify }) {
     run(
       'letterhead',
       async () => {
-        const response = await api('/settings/branding', { method: 'PUT', body: { name: savedName, ...letterhead } })
+        const response = await api('/settings/branding', { method: 'PUT', body: letterhead })
         setLetterhead(letterheadOf(response.branding))
         setSavedLetterhead(letterheadOf(response.branding))
       },
@@ -94,6 +95,8 @@ export function BrandingTab({ initial, notify }) {
 
   return (
     <div className="space-y-6">
+      <ThemePanel initial={initial} notify={notify} />
+
       <Panel title="Name" description="Shown in the site header, sign-in pages, emails, consent wording, the authenticator app and generated offer documents.">
         <Field id="branding-name" label="Product name" hint={`Up to ${BRAND_NAME_MAX} characters. The default is “${DEFAULT_BRAND_NAME}”.`}>
           <Input id="branding-name" maxLength={BRAND_NAME_MAX} value={name} onChange={(event) => setName(event.target.value)} />
@@ -138,25 +141,12 @@ export function BrandingTab({ initial, notify }) {
 
       <Panel
         title="Letterhead"
-        description="At the top of every offer letter, agreement and stage document the workspace writes: the logo and name on the left, these details on the right, and a band of the brand colour. Uploaded PDF templates keep their own letterhead."
+        description="At the top of every offer letter, facility letter and stage document the workspace writes, and at the foot of every email: the logo and name, these details, and bands of the theme’s accent colour. Uploaded PDF templates keep their own letterhead."
       >
         <div className="grid gap-4 sm:grid-cols-2">
           {LETTERHEAD_FIELDS.map((field) => (
             <Field key={field.key} id={`letterhead-${field.key}`} label={field.label} hint={field.hint}>
-              {field.key === 'colour' ? (
-                <div className="flex items-center gap-2">
-                  <input
-                    type="color"
-                    aria-label="Pick the brand colour"
-                    value={/^#[0-9a-f]{6}$/i.test(letterhead.colour) ? letterhead.colour : DEFAULT_COLOUR}
-                    onChange={(event) => setLetterhead((prev) => ({ ...prev, colour: event.target.value }))}
-                    className="h-10 w-12 cursor-pointer rounded border bg-background p-1"
-                  />
-                  <Input id="letterhead-colour" value={letterhead.colour} maxLength={7} onChange={(event) => setLetterhead((prev) => ({ ...prev, colour: event.target.value }))} className="font-mono" />
-                </div>
-              ) : (
-                <Input id={`letterhead-${field.key}`} type={field.type || 'text'} value={letterhead[field.key]} maxLength={field.max} placeholder={field.placeholder} onChange={(event) => setLetterhead((prev) => ({ ...prev, [field.key]: event.target.value }))} />
-              )}
+              <Input id={`letterhead-${field.key}`} type={field.type || 'text'} value={letterhead[field.key]} maxLength={field.max} placeholder={field.placeholder} onChange={(event) => setLetterhead((prev) => ({ ...prev, [field.key]: event.target.value }))} />
             </Field>
           ))}
         </div>
@@ -172,8 +162,6 @@ export function BrandingTab({ initial, notify }) {
     </div>
   )
 }
-
-const DEFAULT_COLOUR = '#1f4e79'
 
 /** A WebP image redrawn as a PNG file of the same size, in the browser. */
 const webpToPng = async (file) => {
@@ -191,5 +179,4 @@ const LETTERHEAD_FIELDS = [
   { key: 'phone', label: 'Phone', placeholder: '+260 211 000 000', max: 40 },
   { key: 'email', label: 'Email', type: 'email', placeholder: 'loans@example.com', max: 120 },
   { key: 'website', label: 'Website', placeholder: 'www.example.com', max: 120 },
-  { key: 'colour', label: 'Brand colour', hint: 'Used for the name and the bands.' },
 ]

@@ -48,10 +48,11 @@ const HEADER_SPACE = 74
 const FOOTER_SPACE = 22
 
 /** Lays text out top to bottom across as many A4 pages as it needs. `letterhead` keeps room for one. */
-const createWriter = async (doc, { letterhead = false } = {}) => {
+const createWriter = async (doc, { letterhead = false, serif = false } = {}) => {
+  // A serif theme (src/config/theme.js) prints in Times; otherwise Helvetica.
   const fonts = {
-    regular: await doc.embedFont(StandardFonts.Helvetica),
-    bold: await doc.embedFont(StandardFonts.HelveticaBold),
+    regular: await doc.embedFont(serif ? StandardFonts.TimesRoman : StandardFonts.Helvetica),
+    bold: await doc.embedFont(serif ? StandardFonts.TimesRomanBold : StandardFonts.HelveticaBold),
     italic: await doc.embedFont(StandardFonts.TimesRomanItalic),
   }
   const safe = safeFor(fonts.regular)
@@ -181,7 +182,7 @@ const createWriter = async (doc, { letterhead = false } = {}) => {
   }
 }
 
-/** A brand colour from Settings → Branding ("#1f4e79"), or the default ink. */
+/** The accent colour from Settings → Branding ("#1b4f72"), or the default ink. */
 const colourOf = (hex) => {
   const match = /^#?([0-9a-f]{6})$/i.exec(String(hex || ''))
   if (!match) return INK
@@ -246,7 +247,7 @@ export const renderTextTemplate = async ({ title, body, values, footer, letterhe
   const doc = await PDFDocument.create()
   doc.setTitle(fillPlaceholders(title, values))
   doc.setProducer(producer)
-  const writer = await createWriter(doc, { letterhead: Boolean(letterhead) })
+  const writer = await createWriter(doc, { letterhead: Boolean(letterhead), serif: Boolean(letterhead?.serif) })
   writer.newPage()
   writer.title(fillPlaceholders(title, values))
   const signatureSpots = []

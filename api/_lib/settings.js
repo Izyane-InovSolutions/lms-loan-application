@@ -5,6 +5,7 @@ import { DEFAULT_PRICING } from '../../src/config/loanProducts.js'
 import { AI_FIELDS, AI_SECRET_FIELDS } from '../../src/config/aiProviders.js'
 import { DEFAULT_STAGES_CONFIG } from '../../src/config/stages.js'
 import { DEFAULT_BRAND_NAME } from '../../src/config/branding.js'
+import { DEFAULT_THEME } from '../../src/config/theme.js'
 
 /*
  * Admin-editable configuration. Each key has a default here, so a fresh database
@@ -29,7 +30,9 @@ export const SETTING_DEFAULTS = {
     phone: '',
     email: '',
     website: '',
-    colour: '#1f4e79',
+    // The theme (Settings → Branding → Theme, src/config/theme.js): the accent colour, which
+    // documents and emails use too, the sidebar, corners and font.
+    ...DEFAULT_THEME,
   },
   // When to hand applications to the LMS: on submit, once approved, or once the customer
   // has accepted the offer (the default when acceptance is required).

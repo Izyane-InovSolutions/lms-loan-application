@@ -1,7 +1,7 @@
 import { eq, sql } from 'drizzle-orm'
 import { getDb, schema } from './db/client.js'
 import { fail, text } from './http.js'
-import { BUILT_IN_ROLES, PERMISSIONS, SCOPES, isPermission } from '../../src/config/roles.js'
+import { ADMIN_PERMISSIONS, BUILT_IN_ROLES, SCOPES, isPermission } from '../../src/config/roles.js'
 import { getSetting, setSetting } from './settings.js'
 
 const { roles, users } = schema
@@ -12,8 +12,9 @@ const { roles, users } = schema
  * applies at once on this instance (the cache is cleared) and within half a minute on
  * any other.
  *
- * Administrators always hold every permission and see everything, so no configuration
- * can lock the workspace out of its own settings.
+ * Administrators always hold every permission but the ones that bring business in
+ * (ADMIN_EXCLUDED_PERMISSIONS), and see everything, so no configuration can lock the
+ * workspace out of its own settings.
  */
 
 const TTL_MS = 30 * 1000
@@ -27,7 +28,7 @@ const cleanPermissions = (list) => [...new Set((Array.isArray(list) ? list : [])
 
 const fromBuiltIn = (key, row) => {
   const defaults = BUILT_IN_ROLES[key]
-  if (key === 'admin') return { key, builtIn: true, locked: true, customized: false, ...defaults, permissions: [...PERMISSIONS] }
+  if (key === 'admin') return { key, builtIn: true, locked: true, customized: false, ...defaults, permissions: [...ADMIN_PERMISSIONS] }
   return {
     key,
     builtIn: true,
@@ -85,13 +86,15 @@ const SCOPE_RANK = { own: 0, team: 1, all: 2 }
 /**
  * True when `role` gives nothing `actor` lacks: each of its permissions, and a scope no
  * wider than theirs. Holding users.manage or roles.manage lets someone share what they
- * have, never hand out (to themselves or anyone) more — administrators, who hold
- * everything, remain the only way to grant anything.
+ * have, never hand out (to themselves or anyone) more — administrators remain the only way
+ * to grant anything. They may grant even what they don't hold themselves (bringing
+ * business in, ADMIN_EXCLUDED_PERMISSIONS): it's left off them by design, not for want of
+ * authority.
  */
 export const roleWithin = (actor, role) =>
   Boolean(actor && role) &&
-  role.permissions.every((permission) => actor.permissions?.includes(permission)) &&
-  (SCOPE_RANK[role.scope] ?? 0) <= (SCOPE_RANK[actor.scope] ?? 0)
+  (actor.role === 'admin' ||
+    (role.permissions.every((permission) => actor.permissions?.includes(permission)) && (SCOPE_RANK[role.scope] ?? 0) <= (SCOPE_RANK[actor.scope] ?? 0)))
 
 /** Throws a 403 unless `roleWithin(actor, role)`. */
 export const assertRoleWithin = (actor, role, message = 'You can only manage roles that have no more access than your own.') => {
@@ -162,7 +165,7 @@ export const createRole = async (input, actor) => {
 export const updateRole = async (key, input, actor, { check } = {}) => {
   const current = await getRole(key)
   if (!current) fail(404, 'Role not found.', 'not_found')
-  if (current.locked) fail(403, 'The administrator role always has every permission.', 'locked_role')
+  if (current.locked) fail(403, 'The administrator role’s permissions are fixed.', 'locked_role')
   assertRoleWithin(actor, current)
   const changes = parseRoleInput(input, { partial: true })
   const next = { label: current.label, description: current.description || null, scope: current.scope, permissions: current.permissions, ...changes }
@@ -181,7 +184,7 @@ export const updateRole = async (key, input, actor, { check } = {}) => {
 export const resetRole = async (key, actor, { check } = {}) => {
   const current = await getRole(key)
   if (!current?.builtIn) fail(404, 'Only built-in roles can be reset.', 'not_found')
-  if (current.locked) fail(403, 'The administrator role always has every permission.', 'locked_role')
+  if (current.locked) fail(403, 'The administrator role’s permissions are fixed.', 'locked_role')
   assertRoleWithin(actor, current)
   assertRoleWithin(actor, fromBuiltIn(key, null), 'This role’s defaults have more access than your own, so only an administrator can reset it.')
   if (check) await check(fromBuiltIn(key, null))

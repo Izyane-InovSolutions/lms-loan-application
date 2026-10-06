@@ -17,7 +17,7 @@ function AuthFrame({ title, description, children, footer }) {
   const { name } = useBranding()
   return (
     <div className="grid min-h-screen bg-background lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
-      <aside className="relative hidden overflow-hidden bg-[hsl(205_65%_14%)] p-10 text-white lg:flex lg:flex-col lg:justify-between">
+      <aside className="relative hidden overflow-hidden bg-[hsl(var(--sidebar))] p-10 text-white lg:flex lg:flex-col lg:justify-between">
         <Link to="/" className="flex items-center gap-3 text-sm font-medium text-white/80 hover:text-white">
           <Logo size="sm" showWordmark={false} />
           {name}

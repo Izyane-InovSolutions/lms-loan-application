@@ -1159,10 +1159,14 @@ function DashboardPage() {
                 Step {currentStep + 1} of {stepTitles.length}
               </span>
             </div>
-            <Button type="button" variant="ghost" size="sm" onClick={handleSaveAndExit} disabled={exiting}>
-              {exiting ? <Loader2 className="animate-spin" /> : <LogOut />}
-              {exiting ? 'Saving…' : 'Save & exit'}
-            </Button>
+            <div className="flex items-center gap-3">
+              {/* Who is filling this in, when an agent or RM is doing it for a customer. */}
+              {assistedBy ? <AssistingAs user={assistedBy} /> : null}
+              <Button type="button" variant="ghost" size="sm" onClick={handleSaveAndExit} disabled={exiting}>
+                {exiting ? <Loader2 className="animate-spin" /> : <LogOut />}
+                {exiting ? 'Saving…' : 'Save & exit'}
+              </Button>
+            </div>
           </div>
 
           <h1 className="mt-3 text-3xl font-bold tracking-tight text-foreground sm:text-4xl print:hidden">
@@ -1409,3 +1413,26 @@ function DashboardPage() {
 }
 
 export default DashboardPage
+
+/* eslint-disable react/prop-types */
+/** The staff member filling in an application for a customer: their initials, name and role. */
+function AssistingAs({ user }) {
+  const initials = String(user.name || '?')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join('')
+    .toUpperCase()
+  return (
+    <div className="flex items-center gap-2.5 rounded-full border bg-card py-1 pl-1 pr-3.5 shadow-sm" aria-label={`Filling in as ${user.name}, ${user.roleLabel || 'staff'}`}>
+      <span className="grid size-8 shrink-0 place-items-center rounded-full bg-primary text-xs font-semibold text-primary-foreground" aria-hidden="true">
+        {initials}
+      </span>
+      <span className="min-w-0 leading-tight" aria-hidden="true">
+        <span className="block max-w-[11rem] truncate text-sm font-semibold text-foreground">{user.name}</span>
+        <span className="block max-w-[11rem] truncate text-xs text-muted-foreground">{user.roleLabel || 'Staff'}</span>
+      </span>
+    </div>
+  )
+}

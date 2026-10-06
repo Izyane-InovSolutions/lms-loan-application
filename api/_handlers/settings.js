@@ -21,6 +21,7 @@ import { getZraConfig } from '../_lib/zra/config.js'
 
 const LEGACY_WORKFLOW_KEYS = ['workflow', 'offers', 'stages', 'lms']
 import { BRAND_NAME_MAX } from '../../src/config/branding.js'
+import { isHexColour, normaliseTheme } from '../../src/config/theme.js'
 
 /*
  * Settings → everything an administrator configures in the workspace. Each key is
@@ -104,14 +105,24 @@ const aiFieldValues = (value, { onlyPresent = false } = {}) =>
 const VALIDATORS = {
   // The name only: the logo is set by its own upload endpoint (branding.js), never from a
   // body here, which could otherwise point it at any stored file.
+  // Each panel of Settings → Branding (name, letterhead, theme) saves only its own fields;
+  // those it leaves out keep their saved values.
   branding: (value) => {
-    const name = text(value.name, BRAND_NAME_MAX).replace(/\s+/g, ' ')
-    if (name.length < 2) throw new Error('Give the product a name of at least two characters.')
-    const colour = String(value.colour || '').trim()
-    if (colour && !/^#[0-9a-f]{6}$/i.test(colour)) throw new Error('Give the brand colour as a hex value, like #1f4e79.')
-    const email = text(value.email, 120)
-    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('The letterhead email address doesn’t look right.')
-    return { name, address: text(value.address, 200), phone: text(value.phone, 40), email, website: text(value.website, 120), colour: colour || '#1f4e79' }
+    const next = {}
+    if (value.name !== undefined) {
+      next.name = text(value.name, BRAND_NAME_MAX).replace(/\s+/g, ' ')
+      if (next.name.length < 2) throw new Error('Give the product a name of at least two characters.')
+    }
+    if (value.email !== undefined) {
+      next.email = text(value.email, 120)
+      if (next.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(next.email)) throw new Error('The letterhead email address doesn’t look right.')
+    }
+    for (const [key, max] of [['address', 200], ['phone', 40], ['website', 120]]) if (value[key] !== undefined) next[key] = text(value[key], max)
+    if (value.colour !== undefined && !isHexColour(String(value.colour).trim())) throw new Error('Give the accent colour as a hex value, like #1b4f72.')
+    // The theme: unknown choices fall back to the defaults rather than failing.
+    const theme = normaliseTheme(value)
+    for (const key of ['colour', 'sidebar', 'radius', 'font']) if (value[key] !== undefined) next[key] = theme[key]
+    return next
   },
   lms: (value) => {
     if (!['submit', 'approval'].includes(value.syncOn)) throw new Error('Choose when to send applications to the LMS.')

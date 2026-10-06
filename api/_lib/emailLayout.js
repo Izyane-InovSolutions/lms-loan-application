@@ -1,6 +1,13 @@
-import crypto from 'node:crypto'
-import { getBranding, getLetterhead } from './branding.js'
-import { hasTransparentBackground } from './imageAlpha.js'
+import crypto from "node:crypto";
+import { getBranding, getLetterhead } from "./branding.js";
+import { hasTransparentBackground } from "./imageAlpha.js";
+import {
+  DEFAULT_THEME,
+  FONT_OPTIONS,
+  RADIUS_OPTIONS,
+  normaliseTheme,
+  takesWhiteText,
+} from "../../src/config/theme.js";
 
 /*
  * The one look every email shares, styled like the lender's letterhead: a full-width block
@@ -17,105 +24,132 @@ import { hasTransparentBackground } from './imageAlpha.js'
  * fetching anything from the workspace.
  */
 
-const LOGO_CID = 'brand-logo'
+const LOGO_CID = "brand-logo";
 
 // Whether each logo seen so far has a see-through background, by its fingerprint: worked
 // out once per logo rather than once per email.
-const transparency = new Map()
+const transparency = new Map();
 const isTransparent = (logo) => {
-  const key = crypto.createHash('sha1').update(logo.bytes).digest('hex')
-  if (!transparency.has(key)) transparency.set(key, hasTransparentBackground(logo.bytes, logo.contentType))
-  return transparency.get(key)
-}
-const FALLBACK_COLOUR = '#1f4e79'
-const FONT = "'Helvetica Neue',Helvetica,Arial,-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif"
+  const key = crypto.createHash("sha1").update(logo.bytes).digest("hex");
+  if (!transparency.has(key))
+    transparency.set(
+      key,
+      hasTransparentBackground(logo.bytes, logo.contentType),
+    );
+  return transparency.get(key);
+};
 
 export const escapeHtml = (value) =>
-  String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char])
-
-const colourOf = (value) => (/^#[0-9a-f]{6}$/i.test(String(value || '')) ? value : FALLBACK_COLOUR)
+  String(value ?? "").replace(
+    /[&<>"']/g,
+    (char) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[
+        char
+      ],
+  );
 
 /** The brand colour mixed with white (`amount` > 0) or black (< 0). */
 const mixed = (hex, amount) => {
-  const value = parseInt(hex.slice(1), 16)
-  const toward = amount >= 0 ? 255 : 0
-  const share = Math.abs(amount)
-  const channels = [(value >> 16) & 255, (value >> 8) & 255, value & 255].map((channel) => Math.round(channel + (toward - channel) * share))
-  return `#${channels.map((channel) => channel.toString(16).padStart(2, '0')).join('')}`
-}
+  const value = parseInt(hex.slice(1), 16);
+  const toward = amount >= 0 ? 255 : 0;
+  const share = Math.abs(amount);
+  const channels = [(value >> 16) & 255, (value >> 8) & 255, value & 255].map(
+    (channel) => Math.round(channel + (toward - channel) * share),
+  );
+  return `#${channels.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
+};
 
-/** The palette every piece draws from, all from the brand colour. */
-const paletteOf = (colour) => ({
-  colour,
-  ink: mixed(colour, -0.25), // headings and body text: the brand colour, deepened
-  soft: mixed(colour, 0.35), // secondary text
-  page: mixed(colour, 0.88), // the background the message sits on
-  panel: mixed(colour, 0.94), // panels a shade lighter than the page
-  line: mixed(colour, 0.75), // dividers and borders
-  onBrand: mixed(colour, 0.9), // text on the brand-coloured header
-  accent: mixed(colour, 0.14), // the decorative shapes in the header
-})
+/** The palette every piece draws from: colours from the accent, corners and font from the theme. */
+const paletteOf = (theme) => {
+  const { colour, radius, font } = normaliseTheme(theme);
+  return {
+    colour,
+    radius: RADIUS_OPTIONS[radius].email,
+    font: FONT_OPTIONS[font].email,
+    ink: mixed(colour, -0.25), // headings and body text: the brand colour, deepened
+    soft: mixed(colour, 0.35), // secondary text
+    page: mixed(colour, 0.88), // the background the message sits on
+    panel: mixed(colour, 0.94), // panels a shade lighter than the page
+    line: mixed(colour, 0.75), // dividers and borders
+    // Text on the accent: near-white on a dark accent, a deep shade on a light one.
+    onBrand: takesWhiteText(colour) ? mixed(colour, 0.9) : mixed(colour, -0.7),
+    accent: mixed(colour, takesWhiteText(colour) ? 0.14 : -0.12), // the decorative shapes in the header
+  };
+};
 
 // ---------------------------------------------------------------------------
 // Pieces a message is made of. Each is HTML, or a function of the palette.
 // ---------------------------------------------------------------------------
 
-export const paragraph = (text, { muted = false } = {}) => ({ ink, soft }) =>
-  `<p style="margin:0 0 16px;font-size:16px;line-height:1.6;color:${muted ? soft : ink}">${escapeHtml(text)}</p>`
+export const paragraph =
+  (text, { muted = false } = {}) =>
+  ({ ink, soft }) =>
+    `<p style="margin:0 0 16px;font-size:16px;line-height:1.6;color:${muted ? soft : ink}">${escapeHtml(text)}</p>`;
 
 /** A one-time code, large and spaced so it's easy to read out or type, with how long it lasts. */
-export const codeBlock = (code, { expires = 'Expires in 10 minutes' } = {}) => ({ ink, soft, panel, line }) =>
-  `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:8px 0 22px">
-    <tr><td class="tile" align="center" style="background:${panel};border:1px solid ${line};border-radius:4px;padding:24px 16px">
+export const codeBlock =
+  (code, { expires = "Expires in 10 minutes" } = {}) =>
+  ({ ink, soft, panel, line, radius }) =>
+    `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:8px 0 22px">
+    <tr><td class="tile" align="center" style="background:${panel};border:1px solid ${line};border-radius:${radius}px;padding:24px 16px">
       <div class="code" style="font-family:'SFMono-Regular',Menlo,Consolas,monospace;font-size:36px;font-weight:700;letter-spacing:12px;color:${ink};user-select:all;-webkit-user-select:all">${escapeHtml(code)}</div>
       <div style="margin-top:10px;font-size:12px;letter-spacing:0.5px;text-transform:uppercase;color:${soft}">${escapeHtml(expires)}</div>
     </td></tr>
-  </table>`
+  </table>`;
 
 /** A list of items, each with an optional tag on the right ("To sign"). */
-export const itemList = (items) => ({ colour, ink, panel, line, onBrand }) =>
-  `<table role="presentation" class="list" width="100%" cellpadding="0" cellspacing="0" style="margin:4px 0 22px;background:${panel};border:1px solid ${line};border-radius:4px;border-collapse:separate">
+export const itemList =
+  (items) =>
+  ({ colour, ink, panel, line, onBrand, radius }) =>
+    `<table role="presentation" class="list" width="100%" cellpadding="0" cellspacing="0" style="margin:4px 0 22px;background:${panel};border:1px solid ${line};border-radius:${radius}px;border-collapse:separate">
     ${items
       .map(
-        (item, index) => `<tr><td style="padding:14px 18px;${index ? `border-top:1px solid ${line};` : ''}">
+        (
+          item,
+          index,
+        ) => `<tr><td style="padding:14px 18px;${index ? `border-top:1px solid ${line};` : ""}">
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
             <td style="font-size:15px;color:${ink}"><span style="display:inline-block;width:7px;height:7px;background:${colour};margin-right:12px;vertical-align:middle"></span>${escapeHtml(item.label)}</td>
-            ${item.badge ? `<td align="right" style="white-space:nowrap"><span style="display:inline-block;padding:4px 10px;border-radius:2px;background:${colour};color:${onBrand};font-size:11px;font-weight:700;letter-spacing:0.6px;text-transform:uppercase">${escapeHtml(item.badge)}</span></td>` : ''}
+            ${item.badge ? `<td align="right" style="white-space:nowrap"><span style="display:inline-block;padding:4px 10px;border-radius:${Math.max(2, Math.round(radius / 2))}px;background:${colour};color:${onBrand};font-size:11px;font-weight:700;letter-spacing:0.6px;text-transform:uppercase">${escapeHtml(item.badge)}</span></td>` : ""}
           </tr></table>
-        </td></tr>`
+        </td></tr>`,
       )
-      .join('')}
-  </table>`
+      .join("")}
+  </table>`;
 
 /** Label and value pairs, such as a reference, in a quiet panel. */
-export const details = (rows) => ({ ink, soft, panel, line }) =>
-  `<table role="presentation" class="panel" width="100%" cellpadding="0" cellspacing="0" style="margin:4px 0 22px;background:${panel};border:1px solid ${line};border-radius:4px">
+export const details =
+  (rows) =>
+  ({ ink, soft, panel, line, radius }) =>
+    `<table role="presentation" class="panel" width="100%" cellpadding="0" cellspacing="0" style="margin:4px 0 22px;background:${panel};border:1px solid ${line};border-radius:${radius}px">
     ${rows
       .map(
         ([label, value], index) => `<tr>
-          <td style="padding:12px 18px;${index ? `border-top:1px solid ${line};` : ''}font-size:13px;color:${soft};width:40%">${escapeHtml(label)}</td>
-          <td style="padding:12px 18px;${index ? `border-top:1px solid ${line};` : ''}font-size:14px;color:${ink};font-weight:700">${escapeHtml(value)}</td>
-        </tr>`
+          <td style="padding:12px 18px;${index ? `border-top:1px solid ${line};` : ""}font-size:13px;color:${soft};width:40%">${escapeHtml(label)}</td>
+          <td style="padding:12px 18px;${index ? `border-top:1px solid ${line};` : ""}font-size:14px;color:${ink};font-weight:700">${escapeHtml(value)}</td>
+        </tr>`,
       )
-      .join('')}
-  </table>`
+      .join("")}
+  </table>`;
 
 /** A short notice set apart: a security warning, or what happens next. */
-export const notice = (text, { tone = 'info' } = {}) => ({ colour, ink, panel }) => {
-  const edge = tone === 'warning' ? '#d97706' : colour
-  return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:4px 0 22px">
+export const notice =
+  (text, { tone = "info" } = {}) =>
+  ({ colour, ink, panel }) => {
+    const edge = tone === "warning" ? "#d97706" : colour;
+    return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:4px 0 22px">
     <tr><td class="notice" style="background:${panel};border-left:4px solid ${edge};padding:14px 16px;font-size:14px;line-height:1.55;color:${ink}">${escapeHtml(text)}</td></tr>
-  </table>`
-}
+  </table>`;
+  };
 
 /** The main action, as a button drawn so Outlook shows it too, with the link to copy beneath. */
-const button = ({ label, url }, { colour, onBrand, soft }) =>
+const button = ({ label, url }, { colour, onBrand, soft, radius, font }) =>
   `<table role="presentation" cellpadding="0" cellspacing="0" style="margin:10px 0 6px">
-    <tr><td class="button" align="center" bgcolor="${colour}" style="background:${colour};border-radius:3px">
-      <a href="${escapeHtml(url)}" target="_blank" style="display:inline-block;padding:15px 30px;font-family:${FONT};font-size:15px;font-weight:700;letter-spacing:0.3px;color:${onBrand};text-decoration:none">${escapeHtml(label)}&nbsp;&nbsp;&rarr;</a>
+    <tr><td class="button" align="center" bgcolor="${colour}" style="background:${colour};border-radius:${radius}px">
+      <a href="${escapeHtml(url)}" target="_blank" style="display:inline-block;padding:15px 30px;font-family:${font};font-size:15px;font-weight:700;letter-spacing:0.3px;color:${onBrand};text-decoration:none">${escapeHtml(label)}&nbsp;&nbsp;&rarr;</a>
     </td></tr>
   </table>
-  <p class="muted" style="margin:14px 0 0;font-size:12px;line-height:1.5;color:${soft}">Button not working? Copy this link into your browser:<br><a href="${escapeHtml(url)}" style="color:${soft};text-decoration:underline;word-break:break-all">${escapeHtml(url)}</a></p>`
+  <p class="muted" style="margin:14px 0 0;font-size:12px;line-height:1.5;color:${soft}">Button not working? Copy this link into your browser:<br><a href="${escapeHtml(url)}" style="color:${soft};text-decoration:underline;word-break:break-all">${escapeHtml(url)}</a></p>`;
 
 // ---------------------------------------------------------------------------
 // The whole message
@@ -126,22 +160,41 @@ const button = ({ label, url }, { colour, onBrand, soft }) =>
  * `eyebrow` is set in the header, `title` opens the message. Returns nodemailer's
  * { html, attachments } — the logo, inline — to spread into sendMail beside the plain text.
  */
-export const renderEmail = async ({ preheader = '', eyebrow = '', title, blocks = [], action = null, footnote = '', signOff = true }) => {
-  const [branding, letterhead] = await Promise.all([getBranding().catch(() => ({})), getLetterhead().catch(() => null)])
-  const brand = branding.name || 'Loan Origination'
-  const palette = paletteOf(colourOf(branding.colour))
-  const { colour, ink, soft, page, line, onBrand, accent } = palette
-  const logo = letterhead?.logo
-  const body = blocks.map((block) => (typeof block === 'function' ? block(palette) : block)).join('\n')
-  const contacts = [branding.email, branding.phone, branding.website].filter(Boolean)
-  const website = branding.website ? (/^https?:\/\//i.test(branding.website) ? branding.website : `https://${branding.website}`) : null
+export const renderEmail = async ({
+  preheader = "",
+  eyebrow = "",
+  title,
+  blocks = [],
+  action = null,
+  footnote = "",
+  signOff = true,
+}) => {
+  const [branding, letterhead] = await Promise.all([
+    getBranding().catch(() => ({})),
+    getLetterhead().catch(() => null),
+  ]);
+  const brand = branding.name || "Loan Origination";
+  const palette = paletteOf(branding.colour ? branding : DEFAULT_THEME);
+  const { colour, ink, soft, page, line, onBrand, accent, font } = palette;
+  const logo = letterhead?.logo;
+  const body = blocks
+    .map((block) => (typeof block === "function" ? block(palette) : block))
+    .join("\n");
+  const contacts = [branding.email, branding.phone, branding.website].filter(
+    Boolean,
+  );
+  const website = branding.website
+    ? /^https?:\/\//i.test(branding.website)
+      ? branding.website
+      : `https://${branding.website}`
+    : null;
   // A logo with a see-through background sits straight on the colour behind it; one with a
   // solid background gets a white tile with rounded corners, so its edges look intended.
-  const seeThrough = logo ? isTransparent(logo) : false
+  const seeThrough = logo ? isTransparent(logo) : false;
   const logoImage = (size, radius) =>
     logo
-      ? `<img src="cid:${LOGO_CID}" alt="" width="${size}" height="${size}" style="display:block;width:${size}px;height:${size}px;object-fit:contain;${seeThrough ? '' : `border-radius:${radius}px;background:#ffffff;padding:${Math.round(size / 12)}px;`}">`
-      : ''
+      ? `<img src="cid:${LOGO_CID}" alt="" width="${size}" height="${size}" style="display:block;width:${size}px;height:${size}px;object-fit:contain;${seeThrough ? "" : `border-radius:${radius}px;background:#ffffff;padding:${Math.round(size / 12)}px;`}">`
+      : "";
 
   const html = `<!doctype html>
 <html lang="en">
@@ -176,7 +229,7 @@ export const renderEmail = async ({ preheader = '', eyebrow = '', title, blocks 
 </head>
 <body style="margin:0;padding:0;background:${page}">
   <div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent">${escapeHtml(preheader || title)}&#8203;&nbsp;&#8203;&nbsp;&#8203;&nbsp;</div>
-  <table role="presentation" class="page" width="100%" cellpadding="0" cellspacing="0" style="background:${page};font-family:${FONT}">
+  <table role="presentation" class="page" width="100%" cellpadding="0" cellspacing="0" style="background:${page};font-family:${font}">
     <tr><td align="center">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:640px">
 
@@ -186,7 +239,7 @@ export const renderEmail = async ({ preheader = '', eyebrow = '', title, blocks 
             ${
               logo
                 ? `<td width="90" style="vertical-align:middle;padding-right:18px">${logoImage(72, 12)}</td>`
-                : ''
+                : ""
             }
             <td style="vertical-align:middle">
               <div class="brand" style="font-size:40px;line-height:1.02;font-weight:800;letter-spacing:-1px;color:${onBrand}">${escapeHtml(brand)}</div>
@@ -205,8 +258,8 @@ export const renderEmail = async ({ preheader = '', eyebrow = '', title, blocks 
         <tr><td class="content" style="background:${page};padding:44px 40px 8px">
           <h1 style="margin:0 0 20px;font-size:22px;line-height:1.3;font-weight:700;color:${ink}">${escapeHtml(title)}</h1>
           ${body}
-          ${action ? button(action, palette) : ''}
-          ${footnote ? `<p class="muted" style="margin:22px 0 0;font-size:13px;line-height:1.55;color:${soft}">${escapeHtml(footnote)}</p>` : ''}
+          ${action ? button(action, palette) : ""}
+          ${footnote ? `<p class="muted" style="margin:22px 0 0;font-size:13px;line-height:1.55;color:${soft}">${escapeHtml(footnote)}</p>` : ""}
         </td></tr>
 
         ${
@@ -216,28 +269,30 @@ export const renderEmail = async ({ preheader = '', eyebrow = '', title, blocks 
           <p style="margin:0 0 10px;font-size:16px;color:${ink}">Kind regards,</p>
           <p style="margin:0;font-size:20px;font-weight:700;color:${ink}">The ${escapeHtml(brand)} team</p>
         </td></tr>`
-            : ''
+            : ""
         }
 
         <!-- Footer: the logo and name, then how to reach the lender -->
         <tr><td class="footer" align="center" style="background:${page};padding:36px 40px 44px">
           <table role="presentation" width="75%" cellpadding="0" cellspacing="0"><tr><td class="rule" style="border-top:1px solid ${line};font-size:0;line-height:0">&nbsp;</td></tr></table>
           <table role="presentation" cellpadding="0" cellspacing="0" style="margin:30px auto 26px"><tr>
-            ${logo ? `<td style="padding-right:12px;vertical-align:middle">${logoImage(40, 6)}</td>` : ''}
+            ${logo ? `<td style="padding-right:12px;vertical-align:middle">${logoImage(40, 6)}</td>` : ""}
             <td style="vertical-align:middle;font-size:26px;font-weight:800;letter-spacing:-0.6px;color:${ink}">${escapeHtml(brand)}</td>
           </tr></table>
           <p style="margin:0 0 4px;font-size:14px;font-weight:700;color:${ink}">${escapeHtml(brand)}</p>
-          ${branding.address ? `<p style="margin:0 0 4px;font-size:13px;color:${ink}">${escapeHtml(branding.address)}</p>` : ''}
-          ${contacts.map((contact) => `<p style="margin:0 0 4px;font-size:13px;color:${ink}">${escapeHtml(contact)}</p>`).join('')}
+          ${branding.address ? `<p style="margin:0 0 4px;font-size:13px;color:${ink}">${escapeHtml(branding.address)}</p>` : ""}
+          ${contacts.map((contact) => `<p style="margin:0 0 4px;font-size:13px;color:${ink}">${escapeHtml(contact)}</p>`).join("")}
           ${
             branding.email || website
               ? `<p style="margin:18px 0 0;font-size:13px;color:${ink}">${[
-                  branding.email && `<a href="mailto:${escapeHtml(branding.email)}" style="color:${ink};text-decoration:underline">Contact us</a>`,
-                  website && `<a href="${escapeHtml(website)}" style="color:${ink};text-decoration:underline">Visit our website</a>`,
+                  branding.email &&
+                    `<a href="mailto:${escapeHtml(branding.email)}" style="color:${ink};text-decoration:underline">Contact us</a>`,
+                  website &&
+                    `<a href="${escapeHtml(website)}" style="color:${ink};text-decoration:underline">Visit our website</a>`,
                 ]
                   .filter(Boolean)
-                  .join(' &nbsp;|&nbsp; ')}</p>`
-              : ''
+                  .join(" &nbsp;|&nbsp; ")}</p>`
+              : ""
           }
           <p class="muted" style="margin:16px 0 0;font-size:12px;color:${soft}">This is an automated message about your account. Replies to it may not be read.</p>
         </td></tr>
@@ -246,8 +301,17 @@ export const renderEmail = async ({ preheader = '', eyebrow = '', title, blocks 
     </td></tr>
   </table>
 </body>
-</html>`
+</html>`;
 
-  const attachments = logo ? [{ filename: logo.contentType === 'image/jpeg' ? 'logo.jpg' : 'logo.png', content: logo.bytes, contentType: logo.contentType, cid: LOGO_CID }] : []
-  return { html, attachments }
-}
+  const attachments = logo
+    ? [
+        {
+          filename: logo.contentType === "image/jpeg" ? "logo.jpg" : "logo.png",
+          content: logo.bytes,
+          contentType: logo.contentType,
+          cid: LOGO_CID,
+        },
+      ]
+    : [];
+  return { html, attachments };
+};

@@ -177,7 +177,7 @@ function RoleEditor({ role, onChanged }) {
       title={role.label}
       description={
         locked
-          ? 'Administrators always have every permission and see every application, so the workspace can never be locked out of its own settings.'
+          ? 'Administrators have every permission except bringing business in, and see every application, so the workspace can never be locked out of its own settings. Applications are never credited to an administrator.'
           : role.builtIn
             ? 'A built-in role. You can rename it and change what it can do; “Reset” brings back the defaults.'
             : 'A role added for this workspace.'

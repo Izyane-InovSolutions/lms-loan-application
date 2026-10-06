@@ -2,12 +2,16 @@ import { getSetting } from './settings.js'
 import { readFile } from 'node:fs/promises'
 import { readBlob } from './blob.js'
 import { DEFAULT_BRAND_NAME } from '../../src/config/branding.js'
+import { FONT_OPTIONS, normaliseTheme } from '../../src/config/theme.js'
 
 /** The brand as saved in Settings → Branding, with the shipped defaults filling any gap. */
 export const getBranding = async () => {
-  const { name, logo, address, phone, email, website, colour } = await getSetting('branding')
-  return { name: String(name || '').trim() || DEFAULT_BRAND_NAME, logo: logo?.pathname ? logo : null, address, phone, email, website, colour }
+  const { name, logo, address, phone, email, website, ...rest } = await getSetting('branding')
+  return { name: String(name || '').trim() || DEFAULT_BRAND_NAME, logo: logo?.pathname ? logo : null, address, phone, email, website, ...normaliseTheme(rest) }
 }
+
+/** The theme on its own: { colour, sidebar, radius, font }. */
+export const getTheme = async () => normaliseTheme(await getBranding().catch(() => ({})))
 
 // PDFs can carry PNG and JPG; a WebP logo (uploaded before uploads were converted to PNG)
 // leaves the name on its own.
@@ -35,6 +39,7 @@ export const getLetterhead = async (name) => {
     address: branding.address,
     contacts: [branding.phone, branding.email, branding.website].filter(Boolean).join('   ·   '),
     colour: branding.colour,
+    serif: FONT_OPTIONS[branding.font]?.pdf === 'serif',
   }
 }
 
@@ -49,6 +54,6 @@ export const logoUrl = (logo) => (logo ? `/api/v1/branding/logo?v=${encodeURICom
 
 /** What the public site needs: the name, and the custom logo's address (null means the bundled one). */
 export const publicBranding = async () => {
-  const { name, logo } = await getBranding()
-  return { name, logoUrl: logoUrl(logo) }
+  const { name, logo, ...rest } = await getBranding()
+  return { name, logoUrl: logoUrl(logo), theme: normaliseTheme(rest) }
 }

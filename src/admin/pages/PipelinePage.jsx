@@ -370,7 +370,7 @@ export function PipelinePage() {
       {state.status === 'loading' ? (
         <div className="flex gap-4 overflow-hidden" aria-busy="true">
           {[0, 1, 2, 3].map((index) => (
-            <SkeletonRows key={index} rows={4} className="w-72 shrink-0 rounded-xl bg-muted/50 p-3" />
+            <SkeletonRows key={index} rows={4} className="w-72 shrink-0 rounded-xl border bg-[hsl(var(--primary)/0.045)] p-3" />
           ))}
         </div>
       ) : state.status === 'error' ? (
@@ -437,8 +437,17 @@ function BoardColumn({ column, collapsed, onToggle, onSort, valueShare, slaDays,
   const id = `col-${column.key}`
   const status = column.key === 'draft' ? null : COLUMN_STATUS[column.key] || column.cards[0]?.status || (column.key.startsWith('retired:') ? null : column.key)
   return (
-    <section aria-labelledby={id} className={cn('flex shrink-0 snap-start flex-col rounded-xl bg-muted/50 dark:bg-card/40', collapsed ? 'w-14 self-stretch' : 'w-[85vw] sm:w-72')}>
-      <header className={cn('sticky top-0 z-10 rounded-t-xl px-3 pb-2 pt-3', collapsed && 'px-2')}>
+    // A surface of its own against the page: a border, a light wash of the accent, and the
+    // stage's colour along the top, so columns read as lanes whatever the theme.
+    <section
+      aria-labelledby={id}
+      className={cn(
+        'flex shrink-0 snap-start flex-col overflow-hidden rounded-xl border border-border bg-[hsl(var(--primary)/0.045)] shadow-sm dark:bg-background',
+        collapsed ? 'w-14 self-stretch' : 'w-[85vw] sm:w-72'
+      )}
+    >
+      <span className={cn('block h-1 shrink-0', column.accent || 'bg-primary')} aria-hidden="true" />
+      <header className={cn('sticky top-0 z-10 border-b border-border/70 px-3 pb-2 pt-3', collapsed && 'border-b-0 px-2')}>
         <div className={cn('flex items-center gap-2', collapsed && 'flex-col')}>
           <button
             type="button"
@@ -484,15 +493,15 @@ function BoardColumn({ column, collapsed, onToggle, onSort, valueShare, slaDays,
               </div>
             </div>
             {valueShare !== null ? (
-              <div className="mt-2 h-1 rounded-full bg-background" aria-hidden="true">
+              <div className="mt-2 h-1 rounded-full bg-border" aria-hidden="true">
                 <div className={cn('h-full rounded-full opacity-70', column.accent)} style={{ width: `${Math.max(column.value ? 4 : 0, valueShare * 100)}%` }} />
               </div>
             ) : null}
           </>
         )}
       </header>
-      <ol id={`${id}-cards`} hidden={collapsed} className="flex max-h-[calc(100vh-24rem)] min-h-[12rem] flex-col gap-2 overflow-y-auto px-2 pb-2">
-        {column.cards.length === 0 ? <li className="rounded-lg border border-dashed px-2 py-6 text-center text-xs text-muted-foreground">Nothing here</li> : null}
+      <ol id={`${id}-cards`} hidden={collapsed} className="flex max-h-[calc(100vh-24rem)] min-h-[12rem] flex-col gap-2 overflow-y-auto px-2 pb-2 pt-2">
+        {column.cards.length === 0 ? <li className="rounded-lg border border-dashed border-muted-foreground/30 bg-card/60 px-2 py-6 text-center text-xs text-muted-foreground">Nothing here</li> : null}
         {column.cards.map((row) => (
           <li key={row.id}>{column.key === 'draft' ? <DraftCard row={row} viewerId={viewerId} onOpen={() => onOpenDraft(row.id)} /> : <CaseCard row={row} slaDays={slaDays} viewerId={viewerId} />}</li>
         ))}
@@ -504,7 +513,7 @@ function BoardColumn({ column, collapsed, onToggle, onSort, valueShare, slaDays,
 /** The ended stages folded into one column: counts and value, and a way to open them. */
 function EndedSummary({ columns, onShow }) {
   return (
-    <section aria-labelledby="col-ended" className="w-[85vw] shrink-0 snap-start rounded-xl border border-dashed p-3 sm:w-60">
+    <section aria-labelledby="col-ended" className="w-[85vw] shrink-0 snap-start rounded-xl border border-border bg-card p-3 shadow-sm sm:w-60">
       <h2 id="col-ended" className="text-sm font-semibold text-foreground">
         Ended
       </h2>

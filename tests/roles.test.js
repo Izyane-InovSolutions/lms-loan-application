@@ -71,7 +71,27 @@ describe('built-in roles', () => {
     expect(body.user.scope).toBe('all')
     expect(body.user.roleLabel).toBe('Sales manager')
     const forAdmin = (await admin.get('/auth/me')).body.user
-    expect(forAdmin.permissions.sort()).toEqual([...PERMISSIONS].sort())
+    expect(forAdmin.permissions.sort()).toEqual(PERMISSIONS.filter((key) => !['applications.assist', 'team.lead'].includes(key)).sort())
+  })
+})
+
+describe('administrators', () => {
+  it('don’t bring business in: no assisted applications, referrals or team to lead', async () => {
+    const forAdmin = (await admin.get('/auth/me')).body.user
+    expect(forAdmin.permissions).not.toContain('applications.assist')
+    expect(forAdmin.permissions).not.toContain('team.lead')
+    // An assisted submission by an admin is refused rather than credited to them.
+    const { token, body } = await prepareDraft('admin-assisted@example.com')
+    body.data.personalInfo.email = 'admin-assisted@example.com'
+    const refused = await admin.post('/applications', { ...body, assisted: true }, { authorization: `Bearer ${token}` })
+    expect([401, 403]).toContain(refused.status)
+  })
+
+  it('still grant what they don’t hold: a role that brings business in, and inviting to it', async () => {
+    const created = await admin.post('/roles', { label: 'Field agent', scope: 'own', permissions: ['applications.assist'] })
+    expect(created.status, JSON.stringify(created.body)).toBe(200)
+    const invited = await admin.post('/users', { name: 'Field Agent', email: 'field.agent@example.com', role: created.body.role.key })
+    expect(invited.status, JSON.stringify(invited.body)).toBe(200)
   })
 })
 
