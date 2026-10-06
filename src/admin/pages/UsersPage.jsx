@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { Check, Copy, Loader2, Mail, Search, UserPlus, Users } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -233,9 +233,16 @@ export function UsersPage() {
                     {canManage ? (
                       <td className="px-5 py-3 text-right">
                         {person.role !== 'customer' ? (
-                          <Button variant="ghost" size="sm" onClick={() => setEditing(person)}>
-                            Edit
-                          </Button>
+                          <>
+                            {hasPermission(viewer, 'audit.view') ? (
+                              <Button variant="ghost" size="sm" asChild>
+                                <Link to={`/admin/audit?actor=${person.id}`}>Activity</Link>
+                              </Button>
+                            ) : null}
+                            <Button variant="ghost" size="sm" onClick={() => setEditing(person)}>
+                              Edit
+                            </Button>
+                          </>
                         ) : null}
                       </td>
                     ) : null}

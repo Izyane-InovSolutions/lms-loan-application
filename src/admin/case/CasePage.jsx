@@ -189,6 +189,14 @@ export function CasePage() {
           <p className="mt-1.5 text-sm text-muted-foreground">
             {application.reference}, {LOAN_TYPE_LABELS[application.loanType].toLowerCase()}
             {application.companyName ? `, applicant ${application.applicantName}` : ''}, submitted {dateTime(application.submittedAt)}
+            {hasPermission(user, 'audit.view') ? (
+              <>
+                {' · '}
+                <Link to={`/admin/audit?entity=application:${application.id}`} className="underline underline-offset-2 hover:text-foreground">
+                  View audit trail
+                </Link>
+              </>
+            ) : null}
           </p>
           <dl className="mt-4 flex flex-wrap gap-x-8 gap-y-3">
             <Fact label="Asked for" value={`${money(application.amount)} over ${application.tenure} months`} />
@@ -894,7 +902,9 @@ const expectedForSlot = (application, slot) => {
     return { name: person.name, nrc: person.nrc }
   }
   if (['orderOrInvoice', 'passportPhoto'].includes(slot) || slot.startsWith('director.') || slot.startsWith('extra.') || slot.startsWith('response.')) return {}
-  return { companyName: data?.businessInfo?.companyName, holderIsCompany: true }
+  const company = { companyName: data?.businessInfo?.companyName, holderIsCompany: true }
+  // ZRA documents also print the company's TPIN.
+  return ['taxClearance', 'latestTaxComplianceReturn'].includes(slot) ? { ...company, tpin: data?.businessInfo?.tpin } : company
 }
 
 function DocumentFindings({ application, document }) {

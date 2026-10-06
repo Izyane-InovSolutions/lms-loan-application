@@ -1,11 +1,13 @@
 import { and, desc, eq, gte, ilike, lt, lte, or, sql } from 'drizzle-orm'
 import { getDb, schema } from '../_lib/db/client.js'
-import { text } from '../_lib/http.js'
+import { fail, text } from '../_lib/http.js'
 import { requireUser } from '../_lib/rbac.js'
 
 const { auditLog } = schema
 
 const PAGE_SIZE = 50
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/
 
 /**
  * Newest first, paged by id (`before` = the last id of the previous page) so new
@@ -18,6 +20,7 @@ const listAudit = async (req, res, { query }) => {
   const filters = []
   const action = text(query.get('action'), 100)
   const actorId = query.get('actor')
+  if (actorId && !UUID.test(actorId)) fail(400, 'That person id is not valid.', 'invalid_actor')
   const entity = text(query.get('entity'), 200)
   const search = text(query.get('q'), 100)
   const from = query.get('from')
@@ -36,7 +39,12 @@ const listAudit = async (req, res, { query }) => {
     filters.push(or(ilike(auditLog.actorLabel, pattern), ilike(auditLog.action, pattern), ilike(auditLog.entityId, pattern)))
   }
   if (from && !Number.isNaN(Date.parse(from))) filters.push(gte(auditLog.at, new Date(from)))
-  if (to && !Number.isNaN(Date.parse(to))) filters.push(lte(auditLog.at, new Date(to)))
+  if (to && !Number.isNaN(Date.parse(to))) {
+    // A bare date means the whole day, so "to=2026-10-06" includes that day's entries.
+    const end = new Date(to)
+    if (DATE_ONLY.test(to)) end.setUTCHours(23, 59, 59, 999)
+    filters.push(lte(auditLog.at, end))
+  }
   if (Number.isInteger(before) && before > 0) filters.push(lt(auditLog.id, before))
 
   const rows = await db

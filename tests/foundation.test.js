@@ -137,6 +137,30 @@ describe('accounts and visibility (against PGlite)', () => {
     expect(actions).toContain('user.invited')
     expect(actions).toContain('user.updated')
   })
+
+  it('filters by actor and entity, and rejects a malformed actor id', async () => {
+    const me = (await admin.get('/auth/me')).body.user
+    const mine = await admin.get(`/audit?actor=${me.id}`)
+    expect(mine.status).toBe(200)
+    expect(mine.body.entries.every((entry) => entry.actorId === me.id)).toBe(true)
+    const none = await admin.get(`/audit?actor=${crypto.randomUUID()}`)
+    expect(none.body.entries).toEqual([])
+    const user = await admin.get('/audit?entity=user')
+    expect(user.body.entries.every((entry) => entry.entityType === 'user')).toBe(true)
+    expect((await admin.get('/audit?actor=not-a-uuid')).body.code).toBe('invalid_actor')
+  })
+
+  it('treats a bare "to" date as the end of that day', async () => {
+    const today = new Date().toISOString().slice(0, 10)
+    const { body } = await admin.get(`/audit?from=${today}&to=${today}`)
+    expect(body.entries.length).toBeGreaterThan(0)
+    expect((await admin.get('/audit?to=2000-01-01')).body.entries).toEqual([])
+  })
+
+  it('lists actions with counts', async () => {
+    const { body } = await admin.get('/audit/actions')
+    expect(body.actions.find((row) => row.action === 'user.invited')?.count).toBeGreaterThan(0)
+  })
 })
 
 describe('customer sign-in', () => {

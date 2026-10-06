@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, lt } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, lt, ne } from 'drizzle-orm'
 import { getDb, schema } from '../_lib/db/client.js'
 import { appOrigin, clientIp as clientIpOf, fail, text } from '../_lib/http.js'
 import { requirePermission, requireUser } from '../_lib/rbac.js'
@@ -507,6 +507,35 @@ const discardDraft = async (req) => {
   return { ok: true }
 }
 
+/** Every published or retired version with its policies, newest first (for viewing and restoring). */
+const listVersions = async (req) => {
+  await requireUser(req, { anyPermission: ['rules.view', 'rules.manage'] })
+  const db = await getDb()
+  const rows = await db.select().from(schema.rulesets).where(ne(schema.rulesets.status, 'draft')).orderBy(desc(schema.rulesets.version)).limit(30)
+  return {
+    versions: rows.map((row) => ({ version: row.version, status: row.status, note: row.note, publishedAt: row.publishedAt, policies: rulesToPolicies(row.rules) })),
+  }
+}
+
+/** Copies an earlier version into the draft. Nothing is published until an admin does so. */
+const restoreVersion = async (req) => {
+  const actor = await requireUser(req, { permission: 'rules.manage' })
+  const version = Number(req.body?.version)
+  if (!Number.isInteger(version)) fail(400, 'Choose a version to restore.', 'invalid_version')
+  const db = await getDb()
+  const [row] = await db.select().from(schema.rulesets).where(eq(schema.rulesets.version, version)).limit(1)
+  if (!row) fail(404, 'That version does not exist.', 'not_found')
+  let policies
+  try {
+    policies = validatePolicies(rulesToPolicies(row.rules))
+  } catch (error) {
+    fail(400, error.message, 'invalid_rules')
+  }
+  const draft = await saveDraftRuleset({ policies }, `Restored from version ${version}`, actor)
+  await recordAudit({ req, actor, action: 'rules.version_restored', entityType: 'ruleset', entityId: draft.id, detail: { fromVersion: version, policies: policies.length } })
+  return { draft: { policies, note: draft.note } }
+}
+
 const SIMULATION_SAMPLE = 300
 
 /**
@@ -575,6 +604,8 @@ export const workflowRoutes = [
   ['POST', '/me/applications/:id/accept', acceptOffer],
   ['POST', '/me/applications/:id/withdraw', withdrawApplication],
   ['GET', '/rules', getRules],
+  ['GET', '/rules/versions', listVersions],
+  ['POST', '/rules/restore', restoreVersion],
   ['PUT', '/rules/draft', saveDraft],
   ['DELETE', '/rules/draft', discardDraft],
   ['POST', '/rules/simulate', simulate],

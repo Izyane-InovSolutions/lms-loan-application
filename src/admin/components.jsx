@@ -105,6 +105,33 @@ export function EmptyState({ icon: Icon, title, children, action }) {
   )
 }
 
+/** A failed load, with the reason and a way to try again. */
+export function ErrorState({ message, onRetry }) {
+  return (
+    <div role="alert" className="flex flex-col items-center justify-center gap-2 px-6 py-16 text-center">
+      <AlertCircle className="mb-1 size-8 text-destructive/70" aria-hidden="true" />
+      <p className="font-medium text-foreground">Couldn’t load this</p>
+      {message ? <p className="max-w-sm text-sm text-muted-foreground">{message}</p> : null}
+      {onRetry ? (
+        <button type="button" onClick={onRetry} className="mt-3 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted">
+          Try again
+        </button>
+      ) : null}
+    </div>
+  )
+}
+
+/** Placeholder rows while a list loads. */
+export function SkeletonRows({ rows = 5, className }) {
+  return (
+    <div className={cn('space-y-3', className)} role="status" aria-label="Loading">
+      {Array.from({ length: rows }, (_, index) => (
+        <div key={index} className="h-12 animate-pulse rounded-md bg-muted" />
+      ))}
+    </div>
+  )
+}
+
 export function Initials({ name, className }) {
   const letters = String(name || '?')
     .split(/\s+/)

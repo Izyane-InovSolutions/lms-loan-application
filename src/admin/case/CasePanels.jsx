@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { AlertTriangle, Check, CircleDashed, Loader2, MapPin, RefreshCw, ShieldAlert, Sparkles } from 'lucide-react'
+import { AlertTriangle, Check, CircleDashed, Loader2, MapPin, RefreshCw, ShieldAlert, ShieldCheck, Sparkles } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -155,6 +155,44 @@ export function AiReviewPanel({ prescreen }) {
   )
 }
 
+const ZRA_STATUS = {
+  verified: { label: 'Verified with ZRA', tone: 'text-success', icon: ShieldCheck },
+  mismatch: { label: 'ZRA record differs', tone: 'text-warning', icon: ShieldAlert },
+  not_found: { label: 'Not found at ZRA', tone: 'text-destructive', icon: ShieldAlert },
+  unavailable: { label: 'ZRA check didn’t run', tone: 'text-muted-foreground', icon: CircleDashed },
+}
+
+/** The automatic taxpayer check run after submission (api/_lib/zra/verifyApplication.js). */
+function ZraResult({ zra }) {
+  const status = ZRA_STATUS[zra.status] || ZRA_STATUS.unavailable
+  const Icon = status.icon
+  return (
+    <div className="mb-4 rounded-lg border bg-muted/30 p-3 text-sm">
+      <p className={cn('flex items-center gap-2 font-medium', status.tone)}>
+        <Icon className="size-4 shrink-0" aria-hidden="true" />
+        {status.label}
+        <span className="ml-auto text-xs font-normal text-muted-foreground">by {zra.lookupType}, {timeAgo(zra.at)}</span>
+      </p>
+      {zra.tpin ? (
+        <p className="mt-1 text-xs text-muted-foreground">
+          {zra.name} · TPIN <span className="font-mono">{zra.tpin}</span>
+        </p>
+      ) : null}
+      {zra.status === 'mismatch' ? (
+        <ul className="mt-1.5 list-disc space-y-0.5 pl-5 text-xs text-foreground">
+          {zra.nameMatches === false ? <li>The name at ZRA differs from the application.</li> : null}
+          {(zra.documentMismatches || []).map((document) => (
+            <li key={document.slot}>
+              {document.label} shows TPIN <span className="font-mono">{document.tpin}</span>.
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {zra.status === 'unavailable' ? <p className="mt-1 text-xs text-muted-foreground">ZRA couldn’t be reached. Verify the taxpayer manually.</p> : null}
+    </div>
+  )
+}
+
 /** The officer's checklist (Settings → Stages). Ticking asks for a note of what was checked. */
 export function ChecklistPanel({ application, stages, editable, onToggle }) {
   const checklist = checklistOf(stages)
@@ -164,6 +202,7 @@ export function ChecklistPanel({ application, stages, editable, onToggle }) {
       title="Verification"
       description={editable && required.length ? `Required before recommending approval: ${required.map((check) => check.label.toLowerCase()).join(', ')}.` : undefined}
     >
+      {application.checks?.zra ? <ZraResult zra={application.checks.zra} /> : null}
       <ul className="space-y-3">
         {checklist.map((check) => {
           const { key } = check

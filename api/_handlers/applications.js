@@ -20,6 +20,7 @@ import { getPublishedWorkflow } from '../_lib/workflowVersions.js'
 import { queueCondition, workflowView } from '../_lib/workflow.js'
 import { resolveState } from '../../src/config/workflow.js'
 import { runPrescreen } from '../_lib/prescreen/run.js'
+import { verifyApplicationWithZra } from '../_lib/zra/verifyApplication.js'
 import { priceLoan } from '../../src/config/loanProducts.js'
 import { getProductConfig, getProducts } from '../_lib/products.js'
 import { APPLICATION_STATUSES, APPROVED_STATUSES, OPEN_STATUSES, WITHDRAWABLE_STATUSES, describeSlot, requiredSlots, slotFromDraftPath } from '../../src/config/applications.js'
@@ -293,6 +294,8 @@ const submitApplication = async (req) => {
   await recordAudit({ req, actor: staff, action: 'application.submitted', entityType: 'application', entityId: application.id, detail: { reference: application.reference, channel: attribution.channel } })
 
   const origin = appOrigin(req)
+  // The applicant never sees the ZRA check: it runs here, after they are done.
+  afterResponse('ZRA taxpayer check', () => verifyApplicationWithZra(application.id))
   afterResponse('prescreen and LMS hand-off', async () => {
     await runPrescreen(application.id)
     const who = application.companyName || application.applicantName
@@ -367,7 +370,7 @@ const listApplications = async (req, res, { query }) => {
   countQuery.delete('status')
   const countFilters = await listFilters(viewer, countQuery)
 
-  const [rows, [{ total }], statusCounts] = await Promise.all([
+  const [rows, [{ total }], statusCounts, { slaDays }] = await Promise.all([
     db
       .select({
         application: applications,
@@ -389,6 +392,7 @@ const listApplications = async (req, res, { query }) => {
       .from(applications)
       .where(countFilters.length ? and(...countFilters) : undefined)
       .groupBy(applications.status),
+    getSetting('workflow'),
   ])
 
   return {
@@ -400,6 +404,8 @@ const listApplications = async (req, res, { query }) => {
     page,
     pageSize,
     statusCounts: Object.fromEntries(statusCounts.map((row) => [row.status, row.count])),
+    // Settings → Workflow's target days to a decision, for ageing badges.
+    slaDays,
   }
 }
 

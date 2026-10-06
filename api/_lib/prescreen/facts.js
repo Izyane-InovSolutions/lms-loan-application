@@ -28,6 +28,9 @@ const monthsSince = (isoDate, now = new Date()) => {
   return Math.max(0, (now.getFullYear() - date.getFullYear()) * 12 + (now.getMonth() - date.getMonth()))
 }
 
+// Business documents from ZRA, which print the company's TPIN.
+export const TPIN_SLOTS = ['taxClearance', 'latestTaxComplianceReturn']
+
 /** What each document should agree with on the form — the same pairs the wizard checks live. */
 export const expectedFor = (loanType, data, slot) => {
   if (loanType === 'personal') {
@@ -43,7 +46,8 @@ export const expectedFor = (loanType, data, slot) => {
     return { name: person.name, nrc: person.nrc }
   }
   if (['orderOrInvoice', 'passportPhoto'].includes(slot) || slot.startsWith('director.')) return {}
-  return { companyName: data?.businessInfo?.companyName, holderIsCompany: true }
+  const company = { companyName: data?.businessInfo?.companyName, holderIsCompany: true }
+  return TPIN_SLOTS.includes(slot) ? { ...company, tpin: data?.businessInfo?.tpin } : company
 }
 
 const extracted = (documents, docType, field) =>
