@@ -104,7 +104,7 @@ function StepRow({ definition, state, index, count, errorCount, dropMark, onEdit
           {definition.start === state.id ? <span className="rounded-full bg-secondary px-2 py-0.5 text-[11px] font-medium text-secondary-foreground">Applications start here</span> : null}
           {errorCount ? <span className="rounded-full bg-destructive/10 px-2 py-0.5 text-[11px] font-medium text-destructive">{errorCount === 1 ? '1 problem' : `${errorCount} problems`}</span> : null}
         </div>
-        <p className="truncate text-xs text-muted-foreground">{state.roles?.length ? state.roles.map(roleLabel).join(', ') : 'Anyone allowed'}</p>
+        <p className="truncate text-xs text-muted-foreground">Roles: {state.roles?.length ? state.roles.map(roleLabel).join(', ') : 'All'}</p>
         <p className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs">
           {off ? (
             <span className="text-muted-foreground">{passTo ? `Off: cases pass straight through to “${passTo.label}”` : 'Off, but cases can’t pass it yet: it needs one Move action'}</span>
