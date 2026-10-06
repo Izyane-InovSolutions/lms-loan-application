@@ -18,6 +18,7 @@ import { templateRoutes } from '../_handlers/templates.js'
 import { brandingRoutes } from '../_handlers/branding.js'
 import { workflowConfigRoutes } from '../_handlers/workflowConfig.js'
 import { zraRoutes } from '../_handlers/zra.js'
+import { reportRoutes } from '../_handlers/reports.js'
 
 /*
  * Every /api/v1 endpoint, behind one Vercel function.
@@ -35,6 +36,7 @@ export default createRouter([
   ...workflowRoutes,
   ...stageDocumentRoutes,
   ...dashboardRoutes,
+  ...reportRoutes,
   ...demoRoutes,
   ...settingsRoutes,
   ...privacyRoutes,

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { ArrowDownToLine, ChevronLeft, ChevronRight, FilePlus2, FileStack, Loader2, Search } from 'lucide-react'
+import { ArrowDownToLine, ChevronLeft, ChevronRight, FilePlus2, FileStack, Loader2, Search, X } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -66,6 +66,8 @@ export function ApplicationsPage() {
     sort: params.get('sort') || 'newest',
     q: params.get('q') || '',
     page: Number(params.get('page')) || 1,
+    // One agent's applications, from the Agents page.
+    sourcedBy: params.get('sourcedBy') || '',
   }
   const isOfficer = hasPermission(user, 'cases.work')
   const canStart = hasPermission(user, 'applications.assist')
@@ -203,6 +205,27 @@ export function ApplicationsPage() {
           )
         })}
       </nav>
+
+      {filters.sourcedBy ? (
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="inline-flex items-center gap-2 rounded-full border bg-card py-1 pl-3 pr-1 shadow-sm">
+            Brought in by <span className="font-medium text-foreground">{params.get('agent') || 'one agent'}</span>
+            <button
+              type="button"
+              aria-label="Show everyone’s applications"
+              onClick={() => {
+                const next = new URLSearchParams(params)
+                next.delete('sourcedBy')
+                next.delete('agent')
+                setParams(next, { replace: true })
+              }}
+              className="rounded-full p-1 text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <X className="size-3.5" aria-hidden="true" />
+            </button>
+          </span>
+        </div>
+      ) : null}
 
       <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
         <div className="relative lg:w-80">
