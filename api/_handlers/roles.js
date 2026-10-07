@@ -1,6 +1,9 @@
 import { can, requireUser } from '../_lib/rbac.js'
 import { recordAudit } from '../_lib/audit.js'
-import { createRole, deleteRole, listRoles, resetRole, roleMemberCounts, updateRole } from '../_lib/roles.js'
+import { createRole, deleteRole, listRemovedRoles, listRoles, resetRole, restoreRole, roleMemberCounts, updateRole } from '../_lib/roles.js'
+import { getDraftWorkflow, getPublishedWorkflow } from '../_lib/workflowVersions.js'
+import { fail } from '../_lib/http.js'
+import { missingForState } from '../../src/config/workflow.js'
 
 /*
  * Team → Roles. Every staff member may read the list (the workspace shows role names
@@ -10,11 +13,38 @@ import { createRole, deleteRole, listRoles, resetRole, roleMemberCounts, updateR
 
 const summary = (role) => ({ label: role.label, scope: role.scope, permissions: role.permissions })
 
+/**
+ * Refuses a change that would leave a role named on a state of the published workflow
+ * without a permission that state's actions need: its cases would wait in that role's
+ * queue with nobody there able to move them.
+ */
+const keepWorkflowWorking = async (role) => {
+  const { definition } = await getPublishedWorkflow()
+  const conflicts = (definition.states || [])
+    .filter((state) => (state.roles || []).includes(role.key))
+    .map((state) => ({ state, gaps: missingForState(role, state) }))
+    .filter(({ gaps }) => gaps.length)
+  if (!conflicts.length) return
+  const list = conflicts.map(({ state, gaps }) => `“${state.label}” (needs ${gaps.map((gap) => `“${gap.label}”`).join(', ')})`).join('; ')
+  fail(409, `${role.label} works on ${list} in the workflow. Untick the role there in Policy → Workflow and publish first, or keep the permission.`, 'role_in_workflow')
+}
+
+/**
+ * Refuses deleting a role a state of the published workflow, or of the draft being edited,
+ * names: its cases would sit in a queue nobody can see.
+ */
+const notInWorkflow = async (role) => {
+  const [published, draft] = await Promise.all([getPublishedWorkflow(), getDraftWorkflow()])
+  const states = [...(published?.definition?.states || []), ...(draft?.definition?.states || [])]
+  const named = [...new Set(states.filter((state) => (state.roles || []).includes(role.key)).map((state) => `“${state.label}”`))]
+  if (named.length) fail(409, `${role.label} works on ${named.join(', ')} in the workflow. Untick the role there in Policy → Workflow (and publish) first.`, 'role_in_workflow')
+}
+
 const list = async (req) => {
   const viewer = await requireUser(req, { staff: true })
   const roles = await listRoles()
   const counts = can(viewer, 'roles.manage') ? await roleMemberCounts() : null
-  return { roles: roles.map((role) => ({ ...role, ...(counts ? { members: counts[role.key] || 0 } : {}) })) }
+  return { roles: roles.map((role) => ({ ...role, ...(counts ? { members: counts[role.key] || 0 } : {}) })), ...(counts ? { removed: await listRemovedRoles() } : {}) }
 }
 
 const create = async (req) => {
@@ -26,23 +56,30 @@ const create = async (req) => {
 
 const update = async (req, res, { params }) => {
   const actor = await requireUser(req, { permission: 'roles.manage' })
-  const { before, after } = await updateRole(params.key, req.body || {}, actor)
+  const { before, after } = await updateRole(params.key, req.body || {}, actor, { check: keepWorkflowWorking })
   await recordAudit({ req, actor, action: 'role.updated', entityType: 'role', entityId: null, detail: { key: params.key, before: summary(before), after: summary(after) } })
   return { role: after }
 }
 
 const reset = async (req, res, { params }) => {
   const actor = await requireUser(req, { permission: 'roles.manage' })
-  const { before, after } = await resetRole(params.key, actor)
+  const { before, after } = await resetRole(params.key, actor, { check: keepWorkflowWorking })
   await recordAudit({ req, actor, action: 'role.reset', entityType: 'role', entityId: null, detail: { key: params.key, before: summary(before), after: summary(after) } })
   return { role: after }
 }
 
 const remove = async (req, res, { params }) => {
   const actor = await requireUser(req, { permission: 'roles.manage' })
-  const removed = await deleteRole(params.key, actor)
+  const removed = await deleteRole(params.key, actor, { check: notInWorkflow })
   await recordAudit({ req, actor, action: 'role.deleted', entityType: 'role', entityId: null, detail: { key: params.key, ...summary(removed) } })
   return { ok: true }
+}
+
+const restore = async (req, res, { params }) => {
+  const actor = await requireUser(req, { permission: 'roles.manage' })
+  const role = await restoreRole(params.key, actor)
+  await recordAudit({ req, actor, action: 'role.restored', entityType: 'role', entityId: null, detail: { key: role.key, ...summary(role) } })
+  return { role }
 }
 
 export const roleRoutes = [
@@ -51,4 +88,5 @@ export const roleRoutes = [
   ['PATCH', '/roles/:key', update],
   ['POST', '/roles/:key/reset', reset],
   ['DELETE', '/roles/:key', remove],
+  ['POST', '/roles/:key/restore', restore],
 ]

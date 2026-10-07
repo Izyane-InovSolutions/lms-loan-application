@@ -34,7 +34,7 @@ export function Shell() {
   }, [drawerOpen])
 
   return (
-    <div className="min-h-screen bg-[hsl(210_33%_96%)] text-foreground dark:bg-background">
+    <div className="min-h-screen bg-[hsl(var(--canvas))] text-foreground dark:bg-background">
       <a
         href="#workspace-main"
         className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-[70] focus:rounded-md focus:bg-card focus:px-3 focus:py-2 focus:text-sm focus:shadow-lift"
@@ -47,7 +47,7 @@ export function Shell() {
       </aside>
 
       {/* Mobile top bar and drawer */}
-      <div className="sticky top-0 z-30 flex h-14 items-center justify-between border-b bg-[hsl(205_65%_14%)] px-4 text-white lg:hidden">
+      <div className="sticky top-0 z-30 flex h-14 items-center justify-between border-b bg-[hsl(var(--sidebar))] px-4 text-white lg:hidden">
         <Link to="/admin" className="flex items-center gap-2.5 font-semibold">
           <Logo size="sm" showWordmark={false} />
           Loan Workspace
@@ -113,7 +113,7 @@ function Sidebar({ user, demoEnabled, theme, onToggleTheme }) {
   }
 
   return (
-    <div className="flex h-full flex-col bg-[hsl(205_65%_14%)] text-white dark:border-r dark:border-white/10 dark:bg-[hsl(210_45%_9%)]">
+    <div className="flex h-full flex-col bg-[hsl(var(--sidebar))] text-white dark:border-r dark:border-white/10">
       <div className="flex items-center justify-between gap-2 pb-6 pl-5 pr-3 pt-5">
         <Link to="/admin" className="flex items-center gap-3 rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60">
           <Logo size="sm" showWordmark={false} />
@@ -241,7 +241,7 @@ function DemoSwitcher({ currentRole }) {
               className={cn(
                 'inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium transition-colors',
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/60 disabled:opacity-60',
-                active ? 'bg-white text-[hsl(205_65%_14%)]' : 'text-white/75 hover:bg-white/10 hover:text-white'
+                active ? 'bg-white text-[hsl(var(--sidebar))]' : 'text-white/75 hover:bg-white/10 hover:text-white'
               )}
             >
               {/* The admin hue is the sidebar's own navy, so it gets a light ring to stay visible. */}

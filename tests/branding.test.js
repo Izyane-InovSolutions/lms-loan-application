@@ -5,10 +5,11 @@ const kv = createMemoryKv()
 vi.mock('../api/_lib/kv.js', () => ({ default: kv }))
 
 const { default: handler } = await import('../api/v1/[...path].js')
-const { brandName } = await import('../api/_lib/branding.js')
+const { brandName, getLetterhead } = await import('../api/_lib/branding.js')
 const { lenderName } = await import('../api/_lib/offerDocuments.js')
 const { consentText } = await import('../src/config/consent.js')
 const { DEFAULT_BRAND_NAME } = await import('../src/config/branding.js')
+const { DEFAULT_THEME, themeTokens, takesWhiteText } = await import('../src/config/theme.js')
 
 const admin = client(handler)
 const officer = client(handler)
@@ -25,8 +26,14 @@ afterEach(() => {
 })
 
 describe('branding', () => {
+  it('puts the shipped logo on documents until one is uploaded', async () => {
+    const { logo } = await getLetterhead('Lender')
+    expect(logo?.contentType).toBe('image/png')
+    expect(logo.bytes.subarray(1, 4).toString()).toBe('PNG')
+  })
+
   it('starts with the shipped name and logo', async () => {
-    expect((await visitor.get('/branding')).body).toEqual({ name: DEFAULT_BRAND_NAME, logoUrl: null })
+    expect((await visitor.get('/branding')).body).toEqual({ name: DEFAULT_BRAND_NAME, logoUrl: null, theme: DEFAULT_THEME })
     expect((await visitor.get('/branding/logo')).status).toBe(404)
   })
 
@@ -77,5 +84,44 @@ describe('branding', () => {
     expect((await admin.del('/admin/branding/logo')).status).toBe(200)
     expect((await visitor.get('/branding')).body.logoUrl).toBeNull()
     expect((await visitor.get('/branding/logo')).status).toBe(404)
+  })
+})
+
+describe('the theme', () => {
+  it('is saved by admins and served to every page', async () => {
+    expect((await officer.put('/settings/branding', { colour: '#0f766e' })).status).toBe(403)
+    const saved = await admin.put('/settings/branding', { colour: '#0F766E', sidebar: 'neutral', radius: 'sharp', font: 'serif' })
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200)
+    expect((await visitor.get('/branding')).body.theme).toEqual({ colour: '#0f766e', sidebar: 'neutral', radius: 'sharp', font: 'serif' })
+  })
+
+  it('refuses a colour that isn’t a hex value, and drops unknown choices', async () => {
+    expect((await admin.put('/settings/branding', { colour: 'teal' })).status).toBe(400)
+    await admin.put('/settings/branding', { sidebar: 'rainbow', font: 'comic' })
+    expect((await visitor.get('/branding')).body.theme).toMatchObject({ sidebar: DEFAULT_THEME.sidebar, font: DEFAULT_THEME.font })
+  })
+
+  it('keeps the letterhead when only the name is saved', async () => {
+    await admin.put('/settings/branding', { address: 'Plot 1, Cairo Road', phone: '+260 211 000 000' })
+    await admin.put('/settings/branding', { name: 'Renamed Finance' })
+    const { branding } = (await admin.get('/settings')).body.settings
+    expect(branding).toMatchObject({ name: 'Renamed Finance', address: 'Plot 1, Cairo Road', phone: '+260 211 000 000', colour: '#0f766e' })
+  })
+
+  it('reaches emails: their colour, corners and font follow it', async () => {
+    const { renderEmail } = await import('../api/_lib/emailLayout.js')
+    await admin.put('/settings/branding', { colour: '#6d28d9', radius: 'soft', font: 'serif' })
+    const { html } = await renderEmail({ title: 'Hello', action: { label: 'Open', url: 'https://example.com' } })
+    expect(html).toContain('#6d28d9')
+    expect(html).toContain('border-radius:14px')
+    expect(html).toContain('Source Serif 4')
+  })
+
+  it('makes tokens with readable text on the accent, whatever its lightness', () => {
+    expect(themeTokens({ colour: '#1b4f72' }).light['--primary-foreground']).toBe('0 0% 100%')
+    expect(takesWhiteText('#fde047')).toBe(false)
+    expect(themeTokens({ colour: '#fde047' }).light['--primary-foreground']).not.toBe('0 0% 100%')
+    expect(themeTokens({ colour: '#1b4f72', sidebar: 'neutral' }).light['--sidebar']).toBe('220 14% 12%')
+    expect(themeTokens({ colour: '#1b4f72', radius: 'sharp' }).light['--radius']).toBe('0.25rem')
   })
 })

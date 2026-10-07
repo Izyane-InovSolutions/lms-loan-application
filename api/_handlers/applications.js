@@ -9,6 +9,8 @@ import { activeUser, attributionFor, resolveReferral } from '../_lib/attribution
 import { unindexDraft } from '../_lib/drafts.js'
 import { ensureOfferDocuments } from '../_lib/offerDocuments.js'
 import { signaturesOf } from '../_lib/signing.js'
+import { customerMaySee, findStageDocument, issueStageDocuments, stageDocumentsOf, updateDocumentMeta } from '../_lib/stageDocuments.js'
+import { stateDocuments } from '../../src/config/workflow.js'
 import { TEMPLATE_KIND_KEYS } from '../../src/config/templates.js'
 import { recordAudit } from '../_lib/audit.js'
 import { copyBlob, deleteBlobsForDraft, readBlob } from '../_lib/blob.js'
@@ -20,6 +22,7 @@ import { getPublishedWorkflow } from '../_lib/workflowVersions.js'
 import { queueCondition, workflowView } from '../_lib/workflow.js'
 import { resolveState } from '../../src/config/workflow.js'
 import { runPrescreen } from '../_lib/prescreen/run.js'
+import { verifyApplicationWithZra } from '../_lib/zra/verifyApplication.js'
 import { priceLoan } from '../../src/config/loanProducts.js'
 import { getProductConfig, getProducts } from '../_lib/products.js'
 import { APPLICATION_STATUSES, APPROVED_STATUSES, OPEN_STATUSES, WITHDRAWABLE_STATUSES, describeSlot, requiredSlots, slotFromDraftPath } from '../../src/config/applications.js'
@@ -169,9 +172,11 @@ const submitApplication = async (req) => {
     const otpError = await checkOtp({ email: applicant.email, code, purpose: 'consent', req })
     if (otpError) fail(otpError.status, otpError.message.replace('The code entered', 'The customer’s code'), 'invalid_consent_code')
   }
-  const point = wanted.location ? body.location : null
+  // Every submission records where it was made (the notice says so; the browser asks).
+  const point = body.location
   const pointValid =
     point && Number.isFinite(Number(point.latitude)) && Math.abs(Number(point.latitude)) <= 90 && Number.isFinite(Number(point.longitude)) && Math.abs(Number(point.longitude)) <= 180
+  if (!pointValid) fail(400, 'We need your location to submit. Allow location for this site, then submit again.', 'location_required')
 
   // Attribution: staff entering it themselves, else a referral code from the link they followed.
   // A draft an agent started stays theirs when the customer finishes it on their own.
@@ -253,7 +258,7 @@ const submitApplication = async (req) => {
       { type: 'data_processing', granted: true },
       // Agreed on the first step: staff could see the draft and contact them about it.
       ...(draft?.contactConsent ? [{ type: 'draft_contact', granted: true }] : []),
-      { type: 'location', granted: Boolean(wanted.location && pointValid) },
+      { type: 'location', granted: true },
       ...(getCrb() ? [{ type: 'crb', granted: Boolean(wanted.crb) }] : []),
     ].map((consent) => ({
       ...consent,
@@ -276,6 +281,15 @@ const submitApplication = async (req) => {
         capturedBy: staff?.id ?? null,
         capturedByName: staff?.name ?? null,
       })
+      // The coordinates on the case timeline too, for staff (with how precise the device said they were).
+      const accuracy = Number.isFinite(Number(point.accuracy)) ? `, accurate to about ${Math.round(Number(point.accuracy))} m` : ''
+      await addEvent(tx, {
+        applicationId: id,
+        actor: staff,
+        type: 'location',
+        message: `GPS location recorded at submission${staff ? ' by the agent’s device' : ''}: ${Number(point.latitude).toFixed(6)}, ${Number(point.longitude).toFixed(6)}${accuracy}`,
+        detail: { latitude: Number(point.latitude), longitude: Number(point.longitude), accuracy: Number(point.accuracy) || null },
+      })
     }
     await addEvent(tx, {
       applicationId: id,
@@ -293,6 +307,8 @@ const submitApplication = async (req) => {
   await recordAudit({ req, actor: staff, action: 'application.submitted', entityType: 'application', entityId: application.id, detail: { reference: application.reference, channel: attribution.channel } })
 
   const origin = appOrigin(req)
+  // The applicant never sees the ZRA check: it runs here, after they are done.
+  afterResponse('ZRA taxpayer check', () => verifyApplicationWithZra(application.id))
   afterResponse('prescreen and LMS hand-off', async () => {
     await runPrescreen(application.id)
     const who = application.companyName || application.applicantName
@@ -302,6 +318,7 @@ const submitApplication = async (req) => {
     }
     if (startState.handToLms && (await queueLmsSync(application))) await syncApplicationToLms(application.id)
   })
+  if (stateDocuments(startState, flow.definition).length) afterResponse('stage documents', () => issueStageDocuments(application.id, { origin, actor: staff, req }))
 
   return { id: application.id, reference: application.reference }
 }
@@ -367,7 +384,7 @@ const listApplications = async (req, res, { query }) => {
   countQuery.delete('status')
   const countFilters = await listFilters(viewer, countQuery)
 
-  const [rows, [{ total }], statusCounts] = await Promise.all([
+  const [rows, [{ total }], statusCounts, { slaDays }] = await Promise.all([
     db
       .select({
         application: applications,
@@ -389,6 +406,7 @@ const listApplications = async (req, res, { query }) => {
       .from(applications)
       .where(countFilters.length ? and(...countFilters) : undefined)
       .groupBy(applications.status),
+    getSetting('workflow'),
   ])
 
   return {
@@ -400,6 +418,8 @@ const listApplications = async (req, res, { query }) => {
     page,
     pageSize,
     statusCounts: Object.fromEntries(statusCounts.map((row) => [row.status, row.count])),
+    // Settings → Workflow's target days to a decision, for ageing badges.
+    slaDays,
   }
 }
 
@@ -468,6 +488,8 @@ export const loadCase = async (applicationId, viewer) => {
     stages: await getSetting('stages'),
     offersRequireSignature: (await getSetting('offers')).requireSignature,
     signatures: await signaturesOf(applicationId),
+    // Documents sent to the applicant at workflow stages, with where each stands (stageDocuments.js).
+    stageDocuments: await stageDocumentsOf(applicationId),
     // Where the case is in its workflow and what this viewer can do next (workflow.js).
     workflow: viewer ? await workflowView(viewer, row.application, { recommendation: appraisalRows.find((appraisal) => appraisal.kind === 'recommendation') || null }) : null,
     crbProvider: getCrb()?.name || null,
@@ -511,13 +533,22 @@ const getDocument = async (req, res, { params }) => {
     .limit(1)
   if (!document) fail(404, 'Document not found.', 'not_found')
   // Customers get what their own page lists (myApplication), not every file on the case.
-  if (!isStaffRole(viewer.role) && document.source === 'system' && !(await customerOfferDocuments(application)).some((offer) => offer.id === document.id)) {
+  if (
+    !isStaffRole(viewer.role) &&
+    document.source === 'system' &&
+    !(await customerOfferDocuments(application)).some((offer) => offer.id === document.id) &&
+    !(await customerMaySee(application, document))
+  ) {
     fail(404, 'Document not found.', 'not_found')
   }
   const stored = await readBlob(document)
   if (!stored) fail(410, 'This file is no longer in storage.', 'gone')
   if (isStaffRole(viewer.role)) {
     await recordAudit({ req, actor: viewer, action: 'application.document_viewed', entityType: 'application', entityId: application.id, detail: { document: document.label } })
+  } else if (document.source === 'system' && document.meta?.stage && !document.meta.viewedAt) {
+    // The first time the applicant opens a document sent to them, staff see it was viewed.
+    const found = await findStageDocument(application.id, document.id)
+    if (found) await updateDocumentMeta(found.row, { viewedAt: new Date().toISOString() })
   }
   sendFile(res, { data: stored.data, contentType: document.contentType || stored.contentType, filename: document.filename })
 }
@@ -676,7 +707,11 @@ const myApplication = async (req, res, { params }) => {
     summary.offer.conditions = decision?.conditions || null
     summary.offer.requireSignature = (await getSetting('offers')).requireSignature
   }
-  return { application: summary, events, documents: documents.filter((document) => document.source !== 'system').map(({ meta, ...document }) => document), offerDocuments }
+  // Documents sent to sign or keep; the offer letter and agreement are in `offerDocuments`.
+  const stageDocuments = (await stageDocumentsOf(application.id))
+    .filter((document) => !document.offer)
+    .map(({ id, kind, label, stageLabel, required, requiresSignature, status, done, sentAt, signedDocumentId, uploadedAt, receivedAt }) => ({ id, kind, label, stageLabel, required, requiresSignature, status, done, sentAt, signedDocumentId, uploadedAt, receivedAt }))
+  return { application: summary, events, documents: documents.filter((document) => document.source !== 'system').map(({ meta, ...document }) => document), offerDocuments, stageDocuments }
 }
 
 // ---------------------------------------------------------------------------

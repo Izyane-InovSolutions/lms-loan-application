@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, lt } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, lt, ne } from 'drizzle-orm'
 import { getDb, schema } from '../_lib/db/client.js'
 import { appOrigin, clientIp as clientIpOf, fail, text } from '../_lib/http.js'
 import { requirePermission, requireUser } from '../_lib/rbac.js'
@@ -14,6 +14,7 @@ import { rolesWith } from '../_lib/roles.js'
 import { queueLmsSync, syncApplicationToLms } from '../_lib/lms/sync.js'
 import { runPrescreen, loadFactInputs } from '../_lib/prescreen/run.js'
 import { computeFacts } from '../_lib/prescreen/facts.js'
+import { MANUAL_FIGURES } from '../_lib/prescreen/reasons.js'
 import { getDraftRuleset, getPublishedRuleset, listRulesetHistory, publishDraftRuleset, saveDraftRuleset } from '../_lib/prescreen/rulesets.js'
 import { getSetting } from '../_lib/settings.js'
 import { CrbError, getCrb } from '../_lib/crb/index.js'
@@ -26,6 +27,7 @@ import { creditStaffIds, followerIds, notifyUsers } from '../_lib/notify.js'
 import { textCustomer } from '../_lib/sms.js'
 import { WITHDRAWABLE_STATUSES } from '../../src/config/applications.js'
 import { ensureOfferDocuments } from '../_lib/offerDocuments.js'
+import { issueStageDocuments } from '../_lib/stageDocuments.js'
 import { FACTS, evaluateRules, flattenPolicies, rulesToPolicies, validatePolicies } from '../../src/config/creditRules.js'
 
 const { applications, applicationDocuments, prescreens, users, locations, crbReports, consents } = schema
@@ -38,6 +40,10 @@ const { applications, applicationDocuments, prescreens, users, locations, crbRep
 const handToLms = async (application, actor = null) => {
   if (await queueLmsSync(application)) afterResponse('LMS hand-off', () => syncApplicationToLms(application.id, actor ? { actor } : undefined))
 }
+
+/** Makes and emails the documents the case's new state sends the applicant, if it sends any (stageDocuments.js). */
+const sendStageDocuments = (req, application, actor = null) =>
+  afterResponse('stage documents', () => issueStageDocuments(application.id, { origin: appOrigin(req), actor, req }))
 
 const notifyCustomer = (req, application, notify) =>
   afterResponse('customer email', async () => {
@@ -114,8 +120,9 @@ const act = async (req, res, { params }) => {
   await recordAudit({ req, actor: viewer, action: `application.${input.action}`, entityType: 'application', entityId: application.id, detail: { reference: application.reference, status: updated.status } })
 
   if (result.consumeOtpFor) await consumeOtp('offer', result.consumeOtpFor)
-  // The offer letter and agreement are made from the published templates straight away.
+  // The offer letter is made from the published template straight away.
   if (result.approved) afterResponse('offer documents', () => ensureOfferDocuments(updated.id))
+  if (updated.state !== application.state) sendStageDocuments(req, updated, viewer)
   notifyStaffAbout(req, viewer, input.action, result, updated)
   if (result.notify) notifyCustomer(req, updated, result.notify)
   // Whichever state the workflow marks for it (Workflow editor) hands the loan to the LMS.
@@ -159,6 +166,45 @@ const addStaffDocument = async (req, res, { params }) => {
   })
   await addEvent(db, { applicationId: application.id, actor: viewer, type: 'document', message: `Added a document: ${label}` })
   await recordAudit({ req, actor: viewer, action: 'application.document_added', entityType: 'application', entityId: application.id, detail: { label } })
+  return loadCase(application.id, viewer)
+}
+
+const FIGURE_LABELS = { netPay: 'Net monthly pay', averageMonthlyCredits: 'Average monthly bank credits', annualTurnover: 'Annual turnover', orderValue: 'Order or invoice value' }
+
+/**
+ * Figures from documents, entered by an officer: for when the AI couldn't read a payslip,
+ * bank statement, tax return or invoice (no model connected, the service down, an
+ * unreadable file), or read it wrongly. An entered figure is used by the credit rules in
+ * place of the AI's; a blank one goes back to the AI's. Who entered it, and when, is kept
+ * and shown, and the rules run again.
+ */
+const setFigures = async (req, res, { params }) => {
+  const viewer = await requireUser(req, { permission: 'cases.work' })
+  const application = await findVisibleApplication(viewer, params.id)
+  const allowed = MANUAL_FIGURES[application.loanType] || {}
+  const note = text(req.body?.note, 300) || null
+  const figures = { ...(application.checks?.figures || {}) }
+  const changed = []
+  for (const key of Object.keys(allowed)) {
+    if (!(key in (req.body || {}))) continue
+    const raw = req.body[key]
+    if (raw === null || raw === '') {
+      if (figures[key]) changed.push(`${FIGURE_LABELS[key]} cleared`)
+      delete figures[key]
+      continue
+    }
+    const value = Number(String(raw).replace(/[^0-9.]/g, ''))
+    if (!Number.isFinite(value) || value <= 0 || value > 1e9) fail(400, `${FIGURE_LABELS[key]} must be an amount in kwacha.`, 'invalid_figure')
+    figures[key] = { value, by: viewer.id, byName: viewer.name, at: new Date().toISOString(), note }
+    changed.push(`${FIGURE_LABELS[key]} K${value.toLocaleString()}`)
+  }
+  if (!changed.length) fail(400, 'Enter at least one figure.', 'nothing_to_save')
+
+  const db = await getDb()
+  await db.update(applications).set({ checks: { ...(application.checks || {}), figures }, updatedAt: new Date() }).where(eq(applications.id, application.id))
+  await addEvent(db, { applicationId: application.id, actor: viewer, type: 'note', message: `Figures from documents entered: ${changed.join(', ')}${note ? `. ${note}` : ''}` })
+  await recordAudit({ req, actor: viewer, action: 'application.figures_entered', entityType: 'application', entityId: application.id, detail: { reference: application.reference, figures: Object.fromEntries(Object.entries(figures).map(([key, entry]) => [key, entry.value])) } })
+  await runPrescreen(application.id, { actor: viewer })
   return loadCase(application.id, viewer)
 }
 
@@ -378,7 +424,7 @@ const acceptOffer = async (req, res, { params }) => {
   const { requireSignature } = await getSetting('offers')
   let signed = null
   if (requireSignature) {
-    if (req.body?.agreed !== true) fail(400, 'Confirm that you have read the offer letter and loan agreement.', 'agreement_required')
+    if (req.body?.agreed !== true) fail(400, 'Confirm that you have read the offer letter.', 'agreement_required')
     const signature = parseSignature(req.body?.signature)
     const code = text(req.body?.code, 12)
     if (!code) fail(400, 'Enter the code we emailed you.', 'code_required')
@@ -418,6 +464,7 @@ const acceptOffer = async (req, res, { params }) => {
   afterResponse('staff notifications', async () =>
     notifyUsers(followerIds(application).length ? followerIds(application) : await creditStaffIds(), { type: 'offer_accepted', title: `${application.reference}: offer accepted`, body: 'Ready for payout.', applicationId: application.id }, { origin: appOrigin(req) })
   )
+  sendStageDocuments(req, accepted.application, viewer)
   if (accepted.target.handToLms) await handToLms(accepted.application)
   return { ok: true }
 }
@@ -507,6 +554,35 @@ const discardDraft = async (req) => {
   return { ok: true }
 }
 
+/** Every published or retired version with its policies, newest first (for viewing and restoring). */
+const listVersions = async (req) => {
+  await requireUser(req, { anyPermission: ['rules.view', 'rules.manage'] })
+  const db = await getDb()
+  const rows = await db.select().from(schema.rulesets).where(ne(schema.rulesets.status, 'draft')).orderBy(desc(schema.rulesets.version)).limit(30)
+  return {
+    versions: rows.map((row) => ({ version: row.version, status: row.status, note: row.note, publishedAt: row.publishedAt, policies: rulesToPolicies(row.rules) })),
+  }
+}
+
+/** Copies an earlier version into the draft. Nothing is published until an admin does so. */
+const restoreVersion = async (req) => {
+  const actor = await requireUser(req, { permission: 'rules.manage' })
+  const version = Number(req.body?.version)
+  if (!Number.isInteger(version)) fail(400, 'Choose a version to restore.', 'invalid_version')
+  const db = await getDb()
+  const [row] = await db.select().from(schema.rulesets).where(eq(schema.rulesets.version, version)).limit(1)
+  if (!row) fail(404, 'That version does not exist.', 'not_found')
+  let policies
+  try {
+    policies = validatePolicies(rulesToPolicies(row.rules))
+  } catch (error) {
+    fail(400, error.message, 'invalid_rules')
+  }
+  const draft = await saveDraftRuleset({ policies }, `Restored from version ${version}`, actor)
+  await recordAudit({ req, actor, action: 'rules.version_restored', entityType: 'ruleset', entityId: draft.id, detail: { fromVersion: version, policies: policies.length } })
+  return { draft: { policies, note: draft.note } }
+}
+
 const SIMULATION_SAMPLE = 300
 
 /**
@@ -566,6 +642,7 @@ export const workflowRoutes = [
   ['POST', '/applications/:id/actions', act],
   ['POST', '/applications/:id/documents', addStaffDocument],
   ['POST', '/applications/:id/prescreen', rerunPrescreen],
+  ['POST', '/applications/:id/figures', setFigures],
   ['GET', '/applications/:id/facts', previewFacts],
   ['POST', '/applications/:id/visits', logVisit],
   ['POST', '/applications/:id/crb', runCreditCheck],
@@ -575,6 +652,8 @@ export const workflowRoutes = [
   ['POST', '/me/applications/:id/accept', acceptOffer],
   ['POST', '/me/applications/:id/withdraw', withdrawApplication],
   ['GET', '/rules', getRules],
+  ['GET', '/rules/versions', listVersions],
+  ['POST', '/rules/restore', restoreVersion],
   ['PUT', '/rules/draft', saveDraft],
   ['DELETE', '/rules/draft', discardDraft],
   ['POST', '/rules/simulate', simulate],

@@ -8,7 +8,13 @@
  *   { start, checklist: [{ key, label, hint, requiredToApprove }],
  *     states: [{ id, label, type: 'work' | 'offer' | 'final', outcome?,
  *                roles, products, requiredChecks, askApplicant, handToLms, trackProgress, disabled?,
- *                offer?: { onAccept }, actions: [{ id, label, kind, to, permission?, options }] }] }
+ *                offer?: { onAccept }, documents?: [{ kind, required }],
+ *                actions: [{ id, label, kind, to, permission?, options }] }] }
+ *
+ * `documents` are the documents (Settings → Documents) the applicant is sent on entering
+ * the state, to sign or return; a required one holds the state's forward actions until it
+ * is signed or received. An offer state that lists none sends the offer letter and loan
+ * agreement, which the customer signs by accepting (stateDocuments).
  *
  * `applications.status` stays the reporting category every report, the customer page and
  * the LMS read. It is derived from the state (analyzeWorkflow → categories): the graph
@@ -21,6 +27,8 @@
 
 import { APPLICATION_STATUSES } from './applications.js'
 import { DEFAULT_CHECKLIST } from './stages.js'
+import { PERMISSION_GROUPS } from './roles.js'
+import { FACILITY_LETTER_KIND, OFFER_DOCUMENT_KINDS, TEMPLATE_KINDS, TEMPLATE_KIND_KEYS } from './templates.js'
 
 export const STATE_TYPES = {
   work: { label: 'In progress' },
@@ -42,9 +50,10 @@ export const SYSTEM_FINALS = {
 export const SYSTEM_FINAL_IDS = Object.keys(SYSTEM_FINALS)
 
 /**
- * What an action does. `permission` is who may do it unless the state names roles (which
- * then narrow it); `forward` actions move the case on and must never loop back; `to`
- * fixes the target for the kinds that always end in the same place.
+ * What an action does. `permission` is who may do it; a state that names roles narrows
+ * that to those roles, and never stands in for the permission. `forward` actions move the
+ * case on and must never loop back; `to` fixes the target for the kinds that always end
+ * in the same place.
  */
 export const ACTION_KINDS = {
   move: { label: 'Move on', tone: 'forward', permission: 'cases.work', forward: true },
@@ -53,6 +62,29 @@ export const ACTION_KINDS = {
   approve: { label: 'Approve', tone: 'forward', permission: 'cases.decide', forward: true },
   reject: { label: 'Reject', tone: 'danger', permission: 'cases.decide', forward: true, to: 'declined' },
   pay_out: { label: 'Mark as paid out', tone: 'forward', permission: 'cases.disburse', forward: true, to: 'paid_out' },
+}
+
+/** The permission an action needs: its own, or its kind's. */
+export const actionPermission = (action) => action?.permission || ACTION_KINDS[action?.kind]?.permission || null
+
+const PERMISSION_LABELS = Object.fromEntries(PERMISSION_GROUPS.flatMap((group) => group.permissions.map((permission) => [permission.key, permission.label])))
+
+/**
+ * What a role named on `state` could not do there, as [{ permission, label, actions }]:
+ * each permission it lacks, with the actions that need it. Empty when it can do it all.
+ * On the offer state the work is recording the customer's acceptance.
+ */
+export const missingForState = (role, state) => {
+  if (!role?.permissions || !state || state.type === 'final') return []
+  const needs = new Map()
+  const need = (permission, label) => {
+    if (!permission || role.permissions.includes(permission)) return
+    if (!needs.has(permission)) needs.set(permission, [])
+    needs.get(permission).push(label)
+  }
+  for (const action of state.actions || []) need(actionPermission(action), action.label || ACTION_KINDS[action.kind]?.label)
+  if (state.type === 'offer') need('offers.record', 'Record acceptance')
+  return [...needs].map(([permission, actions]) => ({ permission, label: PERMISSION_LABELS[permission] || permission, actions }))
 }
 
 /** Where a case is in the journey: before the decision, approved (awaiting acceptance), or accepted. */
@@ -105,6 +137,30 @@ export const actionTarget = (definition, action, product) =>
   action?.kind === 'return' ? resolveReturn(definition, action.to, product) : resolveState(definition, action?.to, product)
 
 const PRODUCTS = ['personal', 'business']
+
+/** The offer letter: made on approval and signed by accepting the offer. */
+export const isOfferDocument = (kind) => OFFER_DOCUMENT_KINDS.includes(kind)
+
+/** The built-in documents (offer letter, facility letter): made from the approved terms, so never sent before approval. */
+export const needsApproval = (kind) => TEMPLATE_KIND_KEYS.includes(kind)
+
+/**
+ * The documents a state sends the applicant: its own list, or by default (every workflow
+ * before stage documents) the offer letter on an offer state, and the facility letter where
+ * a case goes once the customer accepts. Not required by default, so cases already accepted
+ * aren't held up; ticking "Required to move on" in the workflow editor makes it so.
+ * `definition` is the state's workflow; without it only the offer default applies.
+ */
+export const stateDocuments = (state, definition = null) => {
+  if (!state || state.type === 'final') return []
+  if (Array.isArray(state.documents)) return state.documents
+  if (state.type === 'offer') return OFFER_DOCUMENT_KINDS.map((kind) => ({ kind, required: false }))
+  const afterAcceptance = (definition?.states || []).some((entry) => entry.type === 'offer' && entry.offer?.onAccept === state.id)
+  return afterAcceptance ? [{ kind: FACILITY_LETTER_KIND, required: false }] : []
+}
+
+/** Actions that hold for a state's required documents: those moving the case on, but not turning it down. */
+export const awaitsDocuments = (action, verdict) => Boolean(ACTION_KINDS[action?.kind]?.forward) && action.kind !== 'reject' && !(action.kind === 'recommend' && verdict === 'decline')
 
 /**
  * Walks the graph from the start, once per product, and works out each state's phase and
@@ -217,9 +273,11 @@ const reachableFrom = (definition, id) => {
 /**
  * Checks a workflow before it is published (and live in the editor). Returns
  * { errors, warnings, phases, categories, order }; each message may carry the stateId
- * and actionId it is about. `roles` is the list of role keys that exist.
+ * and actionId it is about. `roles` is the roles that exist, as { key, label, permissions }
+ * (or bare keys, which skips the permission check). `documentKinds` is the document kinds
+ * that exist, as { key, label, retired }; without it, the kinds a state sends aren't checked.
  */
-export const validateWorkflow = (definition, { roles } = {}) => {
+export const validateWorkflow = (definition, { roles, documentKinds } = {}) => {
   const errors = []
   const warnings = []
   const states = Array.isArray(definition?.states) ? definition.states : []
@@ -257,11 +315,16 @@ export const validateWorkflow = (definition, { roles } = {}) => {
   }
 
   const checkKeys = new Set((definition.checklist || []).map((check) => check.key))
-  const roleKeys = roles ? new Set(roles) : null
+  const roleList = roles ? roles.map((role) => (typeof role === 'string' ? { key: role } : role)) : null
+  const roleKeys = roleList ? new Set(roleList.map((role) => role.key)) : null
+  const roleByKey = new Map((roleList || []).map((role) => [role.key, role]))
   const offers = states.filter((state) => state.type === 'offer')
+  const kindByKey = documentKinds ? new Map(documentKinds.map((kind) => [kind.key, kind])) : null
+  const kindLabel = (key) => kindByKey?.get(key)?.label || TEMPLATE_KINDS[key]?.label || key
 
   for (const state of states) {
     if (state.type === 'final') {
+      if (state.documents?.length) add(errors, `“${state.label}” is an end: it can’t send documents.`, state.id)
       if (state.actions?.length) add(errors, `“${state.label}” is an end: it can’t have actions.`, state.id)
       if (state.products?.length) add(errors, `“${state.label}” is an end and applies to every product.`, state.id)
       if (state.disabled) add(errors, `“${state.label}” is an end: it can’t be turned off.`, state.id)
@@ -296,9 +359,30 @@ export const validateWorkflow = (definition, { roles } = {}) => {
     for (const key of state.requiredChecks || []) {
       if (!checkKeys.has(key)) add(errors, `“${state.label}” needs a checklist item that no longer exists.`, state.id)
     }
+    const sent = new Set()
+    for (const entry of state.documents || []) {
+      if (sent.has(entry.kind)) add(errors, `“${state.label}” sends “${kindLabel(entry.kind)}” twice.`, state.id)
+      sent.add(entry.kind)
+      if (!kindByKey) continue
+      const kind = kindByKey.get(entry.kind)
+      if (!kind) add(errors, `“${state.label}” sends a document that no longer exists. Take it off this state.`, state.id)
+      else if (kind.retired) add(errors, `“${state.label}” sends “${kind.label}”, which is retired. Take it off this state, or bring it back in Settings → Documents.`, state.id)
+    }
     if (roleKeys) {
-      for (const role of state.roles || []) {
-        if (!roleKeys.has(role)) add(warnings, `“${state.label}” names a role that no longer exists; anyone with the permission can act.`, state.id)
+      for (const key of state.roles || []) {
+        if (!roleKeys.has(key)) {
+          add(warnings, `“${state.label}” names a role that no longer exists.`, state.id)
+          continue
+        }
+        // A named role only narrows who may act: it must hold what the state's actions need.
+        const role = roleByKey.get(key)
+        for (const gap of missingForState(role, state)) {
+          add(
+            errors,
+            `“${role.label || key}” works on “${state.label}” but can’t ${gap.actions.map((label) => `“${label}”`).join(' or ')}: the role lacks “${gap.label}”. Untick it here, or give it that permission in Team → Roles.`,
+            state.id
+          )
+        }
       }
     }
     if (!forwardEdges(state).length) add(errors, `“${state.label}” has no way forward. Add an action that moves the case on.`, state.id)
@@ -344,6 +428,11 @@ export const validateWorkflow = (definition, { roles } = {}) => {
         }
       }
       if (state.type === 'offer' && phase !== 'decided') add(errors, `“${state.label}” must come right after an Approve action.`, state.id)
+      for (const entry of state.documents || []) {
+        if (needsApproval(entry.kind) && phase === 'review') {
+          add(errors, `“${state.label}”: the ${kindLabel(entry.kind).toLowerCase()} is made once the loan is approved, so it can only be sent from the offer or after it.`, state.id)
+        }
+      }
       if (state.askApplicant && phase !== 'review') add(errors, `“${state.label}”: the applicant can only be asked for more before the decision.`, state.id)
     }
   }

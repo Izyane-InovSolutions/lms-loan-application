@@ -21,6 +21,7 @@ It has three parts, all served from one Vite app and its API (`api/`):
 - [Testing](#testing)
 - [What administrators configure](#what-administrators-configure)
 - [How an application moves](#how-an-application-moves)
+- [ZRA taxpayer lookup](#zra-taxpayer-lookup)
 - [The workflow](#the-workflow)
 - [Roles and what they see](#roles-and-what-they-see)
 - [Project structure](#project-structure)
@@ -147,6 +148,7 @@ needed, and every change is recorded in the audit log.
 | Credit workflow | The target days to a decision, how many days an offer stays open, whether accepting means signing, automatic decline |
 | Loan products | For each product: whether it's offered, amount and tenure limits, interest rate (flat once, or per month), facility fee (fixed or a percentage). The website, wizard and server all price with these. |
 | LMS connection | The Frappe address, API key and secret (or username and password), method names, the field carrying our reference, which LMS statuses mean paid out. *Test connection* checks it before you save. |
+| ZRA Web Services | The approved HTTPS origin, API key, username and password. Credentials are encrypted; *Test ZRA login* checks the backend connection. |
 | Notifications and SMS | Staff emails, customer texts, and the SMS provider (Africa's Talking) with a test message |
 | Data retention | How long declined, withdrawn and lapsed applications, paid-out loans and audit entries are kept before automatic deletion |
 | Security | Roles that must use two-step sign-in |
@@ -351,7 +353,10 @@ added, removed, renamed and reordered.
   approver's limit), *reject*, or *mark as paid out*. Any action can require a second
   person: not whoever recommended the case or brought it in (four-eyes).
 - **A state** can name the roles that work on it (its cases wait in their queue, under
-  *In my queue*), apply to personal or business loans only, let staff ask the applicant
+  *In my queue*). Naming a role only narrows who may act; it never grants a permission:
+  the editor offers only roles whose permissions cover the state's actions (Approve and
+  Reject need *Approve or decline*, for example), and a role can't lose a permission
+  while the published workflow relies on it. A state can also apply to personal or business loans only, let staff ask the applicant
   for more, hand the loan to the LMS when a case arrives, require checklist items, and
   show as a step on the case with *Mark as done*.
 - **The Offer state** waits for the customer to accept, then sends the case on. An offer
@@ -428,6 +433,129 @@ bureau records and bills. Every pull is kept on the case. A report whose NRC dif
 from the one requested is flagged. The score feeds the `crb_score` credit rule, and
 loan officers and admins see the full report. Agents and RMs see only the score and
 summary.
+
+### ZRA taxpayer lookup
+
+The application can verify an applicant's NRC, TPIN, passport, or business registration
+number (BRN) against the Zambia Revenue Authority (ZRA). Applicant consent is required
+before an identifier is sent. The browser calls the LOS API; ZRA credentials and access
+tokens remain on the server.
+
+#### Request flow
+
+```mermaid
+sequenceDiagram
+   participant A as Applicant
+   participant UI as Application UI
+   participant API as LOS API
+   participant C as ZRA client
+   participant S as Token store and shared KV
+   participant Z as ZRA Web Services
+   A->>UI: Select identifier, enter value, give consent
+   UI->>API: POST /api/v1/zra/application-lookup
+   API->>API: Validate consent, identifier, feature flag and applicant limit
+   API->>C: Lookup using server-side configuration
+   C->>S: Reuse token or acquire refresh lock
+   C->>Z: Login or refresh when needed
+   Z-->>C: Access and refresh tokens
+   C->>S: Store token payload encrypted
+   C->>Z: POST /zws/v1/taxpayer-lookup with API key and bearer token
+   Z-->>C: Taxpayer record or not-found response
+   C-->>API: Normalized result
+   API-->>UI: Result or sanitized error
+   UI-->>A: Show status and fill returned details on success
+```
+
+The backend authenticates automatically when no valid access token is available. The UI
+must not call ZRA's login endpoint or handle tokens. The client refreshes shortly before
+access-token expiry, logs in again when the refresh token expires, and retries a lookup
+once after an HTTP 401.
+
+#### Files and responsibilities
+
+| File | Responsibility |
+| --- | --- |
+| `src/pages/DashboardPage.tailwind.jsx` | Lookup controls, applicant consent, status feedback, and form autofill. |
+| `src/services/applicationsApi.js` | Sends the request to the same-origin LOS API. |
+| `api/v1/[...path].js` | Routes `/api/v1/zra/*` requests to the ZRA handler. |
+| `api/_handlers/zra.js` | Validates consent/input, applies lookup limits, and handles application and UAT routes. |
+| `api/_lib/zra/config.js` | Selects enabled Admin Settings credentials or server environment configuration. |
+| `api/_lib/zra/client.js` | HTTPS checks, API-key and bearer headers, upstream pacing, token lifecycle, and response parsing. |
+| `api/_lib/zra/tokenStore.js`, `api/_lib/secrets.js` | Persist encrypted tokens; encryption requires `LOS_SECRETS_KEY`. |
+| `api/_lib/rateLimit.js`, `api/_lib/kv.js` | Applicant IP limits and shared storage for request pacing/token locks. |
+| `api/_handlers/settings.js`, `src/admin/pages/SettingsPage.jsx` | Manage and test the ZRA connection. |
+| `vite.config.js` | Mounts the same API handlers in local development. |
+| `tests/zra.test.js`, `tests/zraRoutes.test.js`, `tests/zraTokenStore.test.js` | Test client, routes, rate gate, token lifecycle/storage, and documented lookup results with test doubles. |
+
+#### ZRA criteria and implementation
+
+| ZRA requirement | How it is met |
+| --- | --- |
+| API key on each request | The server sends `X-Api-Key` on login, refresh, and lookup. The key is never sent to browser code. Key validity and account permissions must be confirmed with ZRA. |
+| Access token on protected resources | Lookup uses `Authorization: Bearer <access token>`. Login and refresh occur server-side. |
+| Short access-token and longer refresh-token lifetimes | Expiries are read from ZRA's response. Tokens are reused; refresh is attempted within 60 seconds of access expiry; expired refresh tokens cause a new login. |
+| Avoid repeated logins | Tokens are encrypted and persisted for reuse; a shared lock coordinates renewal between server instances. A 401 triggers one fresh-login retry. |
+| One upstream request every two seconds | A shared KV request gate paces login, refresh, and lookup calls, matching ZRA's default of about 30 requests per minute. Production instances must use shared Redis/KV, not process-local storage. |
+| Taxpayer-lookup request and response | The client posts `lookupType` and `lookupValue` to `/zws/v1/taxpayer-lookup`, accepts only the documented identifier types, validates successful TPIN/name data, and maps HTTP 404 or error code `5000` to not found. |
+| HTTPS transition | HTTPS is required except for explicitly enabled local UAT. Use ZRA's approved HTTPS hostname and complete VPN/DNS mapping on the backend host; the code does not enforce one exact hostname. |
+| Applicant consent | The application endpoint rejects the request unless `consent: true` is present. |
+| Credential and identifier protection | Admin credentials are encrypted; stored tokens are encrypted; audit details omit identifier values; debug logging is disabled in production and does not log identifiers or secrets. |
+
+The applicant endpoint has an additional LOS limit of **5 lookups per source IP per 15
+minutes**. This is stricter than ZRA's published limit and is not a ZRA requirement.
+Applicants behind a shared office or mobile-network IP can share this allowance. Behind
+Cloudflare, set `CLIENT_IP_HEADER=cf-connecting-ip` so limits use the address supplied by
+the trusted proxy. The current test suite exercises the two-second upstream gate but
+does not have a dedicated test for this applicant-level 5-per-15-minute limit.
+
+#### UAT and development
+
+Configure ZRA under **Admin → Settings → ZRA Web Services** and use *Test ZRA login*.
+Alternatively, when database settings are not enabled, the backend can read:
+
+```dotenv
+ZRA_BASE_URL=https://zws.zra.org.zm
+ZRA_API_KEY=
+ZRA_USERNAME=
+ZRA_PASSWORD=
+ZRA_APPLICATION_LOOKUP_ENABLED=true
+LOS_SECRETS_KEY=
+ZRA_REQUEST_TIMEOUT_SECONDS=10
+```
+
+These are server-only settings. Never use a `VITE_` prefix or commit real credentials.
+`LOS_SECRETS_KEY` is required to encrypt token storage and must remain stable while
+encrypted settings/tokens need to be read. The local Swagger endpoints at
+`/api/v1/zra/docs` require loopback access, `ZRA_UAT_MODE=true`,
+`ZRA_UAT_SMOKE_ENABLED=true`, and a development/test runtime. Use only ZRA-approved UAT
+identifiers. `node scripts/zra-smoke-test.js` also refuses to run in production.
+
+The April 2025 transition guide directs systems to `https://zws.zra.org.zm/` over the
+VPN and says the legacy IP-based HTTP endpoint will be decommissioned. Prefer HTTPS in
+UAT as well; the local HTTP exception should be used only for an explicitly approved
+test setup.
+
+#### Production readiness
+
+1. Obtain production-issued credentials/API key and confirm the ZRA account may use the
+  taxpayer-lookup resource. Do not reuse UAT credentials.
+2. Configure the approved HTTPS origin. Ensure the application host/container has the
+  approved VPN route, DNS/hosts mapping, outbound HTTPS access, and a trusted certificate
+  chain. Applicants' browsers do not need direct ZRA/VPN access.
+3. Configure Postgres, shared Redis/KV, and a strong, stable `LOS_SECRETS_KEY` on every
+  instance. Back up the database and key securely; losing the key makes encrypted values
+  unreadable.
+4. Set `ZRA_APPLICATION_LOOKUP_ENABLED=true` only after connection testing succeeds.
+  Keep `ZRA_ALLOW_HTTP_UAT`, `ZRA_UAT_MODE`, and `ZRA_UAT_SMOKE_ENABLED` unset/false in
+  production.
+5. Verify trusted proxy IP forwarding and `CLIENT_IP_HEADER`. Test login, successful and
+  not-found lookups, token refresh, and throttling in staging before go-live.
+6. Monitor sanitized errors and 429 responses; rotate credentials through the approved
+  process. Do not log applicant identifiers, tokens, API keys, or passwords.
+
+Automated ZRA tests use stubs and do not contact ZRA. They verify implementation behavior,
+not VPN reachability, DNS mapping, live credentials, ZRA permissions, or production
+throttling. A successful live staging lookup is still required for operational acceptance.
 
 ## Roles and what they see
 
@@ -652,5 +780,7 @@ Without Docker, on one Linux server (nginx, local Postgres, systemd), see
 | The dev server won't start: database in use | Another dev server has `.local-pg/` open. Stop it, or reset local data. |
 | A deployed function errors "No database/Redis/Blob store is configured" | Add that store and its variables for this environment, then redeploy. |
 | "Set LOS_SECRETS_KEY…" when saving the LMS connection | Add `LOS_SECRETS_KEY` to the deployment's environment variables and redeploy. |
+| ZRA taxpayer lookup returns 502 | Inspect the LOS API response `code`/`message` and server logs. Check ZRA credentials/API key, token response, HTTPS origin, VPN/DNS mapping, outbound access, and lookup permission. The LOS handler received the request but the upstream ZRA operation failed. |
+| ZRA lookup returns 429 or applicants cannot retry | The upstream gate spaces ZRA requests by two seconds; the applicant route also allows 5 lookups per source IP per 15 minutes. Check shared Redis/KV and trusted proxy IP configuration before changing either policy. |
 | A case shows "LMS receipt unconfirmed" | The LMS didn't reply. Check the LMS, then use *I've checked the LMS* on the case to record its reference or allow a resend. |
 | Tests fail after a schema change | Run `npm run db:generate` and commit the migration. |

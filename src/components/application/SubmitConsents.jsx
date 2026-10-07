@@ -13,8 +13,6 @@ import { useBranding } from '@/components/brand/BrandingProvider'
  * are accepted in the terms dialog on submit.
  */
 export function SubmitConsents({
-  shareLocation,
-  onShareLocation,
   allowCrb,
   onAllowCrb,
   crbEnabled,
@@ -32,25 +30,18 @@ export function SubmitConsents({
         Before you submit
       </h2>
 
-      <label className="flex cursor-pointer items-start gap-3">
-        <input
-          type="checkbox"
-          className="mt-1 size-4 shrink-0 accent-[hsl(var(--primary))]"
-          checked={shareLocation}
-          onChange={(event) => onShareLocation(event.target.checked)}
-        />
+      {/* Required: the location is recorded at submission (the browser asks for it then). */}
+      <div className="flex items-start gap-3">
+        <MapPin className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
         <span className="text-sm">
-          <span className="flex items-center gap-1.5 font-medium text-foreground">
-            <MapPin className="size-3.5 text-muted-foreground" aria-hidden="true" />
-            {assistedBy ? 'Record where we met' : 'Share my location'}
-          </span>
+          <span className="block font-medium text-foreground">{assistedBy ? 'Where we met is recorded' : 'Your location is recorded'}</span>
           <span className="mt-0.5 block text-muted-foreground">
             {assistedBy
-              ? 'Your device’s location is saved with the application as the place you met the customer.'
+              ? 'Your device’s location is saved with the application as the place you met the customer. Allow it when your browser asks.'
               : consentText('location', name)}
           </span>
         </span>
-      </label>
+      </div>
 
       {crbEnabled ? (
         <label className="flex cursor-pointer items-start gap-3">

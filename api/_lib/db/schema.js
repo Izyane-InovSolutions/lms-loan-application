@@ -562,7 +562,7 @@ export const legalDocuments = pgTable(
 )
 
 /**
- * The offer letter and loan agreement templates (Settings → Documents), versioned like the
+ * The offer letter and facility letter templates (Settings → Documents), versioned like the
  * terms: one draft and one published version per kind; publishing retires the last one.
  * `source` is text (written in the workspace, `body` with {{fields}}) or pdf (uploaded;
  * `pdfPathname` in storage, `fields` the form field names found in it).
@@ -640,4 +640,31 @@ export const errorReports = pgTable(
     detail: jsonb('detail').notNull().default(sql`'{}'::jsonb`),
   },
   (table) => [uniqueIndex('error_reports_fingerprint_key').on(table.fingerprint), index('error_reports_last_seen_idx').on(table.lastSeenAt)]
+)
+
+/**
+ * Ledger of data subject requests (access or erasure) and when each is due. Holds an HMAC
+ * of the email address only, never the address itself, so the ledger survives an erasure.
+ */
+export const dataRequests = pgTable(
+  'data_requests',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    emailHash: text('email_hash').notNull(),
+    // 'access' | 'erasure'
+    type: text('type').notNull(),
+    receivedAt: timestamp('received_at', { withTimezone: true }).notNull().defaultNow(),
+    // Received + 30 days unless given.
+    dueAt: timestamp('due_at', { withTimezone: true })
+      .notNull()
+      .default(sql`now() + interval '30 days'`),
+    // 'open' | 'in_progress' | 'completed' | 'rejected'
+    status: text('status').notNull().default('open'),
+    handledBy: uuid('handled_by').references(() => users.id, { onDelete: 'set null' }),
+    outcome: text('outcome'),
+    completedAt: timestamp('completed_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index('data_requests_status_due_idx').on(table.status, table.dueAt), index('data_requests_email_hash_idx').on(table.emailHash)]
 )

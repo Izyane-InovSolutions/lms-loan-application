@@ -29,6 +29,12 @@
   },
   "overrides": [
     {
+      "files": ["api/**/*.js", "tests/**/*.js"],
+      "env": {
+        "node": true
+      }
+    },
+    {
       "files": [
         "src/components/**/*.jsx",
         "src/admin/**/*.jsx",

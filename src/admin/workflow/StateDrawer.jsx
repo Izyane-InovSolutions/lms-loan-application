@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { registeredRoles } from '@/config/roles'
-import { ACTION_KINDS, STATE_TYPES, SYSTEM_FINALS, stateById } from '@/config/workflow'
+import { ACTION_KINDS, STATE_TYPES, SYSTEM_FINALS, isOfferDocument, missingForState, needsApproval, stateById, stateDocuments } from '@/config/workflow'
 import { addAction, changeAction, changeState, removeAction, removeState, setStateEnabled } from './editing'
 
 /*
@@ -118,7 +118,66 @@ function ActionEditor({ definition, state, action, onChange, onRemove, highlight
   )
 }
 
-export function StateDrawer({ definition, stateId, focusActionId, errors, onChange, onClose, onFocusAction }) {
+/**
+ * The documents the applicant is sent on entering the state, each optionally required
+ * before the case moves on. With no list of its own, an offer state sends the offer letter
+ * and the state after acceptance the facility letter (stateDocuments); ticking anything
+ * here gives the state its own list.
+ */
+function StateDocuments({ state, definition, documentKinds, onChange }) {
+  const chosen = stateDocuments(state, definition)
+  const entryFor = (key) => chosen.find((entry) => entry.kind === key)
+  // Retired kinds only while this state still sends one, so it can be taken off.
+  const kinds = documentKinds.filter((kind) => !kind.retired || entryFor(kind.key))
+  const set = (key, next) => {
+    const without = chosen.filter((entry) => entry.kind !== key)
+    onChange({ documents: next ? [...without, next] : without })
+  }
+  return (
+    <Section title="Documents sent at this stage">
+      <p className="text-xs text-muted-foreground">
+        Made from Settings → Documents when a case arrives here, and emailed to the applicant in one message with the PDFs attached. They sign online, or print, sign and upload a copy.
+        {state.type === 'offer' ? ' The offer letter is signed when the customer accepts; the facility letter follows once they have.' : ''}
+      </p>
+      <ul className="space-y-2">
+        {kinds.map((kind) => {
+          const entry = entryFor(kind.key)
+          // The offer letter belongs to the offer; the built-in documents are made from the approved terms.
+          const note = isOfferDocument(kind.key) ? (state.type !== 'offer' ? ' Signed by accepting the offer, so it belongs on the offer stage.' : '') : needsApproval(kind.key) ? ' Only after approval.' : ''
+          return (
+            <li key={kind.key} className="rounded-md border px-3 py-2 text-sm">
+              <label className="flex items-start gap-2">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 size-4 accent-[hsl(var(--primary))]"
+                  checked={Boolean(entry)}
+                  onChange={(event) => set(kind.key, event.target.checked ? { kind: kind.key, required: false } : null)}
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="block font-medium text-foreground">{kind.label}</span>
+                  <span className="block text-xs text-muted-foreground">
+                    {kind.retired ? 'Retired: take it off this stage.' : kind.requiresSignature ? 'The applicant signs it.' : 'For the applicant to read and keep.'}
+                    {note}
+                  </span>
+                </span>
+              </label>
+              {/* The offer waits on the customer's acceptance, not on staff moving it on. */}
+              {entry && state.type !== 'offer' ? (
+                <label className="ml-6 mt-2 flex items-center gap-2 text-xs">
+                  <input type="checkbox" className="size-3.5 accent-[hsl(var(--primary))]" checked={Boolean(entry.required)} onChange={(event) => set(kind.key, { ...entry, required: event.target.checked })} />
+                  Required to move on: {kind.requiresSignature ? 'signed, or a signed copy received' : 'marked received'} before the case leaves this stage
+                </label>
+              ) : null}
+            </li>
+          )
+        })}
+      </ul>
+      {!kinds.length ? <p className="text-sm text-muted-foreground">No documents yet. Add them in Settings → Documents.</p> : null}
+    </Section>
+  )
+}
+
+export function StateDrawer({ definition, stateId, focusActionId, errors, documentKinds = [], onChange, onClose, onFocusAction }) {
   const state = stateById(definition, stateId)
   const open = Boolean(state)
   const system = state ? Boolean(SYSTEM_FINALS[state.id]) : false
@@ -174,16 +233,36 @@ export function StateDrawer({ definition, stateId, focusActionId, errors, onChan
               <>
                 <Section title="Who works on it">
                   <div className="grid gap-1.5 sm:grid-cols-2">
-                    {roles.map((role) => (
-                      <label key={role.key} className="flex items-center gap-2 text-sm">
-                        <input type="checkbox" className="size-4 accent-[hsl(var(--primary))]" checked={(state.roles || []).includes(role.key)} onChange={() => update({ roles: toggleIn(state.roles || [], role.key) })} />
-                        {role.label}
-                      </label>
-                    ))}
+                    {roles.map((role) => {
+                      const ticked = (state.roles || []).includes(role.key)
+                      // A role that can't take this state's actions can't work on it. One
+                      // already ticked stays clickable, so it can be unticked.
+                      const gaps = missingForState(role, state)
+                      const unable = gaps.length > 0
+                      return (
+                        <label key={role.key} className={`flex items-start gap-2 text-sm ${unable && !ticked ? 'text-muted-foreground' : ''}`}>
+                          <input
+                            type="checkbox"
+                            className="mt-0.5 size-4 accent-[hsl(var(--primary))]"
+                            checked={ticked}
+                            disabled={unable && !ticked}
+                            onChange={() => update({ roles: toggleIn(state.roles || [], role.key) })}
+                          />
+                          <span>
+                            {role.label}
+                            {unable ? (
+                              <span className={`block text-xs ${ticked ? 'text-destructive' : ''}`}>
+                                Can’t {gaps.flatMap((gap) => gap.actions).join(' or ').toLowerCase()} (lacks {gaps.map((gap) => gap.label.toLowerCase()).join(', ')})
+                              </span>
+                            ) : null}
+                          </span>
+                        </label>
+                      )
+                    })}
                   </div>
                   <p className="text-xs text-muted-foreground">
                     {(state.roles || []).length
-                      ? 'Cases here wait in these roles’ queue. Administrators can always act.'
+                      ? 'Cases here wait in these roles’ queue, for people whose role also allows the action. Administrators can always act.'
                       : 'None ticked: anyone whose role allows the action can take it.'}
                   </p>
                 </Section>
@@ -245,6 +324,8 @@ export function StateDrawer({ definition, stateId, focusActionId, errors, onChan
                     </fieldset>
                   ) : null}
                 </Section>
+
+                <StateDocuments state={state} definition={definition} documentKinds={documentKinds} onChange={update} />
 
                 {state.type === 'work' ? (
                   <Section title="Actions">

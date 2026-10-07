@@ -37,6 +37,7 @@ import {
   LocationPanel,
   RulesPanel,
   SignaturesPanel,
+  StageDocumentsPanel,
   StagesPanel,
 } from './CasePanels'
 import { sectionsFor } from './fields'
@@ -168,7 +169,7 @@ export function CasePage() {
     )
   }
 
-  const { application, documents, events, prescreen, appraisals, consents, locations, crbReports, lmsConfigured, crbProvider, offersRequireSignature, signatures, workflow } = state
+  const { application, documents, events, prescreen, appraisals, consents, locations, crbReports, lmsConfigured, crbProvider, offersRequireSignature, signatures, stageDocuments, workflow } = state
   const eligibleOfficers = officers.filter((officer) => withinAssignmentRange(officer, application.amount))
   const canTake = withinAssignmentRange(user, application.amount)
   const lastRecommendation = appraisals.find((appraisal) => appraisal.kind === 'recommendation')
@@ -189,6 +190,14 @@ export function CasePage() {
           <p className="mt-1.5 text-sm text-muted-foreground">
             {application.reference}, {LOAN_TYPE_LABELS[application.loanType].toLowerCase()}
             {application.companyName ? `, applicant ${application.applicantName}` : ''}, submitted {dateTime(application.submittedAt)}
+            {hasPermission(user, 'audit.view') ? (
+              <>
+                {' · '}
+                <Link to={`/admin/audit?entity=application:${application.id}`} className="underline underline-offset-2 hover:text-foreground">
+                  View audit trail
+                </Link>
+              </>
+            ) : null}
           </p>
           <dl className="mt-4 flex flex-wrap gap-x-8 gap-y-3">
             <Fact label="Asked for" value={`${money(application.amount)} over ${application.tenure} months`} />
@@ -258,7 +267,7 @@ export function CasePage() {
 
         <aside className="space-y-4">
           <RulesPanel prescreen={prescreen} canRerun={may.work} onRerun={() => post('/prescreen', {}, 'Policy rules run again')} />
-          <AffordabilityPanel application={application} prescreen={prescreen} />
+          <AffordabilityPanel application={application} prescreen={prescreen} onSaveFigures={may.work ? (values) => post('/figures', values, 'Figures saved; the rules ran again') : null} />
           {may.work || may.decide ? <AiReviewPanel prescreen={prescreen} /> : null}
           <StagesPanel
             workflow={workflow}
@@ -266,6 +275,13 @@ export function CasePage() {
             canReopen={may.work}
             onComplete={(stage) => setDialog({ type: 'complete_stage', stage })}
             onReopen={(stage) => setDialog({ type: 'reopen_stage', stage })}
+          />
+          <StageDocumentsPanel
+            documents={stageDocuments}
+            applicationId={application.id}
+            canWork={may.work && !['declined', 'withdrawn', 'expired'].includes(application.status)}
+            onResend={() => post('/stage-documents/send', {}, 'Documents emailed to the applicant again')}
+            onReceived={(document, note) => post(`/stage-documents/${document.id}/received`, { note }, `${document.label} marked received`)}
           />
           <ChecklistPanel
             application={application}
@@ -362,7 +378,7 @@ function AcceptOfferDialog({ open, onOpenChange, application, user, act, require
           <DialogDescription>
             {money(application.approvedAmount ?? application.amount)} over {application.approvedTenure ?? application.tenure} months, {money(application.monthlyInstalment)} a month, {money(application.totalRepayable)} in total.
             {requireSignature
-              ? ' Go through the offer letter and agreement with the customer (Documents tab). They sign below on this device, then read back the code we email them.'
+              ? ' Go through the offer letter with the customer (Documents tab). They sign below on this device, then read back the code we email them.'
               : ' We email the customer a code; when they read it to you, enter it here.'}
           </DialogDescription>
         </DialogHeader>
@@ -475,7 +491,8 @@ function CaseActions({ application, workflow, may, canTake, hasEligibleOfficers,
   // A stage's step is marked done from the Stages panel; here it only says what's next.
   const stepHere = state?.trackProgress
   const groups = groupActions((workflow?.actions || []).filter((action) => !(stepHere && action.kind === 'move')))
-  const hints = []
+  // Required documents not yet back hold the case here (the same words the server uses).
+  const hints = state?.documentsOutstanding?.length && !waiting ? [`Waiting for signed documents: ${state.documentsOutstanding.join(', ')}.`] : []
 
   const buttons = groups.map((group) => {
     const usable = group.actions.filter((action) => !action.blocked)
@@ -834,7 +851,7 @@ function Documents({ application, documents, onUpload }) {
                   <FileText className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-foreground">{document.label}</span>
-                    <span className="block text-xs text-muted-foreground">{document.source === 'applicant' ? 'From the application' : document.source === 'info_response' ? 'Sent after a request' : document.source === 'system' ? (document.meta?.signed ? 'Signed by the customer' : `Generated, template version ${document.meta?.templateVersion ?? '?'}`) : 'Added by staff'}</span>
+                    <span className="block text-xs text-muted-foreground">{document.source === 'applicant' ? 'From the application' : document.source === 'info_response' ? 'Sent after a request' : document.source === 'signed_copy' ? 'Signed copy from the applicant' : document.source === 'system' ? (document.meta?.signed ? 'Signed by the customer' : `Generated, template version ${document.meta?.templateVersion ?? '?'}`) : 'Added by staff'}</span>
                   </span>
                   {flagged ? <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" aria-label="Has findings" /> : null}
                 </button>
@@ -894,7 +911,9 @@ const expectedForSlot = (application, slot) => {
     return { name: person.name, nrc: person.nrc }
   }
   if (['orderOrInvoice', 'passportPhoto'].includes(slot) || slot.startsWith('director.') || slot.startsWith('extra.') || slot.startsWith('response.')) return {}
-  return { companyName: data?.businessInfo?.companyName, holderIsCompany: true }
+  const company = { companyName: data?.businessInfo?.companyName, holderIsCompany: true }
+  // ZRA documents also print the company's TPIN.
+  return ['taxClearance', 'latestTaxComplianceReturn'].includes(slot) ? { ...company, tpin: data?.businessInfo?.tpin } : company
 }
 
 function DocumentFindings({ application, document }) {

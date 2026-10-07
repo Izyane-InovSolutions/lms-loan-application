@@ -62,21 +62,21 @@ beforeAll(async () => {
 })
 
 describe('drafts in the pipeline', () => {
-  it('keeps a customer’s own draft private until they agree to be contacted', async () => {
-    await saveDraft(personal('private@example.com'))
+  it('keeps a customer’s own draft private while an admin has Help with finishing off', async () => {
+    expect((await admin.put('/settings/customerOptions', { helpWithFinishing: false })).status).toBe(200)
+    // The applicant's own say-so changes nothing: only the admin setting counts.
+    await saveDraft({ ...personal('private@example.com'), contactConsent: true })
     expect(await listed(admin)).not.toContain('private@example.com')
     expect(await listed(salesManager)).not.toContain('private@example.com')
+    expect((await admin.put('/settings/customerOptions', { helpWithFinishing: true })).status).toBe(200)
+  })
 
-    await saveDraft({ ...personal('private@example.com'), contactConsent: true })
+  it('lists a customer’s draft once Help with finishing is on, without them choosing', async () => {
+    await saveDraft(personal('private@example.com'))
     expect(await listed(salesManager)).toContain('private@example.com')
     const [row] = (await salesManager.get('/drafts')).body.drafts.filter((draft) => draft.email === 'private@example.com')
     expect(row).toMatchObject({ applicantName: 'Mutale Phiri', amount: 8000, currentStep: 1, stepCount: 5, nextStep: 'Residence & Employment', startedByStaff: false })
     expect(row.contactConsentAt).toBeTruthy()
-  })
-
-  it('does not take consent back on a later save without it', async () => {
-    await saveDraft(personal('private@example.com'))
-    expect(await listed(salesManager)).toContain('private@example.com')
   })
 
   it('lists an agent’s drafts for them, their RM and the whole-book roles only', async () => {

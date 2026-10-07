@@ -1,4 +1,4 @@
-import { Activity, Columns3, FileStack, History, KeyRound, LayoutDashboard, Scale, Settings, ShieldCheck, Users, Workflow } from 'lucide-react'
+import { Activity, Columns3, FileStack, History, KeyRound, LayoutDashboard, Scale, Settings, ShieldCheck, TrendingUp, Users, Workflow } from 'lucide-react'
 import { hasPermission, isStaffRole } from '@/config/roles'
 
 const allowedTo = (permission) => (user) => hasPermission(user, permission)
@@ -27,6 +27,7 @@ export const NAV_SECTIONS = [
     label: 'People',
     items: [
       { to: '/admin/users', label: 'Team', icon: Users, allow: allowedTo('users.view') },
+      { to: '/admin/agents', label: 'Agents', icon: TrendingUp, allow: allowedTo('reports.team') },
       { to: '/admin/roles', label: 'Roles', icon: KeyRound, allow: allowedTo('roles.manage') },
     ],
   },

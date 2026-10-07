@@ -18,7 +18,7 @@ const nameTokens = (value) =>
 
 // Documents print names in varying order and often drop middle names, so this asks for
 // overlap rather than equality: two shared names, or the only one when a side has one.
-const namesMatch = (a, b) => {
+export const namesMatch = (a, b) => {
   const left = new Set(nameTokens(a))
   const right = nameTokens(b)
   if (!left.size || !right.length) return true
@@ -34,7 +34,7 @@ const companyKey = (value) =>
     .replace(COMPANY_SUFFIXES, ' ')
     .replace(/[^a-z0-9]/g, '')
 
-const companiesMatch = (a, b) => {
+export const companiesMatch = (a, b) => {
   const left = companyKey(a)
   const right = companyKey(b)
   if (!left || !right) return true
@@ -43,7 +43,7 @@ const companiesMatch = (a, b) => {
 
 /**
  * @param analysis  result from /api/ai/analyze-document
- * @param expected  { name?, nrc?, companyName? } from the current form
+ * @param expected  { name?, nrc?, tpin?, companyName? } from the current form
  * @returns applicant-facing messages; empty when everything that can be compared agrees
  */
 export const findFormMismatches = (analysis, expected = {}) => {
@@ -53,6 +53,12 @@ export const findFormMismatches = (analysis, expected = {}) => {
   if (expected.nrc && extracted.nrcNumber && digits(expected.nrc) !== digits(extracted.nrcNumber)) {
     mismatches.push(
       `The NRC number on this document (${extracted.nrcNumber}) doesn't match the one you entered (${expected.nrc}).`
+    )
+  }
+
+  if (expected.tpin && extracted.tpinNumber && digits(expected.tpin) !== digits(extracted.tpinNumber)) {
+    mismatches.push(
+      `The TPIN on this document (${extracted.tpinNumber}) doesn't match the one you entered (${expected.tpin}).`
     )
   }
 

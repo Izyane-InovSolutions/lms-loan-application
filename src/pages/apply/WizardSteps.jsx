@@ -110,9 +110,7 @@ export function WizardStep(props) {
     setConsentCode,
     setLoanData,
     setPreviewAttachment,
-    setShareLocation,
     setShowCameraCapture,
-    shareLocation,
     totalRepayable,
     updateDirectorField,
     updateSectionField,
@@ -375,8 +373,6 @@ export function WizardStep(props) {
         </Button>
       </div>
       <SubmitConsents
-        shareLocation={shareLocation}
-        onShareLocation={setShareLocation}
         allowCrb={allowCrb}
         onAllowCrb={setAllowCrb}
         crbEnabled={CRB_ENABLED}
@@ -443,6 +439,7 @@ export function WizardStep(props) {
           <SummaryHighlights items={summaryHighlights} />
           {renderSummarySection('Business information', [
             renderSummaryRow('Company name', businessData.businessInfo.companyName),
+            renderSummaryRow('TPIN', businessData.businessInfo.tpin),
             renderSummaryRow('Type of business', businessData.businessInfo.businessType),
             renderSummaryRow('Established date', businessData.businessInfo.establishedDate),
             renderSummaryRow('Nature of business', businessData.businessInfo.natureOfBusiness),
@@ -552,6 +549,7 @@ export function WizardStep(props) {
           <div className="grid gap-6">
             <FieldGroup title="Company details" description="As registered with PACRA." icon={Building2} columns={2}>
               {renderField('Company name', businessData.businessInfo.companyName, (value) => updateSectionField('businessInfo', 'companyName', value), 'text', '', {}, true, 'businessInfo.companyName')}
+              {renderField('TPIN', businessData.businessInfo.tpin, (value) => updateSectionField('businessInfo', 'tpin', value, 'numeric'), 'text', '10-digit ZRA taxpayer number', { maxLength: 10, inputMode: 'numeric' }, true, 'businessInfo.tpin')}
               {renderSelectField('Type of business', businessData.businessInfo.businessType, (value) => updateSectionField('businessInfo', 'businessType', value), BUSINESS_TYPE_OPTIONS, 'Select business type', true, 'businessInfo.businessType')}
               {renderDateField('Established date', businessData.businessInfo.establishedDate, (value) => updateSectionField('businessInfo', 'establishedDate', value), true, 'businessInfo.establishedDate')}
               {renderField('Nature of business', businessData.businessInfo.natureOfBusiness, (value) => updateSectionField('businessInfo', 'natureOfBusiness', value), 'text', '', {}, true, 'businessInfo.natureOfBusiness')}

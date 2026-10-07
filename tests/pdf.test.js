@@ -30,6 +30,35 @@ describe('templates', () => {
   })
 })
 
+describe('letterhead and signature block', () => {
+  const letterhead = { name: 'Izyane Finance', logo: { bytes: signaturePng(120, 40), contentType: 'image/png' }, address: 'Plot 1, Cairo Road, Lusaka', contacts: '+260 211 000 000 · loans@example.com', colour: '#1f4e79' }
+
+  it('signs at the end of a template that doesn’t say where, with the letterhead on every page', async () => {
+    const body = `Dear {{customer_name}},\n\n${'word '.repeat(900)}`
+    const { bytes, signatureSpots } = await renderTextTemplate({ title: 'Loan offer', body, values: SAMPLE_VALUES, footer: 'LOS-1', letterhead })
+    const count = await pages(bytes)
+    expect(count).toBeGreaterThan(1)
+    expect(signatureSpots).toHaveLength(1)
+    expect(signatureSpots[0]).toMatchObject({ pageIndex: count - 1, date: expect.any(Object) })
+  })
+
+  it('puts the signature where the template has {{customer_signature}}, and draws the date when signed', async () => {
+    const body = 'Terms first.\n\n{{customer_signature}}\n\nSchedule after the signature.'
+    const rendered = await renderTextTemplate({ title: 'Agreement', body, values: SAMPLE_VALUES, letterhead })
+    expect(rendered.signatureSpots).toHaveLength(1)
+    expect(rendered.signatureSpots[0].pageIndex).toBe(0)
+    const signed = await signPdf(rendered.bytes, { signature: signaturePng(), signatureSpots: rendered.signatureSpots, signedOn: '6 October 2026', record: { signerName: 'Ada Banda', statement: 'Signed', rows: [] } })
+    expect(sha256(signed)).not.toBe(sha256(rendered.bytes))
+  })
+
+  it('still renders with an unreadable logo, and without a signature when asked', async () => {
+    const broken = { ...letterhead, logo: { bytes: Buffer.from('not an image'), contentType: 'image/png' } }
+    const { bytes, signatureSpots } = await renderTextTemplate({ title: 'Notice', body: 'Hello', values: SAMPLE_VALUES, letterhead: broken, signature: false })
+    expect(await pages(bytes)).toBe(1)
+    expect(signatureSpots).toEqual([])
+  })
+})
+
 describe('uploaded PDFs', () => {
   it('reports its form fields, and refuses what is not a PDF', async () => {
     const { fields } = await inspectPdf(await lenderPdf(['{{customer_name}}', 'Amount', 'customer_signature']))

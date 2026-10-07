@@ -66,7 +66,8 @@ export default {
         sm: 'calc(var(--radius) - 4px)',
       },
       fontFamily: {
-        sans: ['Inter var', 'Inter', 'ui-sans-serif', 'system-ui', '-apple-system', 'Segoe UI', 'Roboto', 'sans-serif'],
+        // The theme's font (src/config/theme.js), set as --font-sans.
+        sans: ['var(--font-sans)'],
       },
       boxShadow: {
         // Blue-tinted elevation, so cards feel part of the brand rather than generic grey.

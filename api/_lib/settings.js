@@ -5,6 +5,7 @@ import { DEFAULT_PRICING } from '../../src/config/loanProducts.js'
 import { AI_FIELDS, AI_SECRET_FIELDS } from '../../src/config/aiProviders.js'
 import { DEFAULT_STAGES_CONFIG } from '../../src/config/stages.js'
 import { DEFAULT_BRAND_NAME } from '../../src/config/branding.js'
+import { DEFAULT_THEME } from '../../src/config/theme.js'
 
 /*
  * Admin-editable configuration. Each key has a default here, so a fresh database
@@ -20,7 +21,19 @@ export const SETTING_DEFAULTS = {
    * file ({ pathname, url, contentType, size, filename, version }), or null for the
    * bundled one. Only the logo upload endpoint sets it (api/_handlers/branding.js).
    */
-  branding: { name: DEFAULT_BRAND_NAME, logo: null },
+  branding: {
+    name: DEFAULT_BRAND_NAME,
+    logo: null,
+    // The letterhead on generated documents: address and contacts at the top right, and a
+    // band of this colour under the header and above the footer.
+    address: '',
+    phone: '',
+    email: '',
+    website: '',
+    // The theme (Settings → Branding → Theme, src/config/theme.js): the accent colour, which
+    // documents and emails use too, the sidebar, corners and font.
+    ...DEFAULT_THEME,
+  },
   // When to hand applications to the LMS: on submit, once approved, or once the customer
   // has accepted the offer (the default when acceptance is required).
   lms: { syncOn: 'approval', sendPrescreen: false },
@@ -52,6 +65,14 @@ export const SETTING_DEFAULTS = {
     disbursedStatuses: ['Disbursed'],
     timeoutSeconds: 60,
   },
+  zra: {
+    enabled: false,
+    baseUrl: '',
+    apiKey: '',
+    username: '',
+    password: '',
+    timeoutSeconds: 10,
+  },
   workflow: {
     // A second person must approve what an officer recommends (four-eyes).
     requireSecondApproval: true,
@@ -65,10 +86,16 @@ export const SETTING_DEFAULTS = {
     requireAcceptance: true,
     // An unaccepted offer lapses after this many days.
     expiryDays: 14,
-    // Accepting means signing the offer letter and agreement (drawn or typed, confirmed
+    // Accepting means signing the offer letter (drawn or typed, confirmed
     // by an emailed code), stamped into signed copies kept with the case.
     requireSignature: true,
   },
+  /*
+   * The lender's own document kinds (Settings → Documents), beside the built-in offer
+   * letter and facility letter: [{ key, label, description, requiresSignature, retired }].
+   * Their templates live with the others (templates.js); the workflow says where each is sent.
+   */
+  documents: { kinds: [] },
   // The processing flow around the fixed backbone: renamed statuses, the checklist, and
   // the workspace's own stages (src/config/stages.js). Empty stage lists: the flow as built.
   stages: DEFAULT_STAGES_CONFIG,
@@ -99,6 +126,14 @@ export const SETTING_DEFAULTS = {
     apiKey: '',
     senderId: '',
   },
+  // What applicants are offered while applying. Set by admins; applicants don't choose.
+  customerOptions: {
+    // Staff may see unfinished applications and contact the applicant to help finish them.
+    helpWithFinishing: true,
+  },
+  // Built-in roles an admin deleted (Team → Roles). They stay in the code, so they can be
+  // brought back; until then they're left out of every list (api/_lib/roles.js).
+  removedRoles: { keys: [] },
   security: {
     // Roles that must use two-step sign-in. Members without it are asked to set it up.
     requireTwoFactorRoles: [],
@@ -109,6 +144,8 @@ export const SETTING_DEFAULTS = {
    * AI_PROVIDER; any field left blank falls back to its environment variable.
    */
   ai: {
+    // Admin switch for AI document checks and the AI prescreen, for applicants and staff alike.
+    enabled: true,
     provider: 'environment',
     // When the chosen model is overloaded, rate-limited or times out, try these in order.
     fallback: true,
@@ -122,6 +159,7 @@ export const SETTING_DEFAULTS = {
 
 const SECRET_FIELDS = {
   lmsConnection: ['apiSecret', 'password'],
+  zra: ['apiKey', 'username', 'password'],
   sms: ['apiKey'],
   ai: AI_SECRET_FIELDS,
 }

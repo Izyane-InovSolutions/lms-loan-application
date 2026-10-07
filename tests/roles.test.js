@@ -71,7 +71,27 @@ describe('built-in roles', () => {
     expect(body.user.scope).toBe('all')
     expect(body.user.roleLabel).toBe('Sales manager')
     const forAdmin = (await admin.get('/auth/me')).body.user
-    expect(forAdmin.permissions.sort()).toEqual([...PERMISSIONS].sort())
+    expect(forAdmin.permissions.sort()).toEqual(PERMISSIONS.filter((key) => !['applications.assist', 'team.lead'].includes(key)).sort())
+  })
+})
+
+describe('administrators', () => {
+  it('don’t bring business in: no assisted applications, referrals or team to lead', async () => {
+    const forAdmin = (await admin.get('/auth/me')).body.user
+    expect(forAdmin.permissions).not.toContain('applications.assist')
+    expect(forAdmin.permissions).not.toContain('team.lead')
+    // An assisted submission by an admin is refused rather than credited to them.
+    const { token, body } = await prepareDraft('admin-assisted@example.com')
+    body.data.personalInfo.email = 'admin-assisted@example.com'
+    const refused = await admin.post('/applications', { ...body, assisted: true }, { authorization: `Bearer ${token}` })
+    expect([401, 403]).toContain(refused.status)
+  })
+
+  it('still grant what they don’t hold: a role that brings business in, and inviting to it', async () => {
+    const created = await admin.post('/roles', { label: 'Field agent', scope: 'own', permissions: ['applications.assist'] })
+    expect(created.status, JSON.stringify(created.body)).toBe(200)
+    const invited = await admin.post('/users', { name: 'Field Agent', email: 'field.agent@example.com', role: created.body.role.key })
+    expect(invited.status, JSON.stringify(invited.body)).toBe(200)
   })
 })
 
@@ -154,9 +174,46 @@ describe('configuring roles', () => {
     expect((await act(officer, id, 'decide', { verdict: 'decline', rationale: 'Agreed' })).status).toBe(200)
   })
 
-  it('keeps the administrator role fixed, and built-in roles undeletable', async () => {
+  it('keeps the administrator role fixed and undeletable', async () => {
     expect((await admin.patch('/roles/admin', { permissions: [] })).status).toBe(403)
-    expect((await admin.del('/roles/dsa')).status).toBe(400)
+    expect((await admin.del('/roles/admin')).body.code).toBe('locked_role')
+    expect((await officer.del('/roles/rm')).status).toBe(403)
+  })
+
+  it('deletes a built-in role nobody holds, and brings it back with its defaults', async () => {
+    // Someone holds the DSA role, so it stays.
+    expect((await admin.del('/roles/dsa')).body.code).toBe('role_in_use')
+
+    await admin.patch('/roles/rm', { label: 'Account manager' })
+    expect((await admin.del('/roles/rm')).body.code).toBe('role_in_use')
+    // Its members move to another role first, as an admin would in Team.
+    for (const person of (await admin.get('/users')).body.users.filter((user) => user.role === 'rm')) {
+      expect((await admin.patch(`/users/${person.id}`, { role: 'loan_officer' })).status).toBe(200)
+    }
+    const deleted = await admin.del('/roles/rm')
+    expect(deleted.status, JSON.stringify(deleted.body)).toBe(200)
+    const after = (await admin.get('/roles')).body
+    expect(after.roles.map((role) => role.key)).not.toContain('rm')
+    expect(after.removed).toEqual([expect.objectContaining({ key: 'rm', label: BUILT_IN_ROLES.rm.label })])
+    // Nobody can be given a role that's gone.
+    expect((await admin.post('/users', { name: 'Late Hire', email: 'late.rm@example.com', role: 'rm' })).status).toBe(400)
+
+    const restored = await admin.post('/roles/rm/restore', {})
+    expect(restored.body.role).toMatchObject({ key: 'rm', label: BUILT_IN_ROLES.rm.label, customized: false })
+    expect((await admin.get('/roles')).body.removed).toEqual([])
+    expect((await admin.post('/roles/rm/restore', {})).status).toBe(404)
+  })
+
+  it('refuses to delete a role the workflow still names', async () => {
+    const { getPublishedWorkflow, saveDraftWorkflow, discardDraftWorkflow } = await import('../api/_lib/workflowVersions.js')
+    await admin.post('/roles', { label: 'Queue keeper', scope: 'all', permissions: [...PERMISSIONS] })
+    const { definition } = await getPublishedWorkflow()
+    const named = { ...definition, states: definition.states.map((state, index) => (index === 0 ? { ...state, roles: ['queue_keeper'] } : state)) }
+    await saveDraftWorkflow(named, 'Name the queue keeper', { id: null })
+    const refused = await admin.del('/roles/queue_keeper')
+    expect(refused.body.code, JSON.stringify(refused.body)).toBe('role_in_workflow')
+    await discardDraftWorkflow()
+    expect((await admin.del('/roles/queue_keeper')).status).toBe(200)
   })
 
   it('refuses to delete a role someone still holds, and records changes in the audit log', async () => {

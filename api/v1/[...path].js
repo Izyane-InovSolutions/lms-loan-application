@@ -5,6 +5,7 @@ import { auditRoutes } from '../_handlers/audit.js'
 import { overviewRoutes } from '../_handlers/overview.js'
 import { applicationRoutes } from '../_handlers/applications.js'
 import { workflowRoutes } from '../_handlers/workflow.js'
+import { stageDocumentRoutes } from '../_handlers/stageDocuments.js'
 import { dashboardRoutes } from '../_handlers/dashboard.js'
 import { demoRoutes } from '../_handlers/demo.js'
 import { settingsRoutes } from '../_handlers/settings.js'
@@ -16,6 +17,8 @@ import { draftRoutes } from '../_handlers/drafts.js'
 import { templateRoutes } from '../_handlers/templates.js'
 import { brandingRoutes } from '../_handlers/branding.js'
 import { workflowConfigRoutes } from '../_handlers/workflowConfig.js'
+import { zraRoutes } from '../_handlers/zra.js'
+import { reportRoutes } from '../_handlers/reports.js'
 
 /*
  * Every /api/v1 endpoint, behind one Vercel function.
@@ -31,7 +34,9 @@ export default createRouter([
   ...overviewRoutes,
   ...applicationRoutes,
   ...workflowRoutes,
+  ...stageDocumentRoutes,
   ...dashboardRoutes,
+  ...reportRoutes,
   ...demoRoutes,
   ...settingsRoutes,
   ...privacyRoutes,
@@ -41,6 +46,7 @@ export default createRouter([
   ...templateRoutes,
   ...brandingRoutes,
   ...workflowConfigRoutes,
+  ...zraRoutes,
   // Last: /drafts/:id must not shadow GET /drafts/file in applicationRoutes.
   ...draftRoutes,
 ])

@@ -22,6 +22,8 @@ const HealthPage = lazy(() => import('./pages/HealthPage').then((module) => ({ d
 const RolesPage = lazy(() => import('./pages/RolesPage').then((module) => ({ default: module.RolesPage })))
 const ProfilePage = lazy(() => import('./pages/ProfilePage').then((module) => ({ default: module.ProfilePage })))
 const WorkflowPage = lazy(() => import('./pages/WorkflowPage').then((module) => ({ default: module.WorkflowPage })))
+const AgentsPage = lazy(() => import('./pages/AgentsPage').then((module) => ({ default: module.AgentsPage })))
+const AgentDetailPage = lazy(() => import('./pages/AgentDetailPage').then((module) => ({ default: module.AgentDetailPage })))
 
 /**
  * The staff workspace at /admin. Loaded lazily from App.jsx, so applicants on the
@@ -44,6 +46,8 @@ export default function AdminApp() {
             <Route path="settings" element={<RequirePermission permission="settings.manage"><SettingsPage /></RequirePermission>} />
             <Route path="workflow" element={<RequirePermission permission="settings.manage"><WorkflowPage /></RequirePermission>} />
             <Route path="users" element={<RequirePermission permission="users.view"><UsersPage /></RequirePermission>} />
+            <Route path="agents" element={<RequirePermission permission="reports.team"><AgentsPage /></RequirePermission>} />
+            <Route path="agents/:id" element={<RequirePermission permission="reports.team"><AgentDetailPage /></RequirePermission>} />
             <Route path="roles" element={<RequirePermission permission="roles.manage"><RolesPage /></RequirePermission>} />
             <Route path="profile" element={<ProfilePage />} />
             <Route path="data-requests" element={<RequirePermission permission="privacy.manage"><DataRequestsPage /></RequirePermission>} />

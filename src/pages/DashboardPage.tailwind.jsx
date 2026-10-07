@@ -54,16 +54,26 @@ import {
 } from '@/config/applicationSteps'
 import { WizardStep } from './apply/WizardSteps'
 import { DraftContactConsent } from '@/components/application/DraftContactConsent'
+import { useCustomerOptions } from '@/hooks/useCustomerOptions'
 import { CRB_ENABLED, businessInitial, personalInitial } from './apply/formDefaults'
 
-/** The device's position for the location consent, or null if it is refused or unavailable. */
+/**
+ * The device's position, which every submission records: { point } or { error } saying,
+ * in words the applicant can act on, why it couldn't be had.
+ */
 const currentPosition = () =>
   new Promise((resolve) => {
-    if (!navigator.geolocation) return resolve(null)
+    if (!navigator.geolocation) return resolve({ error: 'This browser can’t share a location. Open the application in another browser, such as Chrome, to submit.' })
     navigator.geolocation.getCurrentPosition(
-      (position) => resolve({ latitude: position.coords.latitude, longitude: position.coords.longitude, accuracy: position.coords.accuracy }),
-      () => resolve(null),
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
+      (position) => resolve({ point: { latitude: position.coords.latitude, longitude: position.coords.longitude, accuracy: position.coords.accuracy } }),
+      (failure) =>
+        resolve({
+          error:
+            failure.code === 1
+              ? 'We need your location to submit. Allow location for this site (in your browser’s address bar or settings), then press Submit again.'
+              : 'We couldn’t get your location. Turn on location (GPS) on your device, then press Submit again.',
+        }),
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
     )
   })
 
@@ -142,9 +152,9 @@ function DashboardPage() {
   const [submitError, setSubmitError] = useState(null)
   const [validationErrors, setValidationErrors] = useState({})
   const [submittedApplication, setSubmittedApplication] = useState(null)
-  const [shareLocation, setShareLocation] = useState(false)
   // First step, self-service only: staff may see this draft and help finish it.
   const [contactConsent, setContactConsent] = useState(false)
+  const customerOptions = useCustomerOptions()
   const [allowCrb, setAllowCrb] = useState(false)
   // One key per application: a retried submit files it once (see api/_handlers/applications.js).
   const submissionKeyRef = useRef(newSubmissionKey())
@@ -408,13 +418,15 @@ function DashboardPage() {
     }
 
     const company = { companyName: businessData.businessInfo.companyName, holderIsCompany: true }
+    // ZRA documents also print the company's TPIN, checked against the one entered.
+    const taxed = { ...company, tpin: businessData.businessInfo.tpin }
     const docs = businessData.documents
     const directors = businessData.directorInfo.directors || []
     return [
       { fieldKey: 'pacraCertificate', docType: 'pacraCertificate', slot: 'PACRA certificate', required: true, file: docs.pacraCertificate, expected: company },
       { fieldKey: 'form2', docType: 'form2', slot: 'Form 2', required: true, file: docs.form2, expected: company },
-      { fieldKey: 'taxClearance', docType: 'taxClearance', slot: 'Tax clearance certificate / TPIN', required: true, file: docs.taxClearance, expected: company },
-      { fieldKey: 'latestTaxComplianceReturn', docType: 'latestTaxComplianceReturn', slot: 'Latest tax compliance return', required: true, file: docs.latestTaxComplianceReturn, expected: company },
+      { fieldKey: 'taxClearance', docType: 'taxClearance', slot: 'Tax clearance certificate / TPIN', required: true, file: docs.taxClearance, expected: taxed },
+      { fieldKey: 'latestTaxComplianceReturn', docType: 'latestTaxComplianceReturn', slot: 'Latest tax compliance return', required: true, file: docs.latestTaxComplianceReturn, expected: taxed },
       { fieldKey: 'orderOrInvoice', docType: 'orderOrInvoice', slot: 'Order / Invoice', required: false, file: docs.orderOrInvoice, expected: {} },
       { fieldKey: 'bankStatements', docType: 'bankStatements', slot: 'Bank statements', required: true, file: docs.bankStatements, expected: company },
       { fieldKey: 'boardResolution', docType: 'boardResolution', slot: 'Board resolution', required: true, file: docs.boardResolution, expected: company },
@@ -705,11 +717,6 @@ function DashboardPage() {
       }
     }
 
-    // With an agent, the customer agrees at submit, by code; on their own, up front.
-    if (currentStep === 0 && !assistedBy && !contactConsent) {
-      recordError('contactConsent', 'Please agree that we may help you finish your application.')
-    }
-
     if (selectedLoanType === 'personal') {
       if (currentStep === 0) {
         requiredField(personalData.personalInfo.firstName, 'personalInfo.firstName', 'First name is required.')
@@ -786,6 +793,8 @@ function DashboardPage() {
     if (selectedLoanType === 'business') {
       if (currentStep === 0) {
         requiredField(businessData.businessInfo.companyName, 'businessInfo.companyName', 'Company name is required.')
+        if (!businessData.businessInfo.tpin?.trim()) recordError('businessInfo.tpin', 'The company TPIN is required.')
+        else if (!/^\d{10}$/.test(businessData.businessInfo.tpin.trim())) recordError('businessInfo.tpin', 'A TPIN is 10 digits.')
         requiredField(businessData.businessInfo.businessType, 'businessInfo.businessType', 'Type of business is required.')
         requiredField(businessData.businessInfo.establishedDate, 'businessInfo.establishedDate', 'Established date is required.')
         requiredField(businessData.businessInfo.natureOfBusiness, 'businessInfo.natureOfBusiness', 'Nature of business is required.')
@@ -1107,6 +1116,10 @@ function DashboardPage() {
     setSubmitting(true)
     setSubmitError(null)
     try {
+      // Asked first, so a refusal is explained before anything is uploaded.
+      const position = await currentPosition()
+      if (position.error) throw new Error(position.error)
+      const location = position.point
       const token = await flushRemoteDraft()
       if (!token) {
         throw new Error(
@@ -1115,7 +1128,6 @@ function DashboardPage() {
       }
       await ensureDocumentsUploaded(token)
 
-      const location = shareLocation ? await currentPosition() : null
       const scope = selectedLoanType === 'personal' ? 'personal' : 'business'
       const activeData = selectedLoanType === 'personal' ? personalData : businessData
       const result = await submitApplication(token, {
@@ -1124,7 +1136,7 @@ function DashboardPage() {
         data: extractFiles(activeData, scope).sanitized,
         loanData,
         referralCode: assistedBy ? null : readReferral(),
-        consents: { dataProcessing: true, location: Boolean(location), crb: CRB_ENABLED && allowCrb },
+        consents: { dataProcessing: true, location: true, crb: CRB_ENABLED && allowCrb },
         location,
         assisted: Boolean(assistedBy),
         consentCode: assistedBy ? consentCode.trim() : undefined,
@@ -1158,10 +1170,14 @@ function DashboardPage() {
                 Step {currentStep + 1} of {stepTitles.length}
               </span>
             </div>
-            <Button type="button" variant="ghost" size="sm" onClick={handleSaveAndExit} disabled={exiting}>
-              {exiting ? <Loader2 className="animate-spin" /> : <LogOut />}
-              {exiting ? 'Saving…' : 'Save & exit'}
-            </Button>
+            <div className="flex items-center gap-3">
+              {/* Who is filling this in, when an agent or RM is doing it for a customer. */}
+              {assistedBy ? <AssistingAs user={assistedBy} /> : null}
+              <Button type="button" variant="ghost" size="sm" onClick={handleSaveAndExit} disabled={exiting}>
+                {exiting ? <Loader2 className="animate-spin" /> : <LogOut />}
+                {exiting ? 'Saving…' : 'Save & exit'}
+              </Button>
+            </div>
           </div>
 
           <h1 className="mt-3 text-3xl font-bold tracking-tight text-foreground sm:text-4xl print:hidden">
@@ -1275,16 +1291,7 @@ function DashboardPage() {
             <div className="grid gap-6">
               <ErrorSummary ref={errorSummaryRef} errors={validationErrors} />
 
-              {currentStep === 0 && !assistedBy ? (
-                <DraftContactConsent
-                  checked={contactConsent}
-                  onChange={(value) => {
-                    setContactConsent(value)
-                    if (value) setValidationError('contactConsent', '')
-                  }}
-                  error={validationErrors.contactConsent}
-                />
-              ) : null}
+              {currentStep === 0 && !assistedBy && customerOptions.helpWithFinishing ? <DraftContactConsent /> : null}
 
               <WizardStep
                 addDirector={addDirector}
@@ -1322,9 +1329,7 @@ function DashboardPage() {
                 setConsentCode={setConsentCode}
                 setLoanData={setLoanData}
                 setPreviewAttachment={setPreviewAttachment}
-                setShareLocation={setShareLocation}
                 setShowCameraCapture={setShowCameraCapture}
-                shareLocation={shareLocation}
                 totalRepayable={totalRepayable}
                 updateDirectorField={updateDirectorField}
                 updateSectionField={updateSectionField}
@@ -1417,3 +1422,26 @@ function DashboardPage() {
 }
 
 export default DashboardPage
+
+/* eslint-disable react/prop-types */
+/** The staff member filling in an application for a customer: their initials, name and role. */
+function AssistingAs({ user }) {
+  const initials = String(user.name || '?')
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join('')
+    .toUpperCase()
+  return (
+    <div className="flex items-center gap-2.5 rounded-full border bg-card py-1 pl-1 pr-3.5 shadow-sm" aria-label={`Filling in as ${user.name}, ${user.roleLabel || 'staff'}`}>
+      <span className="grid size-8 shrink-0 place-items-center rounded-full bg-primary text-xs font-semibold text-primary-foreground" aria-hidden="true">
+        {initials}
+      </span>
+      <span className="min-w-0 leading-tight" aria-hidden="true">
+        <span className="block max-w-[11rem] truncate text-sm font-semibold text-foreground">{user.name}</span>
+        <span className="block max-w-[11rem] truncate text-xs text-muted-foreground">{user.roleLabel || 'Staff'}</span>
+      </span>
+    </div>
+  )
+}

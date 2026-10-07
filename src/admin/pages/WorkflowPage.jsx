@@ -156,8 +156,9 @@ export function WorkflowPage() {
     load()
   }, [load])
 
-  const roles = useMemo(() => registeredRoles().map((role) => role.key), [])
-  const validation = useMemo(() => (definition ? validateWorkflow(definition, { roles }) : { errors: [], warnings: [] }), [definition, roles])
+  const roles = useMemo(() => registeredRoles(), [])
+  const documentKinds = loaded.documentKinds
+  const validation = useMemo(() => (definition ? validateWorkflow(definition, { roles, documentKinds }) : { errors: [], warnings: [] }), [definition, roles, documentKinds])
   const errorsByState = useMemo(() => {
     const counts = {}
     validation.errors.forEach((entry) => {
@@ -387,6 +388,7 @@ export function WorkflowPage() {
         stateId={editing?.stateId}
         focusActionId={editing?.actionId}
         errors={validation.errors.filter((entry) => entry.stateId && entry.stateId === editing?.stateId)}
+        documentKinds={documentKinds || []}
         onChange={setDefinition}
         onClose={() => setEditing(null)}
         onFocusAction={(actionId) => setEditing((prev) => ({ ...prev, actionId }))}

@@ -1,7 +1,8 @@
 import React, { useState } from 'react'
-import { AlertTriangle, Check, CircleDashed, Loader2, MapPin, RefreshCw, ShieldAlert, Sparkles } from 'lucide-react'
+import { AlertTriangle, Check, CircleDashed, Loader2, MapPin, RefreshCw, Send, ShieldAlert, ShieldCheck, Sparkles } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { LMS_SYNC_LABELS } from '@/config/applications'
 import { checklistOf } from '@/config/stages'
@@ -66,8 +67,10 @@ export function RulesPanel({ prescreen, canRerun, onRerun }) {
               <div className="min-w-0">
                 <p className="text-foreground">{result.message}</p>
                 <p className="text-xs text-muted-foreground">
-                  {OUTCOMES[result.outcome].label}. {FACTS[result.fact]?.label}: {formatFact(result.fact, result.actual)}
-                  {result.operator !== 'missing' ? ` (rule: ${describeCondition(result).replace(`${FACTS[result.fact]?.label} `, '')})` : ''}
+                  {OUTCOMES[result.outcome].label}.{' '}
+                  {result.operator === 'missing'
+                    ? result.reason || `${FACTS[result.fact]?.label} isn’t known.`
+                    : `${FACTS[result.fact]?.label}: ${formatFact(result.fact, result.actual)} (rule: ${describeCondition(result).replace(`${FACTS[result.fact]?.label} `, '')})${result.source ? `. ${result.source}.` : ''}`}
                 </p>
               </div>
             </li>
@@ -79,13 +82,16 @@ export function RulesPanel({ prescreen, canRerun, onRerun }) {
       {unknown.length || passed.length ? (
         <details className="mt-4 text-sm">
           <summary className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-foreground">
-            {passed.length} passed{unknown.length ? `, ${unknown.length} could not be checked` : ''}
+            {passed.length} passed{unknown.length ? `, ${unknown.length} couldn’t be checked` : ''}
           </summary>
           <ul className="mt-2 space-y-1.5">
             {unknown.map((result) => (
-              <li key={result.id} className="flex gap-2 text-xs text-muted-foreground">
-                <CircleDashed className="mt-px size-3.5 shrink-0" aria-hidden="true" />
-                {describeCondition(result)}: not known
+              <li key={result.id} className="flex gap-2 text-xs">
+                <CircleDashed className="mt-px size-3.5 shrink-0 text-warning" aria-hidden="true" />
+                <span className="min-w-0">
+                  <span className="block text-foreground">{describeCondition(result)}</span>
+                  <span className="block text-muted-foreground">Couldn’t be checked. {result.reason || `${FACTS[result.fact]?.label || 'This figure'} isn’t known for this application.`}</span>
+                </span>
               </li>
             ))}
             {passed.map((result) => (
@@ -106,21 +112,166 @@ const FACT_SNAPSHOT = {
   business: ['monthly_instalment', 'annual_turnover', 'loan_to_turnover', 'order_value', 'loan_to_order', 'business_age_months'],
 }
 
-/** The numbers behind affordability, as the server computed them. */
-export function AffordabilityPanel({ application, prescreen }) {
-  if (!prescreen) return null
+/** The GPS position against the typed home address: how far apart, or why they couldn't be compared. */
+function AddressComparison({ location }) {
+  if (!location?.address) return null
+  const { address, km } = location
   return (
-    <Panel title="Affordability">
+    <div className={cn('mt-3 rounded-md border p-3 text-xs', address.found === false ? 'border-warning/40 bg-warning/5' : 'bg-muted/30')}>
+      <p className="text-muted-foreground">
+        Home address typed: <span className="font-medium text-foreground">{address.typed ? `“${address.typed}”` : 'none'}</span>
+      </p>
+      {km !== null && km !== undefined ? (
+        <p className="mt-1 text-foreground">
+          Found on the map{address.label ? ` (${address.label})` : ''}: <span className="font-semibold">{km < 1 ? 'under 1 km' : `${Math.round(km)} km`}</span> from where they submitted.
+        </p>
+      ) : address.found === false ? (
+        <p className="mt-1 text-foreground">This address couldn’t be found on the map, so it can’t be compared with the GPS position. Check it with the applicant.</p>
+      ) : (
+        <p className="mt-1 text-muted-foreground">Not compared with the GPS position yet.</p>
+      )}
+    </div>
+  )
+}
+
+/** Figures an officer may enter by hand, by loan type (api/_lib/prescreen/reasons.js MANUAL_FIGURES). */
+const MANUAL_FIGURES = {
+  personal: [
+    ['netPay', 'Net monthly pay', 'From the latest payslip'],
+    ['averageMonthlyCredits', 'Average monthly bank credits', 'Money paid in per month, from the bank statement'],
+  ],
+  business: [
+    ['averageMonthlyCredits', 'Average monthly bank credits', 'Money paid in per month, from the bank statement'],
+    ['annualTurnover', 'Annual turnover', 'From the latest tax return'],
+    ['orderValue', 'Order or invoice value', 'From the order or invoice'],
+  ],
+}
+
+/**
+ * The numbers behind affordability, as the server computed them: each with where it came
+ * from (read by the AI, or entered by an officer) or, when unknown, why. Officers can
+ * enter a figure the AI couldn't read, or correct one it misread; the rules run again.
+ */
+export function AffordabilityPanel({ application, prescreen, onSaveFigures }) {
+  const [editing, setEditing] = useState(false)
+  if (!prescreen) return null
+  const notes = prescreen.facts?._notes || { reasons: {}, sources: {} }
+  const missing = FACT_SNAPSHOT[application.loanType].filter((fact) => notes.reasons?.[fact] && prescreen.facts[fact] == null)
+  return (
+    <Panel
+      title="Affordability"
+      action={
+        onSaveFigures && !editing ? (
+          <Button variant="ghost" size="sm" onClick={() => setEditing(true)}>
+            Enter figures
+          </Button>
+        ) : null
+      }
+    >
       <dl className="grid grid-cols-2 gap-x-4 gap-y-3">
-        {FACT_SNAPSHOT[application.loanType].map((fact) => (
-          <div key={fact}>
-            <dt className="text-xs text-muted-foreground">{FACTS[fact].label}</dt>
-            <dd className="text-sm font-medium tabular-nums text-foreground">{formatFact(fact, prescreen.facts[fact])}</dd>
-          </div>
-        ))}
+        {FACT_SNAPSHOT[application.loanType].map((fact) => {
+          const known = prescreen.facts[fact] != null
+          return (
+            <div key={fact}>
+              <dt className="text-xs text-muted-foreground">{FACTS[fact].label}</dt>
+              <dd className={cn('text-sm font-medium tabular-nums', known ? 'text-foreground' : 'text-warning')}>{known ? formatFact(fact, prescreen.facts[fact]) : 'Unknown'}</dd>
+              {known && notes.sources?.[fact] ? <dd className="text-[11px] text-muted-foreground">{notes.sources[fact]}</dd> : null}
+            </div>
+          )
+        })}
       </dl>
-      <p className="mt-3 text-xs text-muted-foreground">Amounts are read from the documents by the AI check. Verify them against the originals.</p>
+      {missing.length ? (
+        <ul className="mt-4 space-y-2 rounded-md border border-warning/30 bg-warning/5 p-3 text-xs text-foreground">
+          {missing.map((fact) => (
+            <li key={fact}>
+              <span className="font-medium">{FACTS[fact].label}: </span>
+              {notes.reasons[fact]}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {editing ? (
+        <FiguresForm
+          application={application}
+          onCancel={() => setEditing(false)}
+          onSave={async (values) => {
+            await onSaveFigures(values)
+            setEditing(false)
+          }}
+        />
+      ) : null}
+      <p className="mt-3 text-xs text-muted-foreground">Figures read by the AI come from the documents; check them against the originals. Entered figures replace the AI’s.</p>
     </Panel>
+  )
+}
+
+/** Enter or correct the figures the rules use; a blank field goes back to what the AI read. */
+function FiguresForm({ application, onCancel, onSave }) {
+  const entered = application.checks?.figures || {}
+  const fields = MANUAL_FIGURES[application.loanType] || []
+  const [values, setValues] = useState(() => Object.fromEntries(fields.map(([key]) => [key, entered[key]?.value ?? ''])))
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const submit = async (event) => {
+    event.preventDefault()
+    setBusy(true)
+    setError('')
+    try {
+      await onSave({ ...Object.fromEntries(fields.map(([key]) => [key, values[key] === '' ? null : values[key]])), note })
+    } catch (saveError) {
+      setError(saveError.message)
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <form onSubmit={submit} className="mt-4 space-y-3 border-t pt-4">
+      <p className="text-xs text-muted-foreground">Read these from the documents. Leave one blank to use what the AI read.</p>
+      {fields.map(([key, label, hint]) => (
+        <label key={key} className="block text-sm">
+          <span className="font-medium text-foreground">{label}</span>
+          <span className="block text-xs text-muted-foreground">
+            {hint}
+            {entered[key] ? ` · entered by ${entered[key].byName}, ${timeAgo(entered[key].at)}` : ''}
+          </span>
+          <span className="mt-1 flex items-center rounded-md border border-input bg-background focus-within:ring-2 focus-within:ring-ring">
+            <span className="pl-3 text-sm text-muted-foreground">K</span>
+            <input
+              inputMode="decimal"
+              value={values[key]}
+              onChange={(event) => setValues((prev) => ({ ...prev, [key]: event.target.value.replace(/[^0-9.]/g, '') }))}
+              className="h-9 w-full bg-transparent px-2 text-sm tabular-nums focus:outline-none"
+              aria-label={label}
+            />
+          </span>
+        </label>
+      ))}
+      <label className="block text-sm">
+        <span className="font-medium text-foreground">Note</span>
+        <input
+          value={note}
+          maxLength={300}
+          onChange={(event) => setNote(event.target.value)}
+          placeholder="e.g. From the August payslip"
+          className="mt-1 h-9 w-full rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        />
+      </label>
+      {error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      ) : null}
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="ghost" size="sm" onClick={onCancel} disabled={busy}>
+          Cancel
+        </Button>
+        <Button type="submit" size="sm" disabled={busy}>
+          {busy ? <Loader2 className="animate-spin" /> : null}
+          Save and re-run rules
+        </Button>
+      </div>
+    </form>
   )
 }
 
@@ -155,6 +306,44 @@ export function AiReviewPanel({ prescreen }) {
   )
 }
 
+const ZRA_STATUS = {
+  verified: { label: 'Verified with ZRA', tone: 'text-success', icon: ShieldCheck },
+  mismatch: { label: 'ZRA record differs', tone: 'text-warning', icon: ShieldAlert },
+  not_found: { label: 'Not found at ZRA', tone: 'text-destructive', icon: ShieldAlert },
+  unavailable: { label: 'ZRA check didn’t run', tone: 'text-muted-foreground', icon: CircleDashed },
+}
+
+/** The automatic taxpayer check run after submission (api/_lib/zra/verifyApplication.js). */
+function ZraResult({ zra }) {
+  const status = ZRA_STATUS[zra.status] || ZRA_STATUS.unavailable
+  const Icon = status.icon
+  return (
+    <div className="mb-4 rounded-lg border bg-muted/30 p-3 text-sm">
+      <p className={cn('flex items-center gap-2 font-medium', status.tone)}>
+        <Icon className="size-4 shrink-0" aria-hidden="true" />
+        {status.label}
+        <span className="ml-auto text-xs font-normal text-muted-foreground">by {zra.lookupType}, {timeAgo(zra.at)}</span>
+      </p>
+      {zra.tpin ? (
+        <p className="mt-1 text-xs text-muted-foreground">
+          {zra.name} · TPIN <span className="font-mono">{zra.tpin}</span>
+        </p>
+      ) : null}
+      {zra.status === 'mismatch' ? (
+        <ul className="mt-1.5 list-disc space-y-0.5 pl-5 text-xs text-foreground">
+          {zra.nameMatches === false ? <li>The name at ZRA differs from the application.</li> : null}
+          {(zra.documentMismatches || []).map((document) => (
+            <li key={document.slot}>
+              {document.label} shows TPIN <span className="font-mono">{document.tpin}</span>.
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      {zra.status === 'unavailable' ? <p className="mt-1 text-xs text-muted-foreground">ZRA couldn’t be reached. Verify the taxpayer manually.</p> : null}
+    </div>
+  )
+}
+
 /** The officer's checklist (Settings → Stages). Ticking asks for a note of what was checked. */
 export function ChecklistPanel({ application, stages, editable, onToggle }) {
   const checklist = checklistOf(stages)
@@ -164,6 +353,7 @@ export function ChecklistPanel({ application, stages, editable, onToggle }) {
       title="Verification"
       description={editable && required.length ? `Required before recommending approval: ${required.map((check) => check.label.toLowerCase()).join(', ')}.` : undefined}
     >
+      {application.checks?.zra ? <ZraResult zra={application.checks.zra} /> : null}
       <ul className="space-y-3">
         {checklist.map((check) => {
           const { key } = check
@@ -434,6 +624,8 @@ function CrbDetail({ report }) {
 }
 
 export function LocationPanel({ points, facts, onLogVisit }) {
+  // What the rules compared: the GPS position, and the home address the applicant typed.
+  const location = facts?._notes?.location || null
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const logVisit = () => {
@@ -476,19 +668,35 @@ export function LocationPanel({ points, facts, onLogVisit }) {
       {points.length ? (
         <>
           <LocationMap points={points} />
-          <ul className="mt-3 space-y-1.5 text-xs text-muted-foreground">
-            {points.map((point) => (
-              <li key={point.id} className="flex items-center gap-2">
-                <span className={cn('size-2 rounded-full', point.source === 'applicant' ? 'bg-primary' : 'bg-brand')} aria-hidden="true" />
-                {point.source === 'applicant' ? 'Applicant at submission' : `Visit by ${point.capturedByName || 'staff'}`}
-                {point.note ? `: ${point.note}` : ''}, {dateTime(point.capturedAt)}
-                {point.accuracyMeters ? `, within ${point.accuracyMeters} m` : ''}
-              </li>
-            ))}
+          <ul className="mt-3 space-y-2.5 text-xs text-muted-foreground">
+            {points.map((point) => {
+              const coordinates = `${Number(point.latitude).toFixed(6)}, ${Number(point.longitude).toFixed(6)}`
+              const compared = location?.gps && Number(location.gps.latitude).toFixed(5) === Number(point.latitude).toFixed(5) && Number(location.gps.longitude).toFixed(5) === Number(point.longitude).toFixed(5)
+              return (
+                <li key={point.id} className="flex items-start gap-2">
+                  <span className={cn('mt-1 size-2 shrink-0 rounded-full', point.source === 'applicant' ? 'bg-primary' : 'bg-brand')} aria-hidden="true" />
+                  <span className="min-w-0">
+                    <span className="block text-foreground">
+                      {point.source === 'applicant' ? 'Applicant at submission' : `Visit by ${point.capturedByName || 'staff'}`}
+                      {point.note ? `: ${point.note}` : ''}
+                    </span>
+                    <span className="block">
+                      GPS <span className="font-mono text-foreground">{coordinates}</span>
+                      {point.accuracyMeters ? `, accurate to about ${point.accuracyMeters} m` : ''}
+                      {compared && location.gps.place ? `, near ${location.gps.place}` : ''}
+                    </span>
+                    <span className="block">
+                      {dateTime(point.capturedAt)} ·{' '}
+                      <a href={`https://www.google.com/maps?q=${point.latitude},${point.longitude}`} target="_blank" rel="noreferrer" className="font-medium text-primary hover:underline">
+                        Open in Google Maps
+                      </a>
+                    </span>
+                  </span>
+                </li>
+              )
+            })}
           </ul>
-          {facts?.location_distance_km !== null && facts?.location_distance_km !== undefined ? (
-            <p className="mt-2 text-xs text-muted-foreground">{Math.round(facts.location_distance_km)} km from the stated address.</p>
-          ) : null}
+          <AddressComparison location={location} />
         </>
       ) : (
         <p className="text-sm text-muted-foreground">No location was shared with this application.</p>
@@ -546,6 +754,116 @@ export function SignaturesPanel({ signatures, applicationId }) {
           </li>
         ))}
       </ul>
+    </Panel>
+  )
+}
+
+const DOCUMENT_STATUS = {
+  ready: { label: 'Not sent yet', tone: 'bg-muted text-muted-foreground' },
+  sent: { label: 'Sent', tone: 'bg-accent text-accent-foreground' },
+  viewed: { label: 'Opened by the applicant', tone: 'bg-accent text-accent-foreground' },
+  uploaded: { label: 'Uploaded: awaiting check', tone: 'bg-warning/15 text-warning' },
+  signed: { label: 'Signed online', tone: 'bg-success/15 text-success' },
+  received: { label: 'Received', tone: 'bg-success/15 text-success' },
+}
+
+/**
+ * Documents sent to the applicant at workflow stages: where each stands, its files, and
+ * marking one received once a signed copy is checked or a paper one handed in.
+ */
+export function StageDocumentsPanel({ documents, applicationId, canWork, onResend, onReceived }) {
+  const [receiving, setReceiving] = useState(null)
+  const [note, setNote] = useState('')
+  const [busy, setBusy] = useState(null)
+  const [error, setError] = useState('')
+  if (!documents?.length) return null
+
+  const run = (key, task) => async () => {
+    setBusy(key)
+    setError('')
+    try {
+      await task()
+      setReceiving(null)
+      setNote('')
+    } catch (runError) {
+      setError(runError.message)
+    } finally {
+      setBusy(null)
+    }
+  }
+  const file = (id, label) => (
+    <a className="font-medium text-primary hover:underline" href={`/api/v1/applications/${applicationId}/documents/${id}`} target="_blank" rel="noreferrer">
+      {label}
+    </a>
+  )
+  const waiting = documents.some((document) => !document.done && !document.offer)
+
+  return (
+    <Panel
+      title="Documents to sign"
+      description="Sent to the applicant at workflow stages."
+      action={
+        canWork && waiting ? (
+          <Button variant="ghost" size="sm" onClick={run('resend', onResend)} disabled={Boolean(busy)}>
+            {busy === 'resend' ? <Loader2 className="animate-spin" /> : <Send />}
+            Resend email
+          </Button>
+        ) : null
+      }
+    >
+      <ul className="space-y-3">
+        {documents.map((document) => {
+          const status = DOCUMENT_STATUS[document.status] || DOCUMENT_STATUS.ready
+          return (
+            <li key={document.id} className="space-y-2 rounded-md border p-3 text-sm">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <span className="min-w-0">
+                  <span className="block font-medium text-foreground">{document.label}</span>
+                  <span className="block text-xs text-muted-foreground">
+                    {document.stageLabel ? `${document.stageLabel}` : 'With the offer'}
+                    {document.required ? ', required to move on' : ''}
+                    {!document.requiresSignature ? ', no signature needed' : ''}
+                  </span>
+                </span>
+                <span className={cn('shrink-0 rounded-full px-2 py-0.5 text-xs font-medium', status.tone)}>{status.label}</span>
+              </div>
+              <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                {file(document.id, 'As sent')}
+                {document.signedDocumentId ? file(document.signedDocumentId, 'Signed copy') : null}
+                {document.uploadedDocumentId ? file(document.uploadedDocumentId, 'Uploaded copy') : null}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                {document.sentAt ? `Sent ${dateTime(document.sentAt)}` : 'Not emailed yet'}
+                {document.viewedAt ? `; opened ${dateTime(document.viewedAt)}` : ''}
+                {document.signedAt ? `; signed ${dateTime(document.signedAt)}` : ''}
+                {document.uploadedAt ? `; copy uploaded ${dateTime(document.uploadedAt)}` : ''}
+                {document.receivedAt ? `; received by ${document.receivedByName}, ${dateTime(document.receivedAt)}${document.receivedNote ? ` (${document.receivedNote})` : ''}` : ''}
+              </p>
+              {canWork && !document.done ? (
+                receiving === document.id ? (
+                  <div className="space-y-2">
+                    <Input aria-label="Note" placeholder={document.uploadedDocumentId ? 'What you checked (optional)' : 'e.g. Paper copy handed in at the branch'} value={note} maxLength={300} onChange={(event) => setNote(event.target.value)} />
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={run(document.id, () => onReceived(document, note.trim()))} disabled={Boolean(busy)}>
+                        {busy === document.id ? <Loader2 className="animate-spin" /> : <Check />}
+                        Mark received
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setReceiving(null)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <Button size="sm" variant="outline" onClick={() => setReceiving(document.id)}>
+                    {document.uploadedDocumentId ? 'Checked: mark received' : 'Mark received'}
+                  </Button>
+                )
+              ) : null}
+            </li>
+          )
+        })}
+      </ul>
+      {error ? <p className="mt-2 text-sm text-destructive">{error}</p> : null}
     </Panel>
   )
 }
