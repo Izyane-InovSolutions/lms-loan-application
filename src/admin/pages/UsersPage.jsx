@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { Check, Copy, Loader2, Mail, Search, UserPlus, Users } from 'lucide-react'
+import { Check, Copy, Loader2, Mail, Search, Trash2, UserPlus, Users } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -403,9 +403,11 @@ function EditDialog({ person, viewer, managers, onClose, onSaved }) {
   const [saving, setSaving] = useState(false)
   const [sendingLink, setSendingLink] = useState(false)
   const [manualUrl, setManualUrl] = useState(null)
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
 
   useEffect(() => {
     if (person) {
+      setConfirmingDelete(false)
       setForm({
         name: person.name,
         phone: person.phone || '',
@@ -451,6 +453,22 @@ function EditDialog({ person, viewer, managers, onClose, onSaved }) {
       },
       'Changes saved'
     )
+  }
+
+  const remove = async () => {
+    setError('')
+    setSaving(true)
+    try {
+      await api(`/users/${person.id}`, { method: 'DELETE' })
+      onSaved()
+      notify(`${person.name}’s account has been deleted`)
+      onClose()
+    } catch (deleteError) {
+      setError(deleteError.message)
+      setConfirmingDelete(false)
+    } finally {
+      setSaving(false)
+    }
   }
 
   const sendLink = async () => {
@@ -554,7 +572,40 @@ function EditDialog({ person, viewer, managers, onClose, onSaved }) {
                 </Button>
               )
             ) : null}
+            {!isSelf && !confirmingDelete ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                disabled={saving}
+                onClick={() => setConfirmingDelete(true)}
+              >
+                <Trash2 />
+                Delete account
+              </Button>
+            ) : null}
           </div>
+
+          {confirmingDelete ? (
+            <div role="alertdialog" aria-labelledby="delete-title" className="rounded-md border border-destructive/40 bg-destructive/5 p-4 text-sm">
+              <p id="delete-title" className="font-semibold text-foreground">
+                Delete {person.name}’s account?
+              </p>
+              <p className="mt-1 text-muted-foreground">
+                They’re signed out and can never sign in again, and their email, phone and password are erased (the email can be invited again). Cases and decisions they were part of keep their name, so the records still say who did what. This can’t be undone.
+              </p>
+              <div className="mt-3 flex justify-end gap-2">
+                <Button type="button" variant="outline" size="sm" onClick={() => setConfirmingDelete(false)} disabled={saving}>
+                  Keep the account
+                </Button>
+                <Button type="button" variant="destructive" size="sm" onClick={remove} disabled={saving}>
+                  {saving ? <Loader2 className="animate-spin" /> : <Trash2 />}
+                  Delete account
+                </Button>
+              </div>
+            </div>
+          ) : null}
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={onClose}>

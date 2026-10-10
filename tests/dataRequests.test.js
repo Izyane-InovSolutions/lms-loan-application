@@ -63,8 +63,9 @@ describe('data request ledger', () => {
     const paged = (await admin.get('/admin/data-requests/ledger?pageSize=1&page=2')).body
     expect(paged.items).toHaveLength(1)
     expect(paged.total).toBeGreaterThan(1)
-    const sorted = (await admin.get('/admin/data-requests/ledger?sort=due&dir=asc&pageSize=100')).body.items.map((item) => item.dueAt)
-    expect([...sorted].sort()).toEqual(sorted)
+    // Compared as instants: a plain .sort() would order the dates as text, by weekday name.
+    const sorted = (await admin.get('/admin/data-requests/ledger?sort=due&dir=asc&pageSize=100')).body.items.map((item) => new Date(item.dueAt).getTime())
+    expect([...sorted].sort((a, b) => a - b)).toEqual(sorted)
 
     expect((await admin.patch(`/admin/data-requests/ledger/${a.id}`, { status: 'rejected' })).status).toBe(400)
     const done = await admin.patch(`/admin/data-requests/ledger/${a.id}`, { status: 'rejected', outcome: 'Identity not verified' })

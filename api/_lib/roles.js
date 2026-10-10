@@ -1,4 +1,4 @@
-import { eq, sql } from 'drizzle-orm'
+import { and, eq, ne, sql } from 'drizzle-orm'
 import { getDb, schema } from './db/client.js'
 import { fail, text } from './http.js'
 import { ADMIN_PERMISSIONS, BUILT_IN_ROLES, SCOPES, isPermission } from '../../src/config/roles.js'
@@ -205,8 +205,8 @@ export const deleteRole = async (key, actor, { check } = {}) => {
   if (current.locked) fail(403, 'The administrator role can’t be deleted.', 'locked_role')
   assertRoleWithin(actor, current)
   const db = await getDb()
-  // Invited and switched-off members count too: deleting the role would strand them.
-  const [{ count }] = await db.select({ count: sql`count(*)::int` }).from(users).where(eq(users.role, key))
+  // Invited and switched-off members count too: deleting the role would strand them. Deleted accounts don't.
+  const [{ count }] = await db.select({ count: sql`count(*)::int` }).from(users).where(and(eq(users.role, key), ne(users.status, 'deleted')))
   if (count > 0) fail(409, `${count} ${count === 1 ? 'person has' : 'people have'} this role. Give them another role first.`, 'role_in_use')
   if (check) await check(current)
 

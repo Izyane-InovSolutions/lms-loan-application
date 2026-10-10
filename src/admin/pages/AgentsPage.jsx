@@ -291,7 +291,7 @@ function AgentRow({ agent, showManager, period }) {
             <span className="block truncate text-xs text-muted-foreground">
               {agent.roleLabel}
               {showManager ? (agent.managerName ? ` · reports to ${agent.managerName}` : ' · no manager') : ''}
-              {agent.status === 'disabled' ? ' · switched off' : agent.status === 'invited' ? ' · invited' : ''}
+              {agent.status === 'deleted' ? ' · account deleted' : agent.status === 'disabled' ? ' · switched off' : agent.status === 'invited' ? ' · invited' : ''}
             </span>
           </span>
         </Link>
