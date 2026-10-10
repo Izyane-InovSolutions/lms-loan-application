@@ -14,7 +14,16 @@ export const DOCUMENT_SPECS = {
     label: 'payslip',
     expected: 'Recent payslips issued by an employer to the applicant (they were asked for their latest three).',
     freshness: 'The most recent payslip should be dated within the last 3 months.',
-    fields: ['holderName', 'nrcNumber', 'employerName', 'netPay', 'grossPay', 'documentDate'],
+    // The applicant was asked for three, often uploaded as one merged PDF. The model counts
+    // them; analyzeDocument enforces the minimum so a single payslip can't pass as "nothing to fix".
+    count: {
+      field: 'payslipCount',
+      minimum: 3,
+      rule: 'The file should contain three separate payslips for three different pay periods. Count the distinct pay periods, not pages.',
+      message: (found) =>
+        `This file contains ${found === 1 ? 'only one payslip' : `only ${found} payslips`}. Please upload your latest three payslips, combined into a single PDF.`,
+    },
+    fields: ['holderName', 'nrcNumber', 'employerName', 'netPay', 'grossPay', 'documentDate', 'payslipCount'],
   },
   bankStatements: {
     label: 'bank statement',
@@ -100,6 +109,7 @@ const FIELD_DESCRIPTIONS = {
   counterpartyName: 'The other party on the order or invoice (the buyer or supplier).',
   turnover: 'Total turnover or revenue declared for the period. Digits and decimal point only.',
   amount: 'Total amount of the order or invoice. Digits and decimal point only.',
+  payslipCount: 'Number of separate payslips in the file, counted by distinct pay period (not pages). Digits only.',
   documentDate: 'Date the document was issued, YYYY-MM-DD. For several payslips, the most recent one.',
   issueDate: 'Issue date, YYYY-MM-DD.',
   expiryDate: 'Expiry date, YYYY-MM-DD.',
@@ -176,6 +186,7 @@ export const analyzeDocument = async ({ docType, file }) => {
     `Requested document: ${spec.label}. ${spec.expected}`,
     `Today's date: ${today()}.`,
     spec.freshness ? `Freshness rule: ${spec.freshness} Raise an "outdated" or "expired" issue if it is not met.` : null,
+    spec.count ? `Completeness rule: ${spec.count.rule} Raise an "incomplete" issue if there are fewer.` : null,
     spec.fields.length
       ? `Fields to extract: ${spec.fields.join(', ')}.`
       : 'There are no fields to extract; only check that the file is the requested document and is clear.',
@@ -191,13 +202,25 @@ export const analyzeDocument = async ({ docType, file }) => {
     schemaName: 'document_analysis',
   })
 
+  const extracted = result.extracted || {}
+  const issues = Array.isArray(result.issues) ? result.issues : []
+
+  // Backstop for the completeness rule: models sometimes report the count correctly but
+  // still return no issues. Only for the requested document, or it duplicates wrong_document.
+  if (spec.count && result.matchesExpectedType) {
+    const found = Number.parseInt(extracted[spec.count.field], 10)
+    if (found >= 1 && found < spec.count.minimum && !issues.some((issue) => issue.code === 'incomplete')) {
+      issues.push({ code: 'incomplete', message: spec.count.message(found) })
+    }
+  }
+
   return {
     docType,
     detectedType: String(result.detectedType || ''),
     matchesExpectedType: Boolean(result.matchesExpectedType),
     legibility: result.legibility,
-    extracted: result.extracted || {},
-    issues: Array.isArray(result.issues) ? result.issues : [],
+    extracted,
+    issues,
     authenticityConcerns: Array.isArray(result.authenticityConcerns) ? result.authenticityConcerns : [],
     provider,
     model,

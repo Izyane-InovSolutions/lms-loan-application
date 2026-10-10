@@ -172,4 +172,5 @@ export const USER_STATUSES = {
   invited: 'Invited',
   active: 'Active',
   disabled: 'Disabled',
+  deleted: 'Deleted',
 }

@@ -164,7 +164,7 @@ const activityOf = async (db, ids) => {
 const personOf = (person, roleLabels) => ({
   id: person.id,
   name: person.name,
-  email: person.email,
+  email: person.status === 'deleted' ? null : person.email,
   role: person.role,
   roleLabel: roleLabels[person.role],
   status: person.status,
@@ -188,7 +188,7 @@ const agentReport = async (req, res, { query }) => {
   const agents = people
     .map((person) => ({ ...personOf(person, roleLabels), ...(figures[person.id] || figuresOf()), ...activity[person.id] }))
     // Switched-off agents only while they have figures to show.
-    .filter((agent) => agent.status !== 'disabled' || agent.submitted || agent.drafts)
+    .filter((agent) => !['disabled', 'deleted'].includes(agent.status) || agent.submitted || agent.drafts)
     .sort((a, b) => b.submitted - a.submitted || b.disbursedValue - a.disbursedValue || a.name.localeCompare(b.name))
 
   return { ...about, scope: viewer.scope, agents, totals: totalsOf(agents) }

@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, ilike, inArray, ne, or, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, ilike, inArray, ne, notInArray, or, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import { getDb, schema } from '../_lib/db/client.js'
 import { fail, text, email as parseEmail } from '../_lib/http.js'
@@ -11,7 +11,7 @@ import { isStaffRole } from '../../src/config/roles.js'
 import { can } from '../_lib/rbac.js'
 import { assertRoleWithin, getRole, roleHas, rolesWith } from '../_lib/roles.js'
 
-const { users } = schema
+const { users, applications, applicationDrafts, applicationEvents, appraisals, auditLog, signatures, locations, crbReports, dataRequests } = schema
 const manager = alias(users, 'manager')
 
 // Anyone whose role brings business in carries a referral code.
@@ -84,6 +84,8 @@ const listUsers = async (req, res, { query }) => {
   if (role && (role === 'customer' || (await getRole(role)))) filters.push(eq(users.role, role))
   // Customers are only listed when asked for by name; the directory is about staff.
   else filters.push(ne(users.role, 'customer'))
+  // Deleted accounts are gone from the directory; only the history of what they did keeps their name.
+  filters.push(ne(users.status, 'deleted'))
   if (status) filters.push(eq(users.status, status))
   if (search) {
     const pattern = `%${search.replace(/[%_\\]/g, '\\$&')}%`
@@ -104,7 +106,7 @@ const listUsers = async (req, res, { query }) => {
 /** Throws unless `managerId` is an active team lead (a relationship manager, by default). */
 const assertManager = async (db, managerId) => {
   const [candidate] = await db.select().from(users).where(eq(users.id, managerId)).limit(1)
-  if (!candidate || candidate.status === 'disabled' || !(await roleHas(candidate.role, 'team.lead'))) {
+  if (!candidate || ['disabled', 'deleted'].includes(candidate.status) || !(await roleHas(candidate.role, 'team.lead'))) {
     fail(400, 'Choose an active relationship manager.', 'invalid_manager')
   }
 }
@@ -184,7 +186,7 @@ const updateUser = async (req, res, { params }) => {
   const actor = await requireUser(req, { permission: 'users.manage' })
   const db = await getDb()
   const [target] = await db.select().from(users).where(eq(users.id, params.id)).limit(1)
-  if (!target) fail(404, 'User not found.', 'not_found')
+  if (!target || target.status === 'deleted') fail(404, 'User not found.', 'not_found')
   if (isStaffRole(target.role) && target.id !== actor.id) {
     await assertMayManageRole(actor, target.role, 'This person’s role has more access than your own, so only an administrator can change their account.')
   }
@@ -264,7 +266,7 @@ const sendPasswordLink = async (req, res, { params }) => {
   const actor = await requireUser(req, { permission: 'users.manage' })
   const db = await getDb()
   const [user] = await db.select().from(users).where(eq(users.id, params.id)).limit(1)
-  if (!user || !isStaffRole(user.role)) fail(404, 'User not found.', 'not_found')
+  if (!user || !isStaffRole(user.role) || user.status === 'deleted') fail(404, 'User not found.', 'not_found')
   if (user.status === 'disabled') fail(400, 'Enable the account before sending a link.', 'disabled')
   if (user.id !== actor.id) await assertMayManageRole(actor, user.role, 'This person’s role has more access than your own, so only an administrator can send them a link.')
 
@@ -293,7 +295,7 @@ const listManagers = async (req) => {
   const rows = await db
     .select({ id: users.id, name: users.name, email: users.email, role: users.role })
     .from(users)
-    .where(and(inArray(users.role, leadRoles), ne(users.status, 'disabled')))
+    .where(and(inArray(users.role, leadRoles), notInArray(users.status, ['disabled', 'deleted'])))
     .orderBy(asc(users.name))
   return { managers: rows }
 }
@@ -308,10 +310,81 @@ export const userCounts = async (db, { includeDemo = false } = {}) => {
   return rows
 }
 
+/**
+ * Whether anything in the records points at this person: cases they brought in, were
+ * assigned or decided, drafts, case and audit entries, signatures taken, locations, credit
+ * checks, data requests handled, or people who report to them.
+ */
+const hasHistory = async (db, id) => {
+  const checks = [
+    db.select({ id: applications.id }).from(applications).where(or(eq(applications.sourcedBy, id), eq(applications.assignedRm, id), eq(applications.assignedOfficer, id), eq(applications.stateAssignee, id))).limit(1),
+    db.select({ id: applicationDrafts.id }).from(applicationDrafts).where(or(eq(applicationDrafts.sourcedBy, id), eq(applicationDrafts.assignedRm, id))).limit(1),
+    db.select({ id: applicationEvents.id }).from(applicationEvents).where(eq(applicationEvents.actorId, id)).limit(1),
+    db.select({ id: appraisals.id }).from(appraisals).where(eq(appraisals.officerId, id)).limit(1),
+    db.select({ id: auditLog.id }).from(auditLog).where(eq(auditLog.actorId, id)).limit(1),
+    db.select({ id: signatures.id }).from(signatures).where(eq(signatures.capturedBy, id)).limit(1),
+    db.select({ id: locations.id }).from(locations).where(eq(locations.capturedBy, id)).limit(1),
+    db.select({ id: crbReports.id }).from(crbReports).where(eq(crbReports.requestedBy, id)).limit(1),
+    db.select({ id: dataRequests.id }).from(dataRequests).where(eq(dataRequests.handledBy, id)).limit(1),
+    db.select({ id: users.id }).from(users).where(and(eq(users.managerId, id), ne(users.status, 'deleted'))).limit(1),
+  ]
+  return (await Promise.all(checks)).some((rows) => rows.length > 0)
+}
+
+/**
+ * Deletes a staff account. One nobody's records mention (invited by mistake, never used)
+ * is removed outright. One with history is deleted as far as anyone can see — gone from
+ * Team, unable to sign in, its email, phone, password and two-step sign-in erased, so the
+ * address can be invited again — while its name stays on the cases, decisions and audit
+ * entries it is part of, which must keep saying who did what. Agents who reported to them
+ * are left without a manager.
+ */
+const deleteUser = async (req, res, { params }) => {
+  const actor = await requireUser(req, { permission: 'users.manage' })
+  const db = await getDb()
+  const [target] = await db.select().from(users).where(eq(users.id, params.id)).limit(1)
+  if (!target || target.status === 'deleted' || !isStaffRole(target.role)) fail(404, 'User not found.', 'not_found')
+  if (target.id === actor.id) fail(400, 'You can’t delete your own account.', 'self_change')
+  await assertMayManageRole(actor, target.role, 'This person’s role has more access than your own, so only an administrator can delete their account.')
+  if (target.role === 'admin') {
+    const [{ count }] = await db.select({ count: sql`count(*)::int` }).from(users).where(and(eq(users.role, 'admin'), eq(users.status, 'active'), ne(users.id, target.id)))
+    if (!count) fail(409, 'This is the only active administrator. Make someone else an administrator first.', 'last_admin')
+  }
+
+  const kept = await hasHistory(db, target.id)
+  await destroyUserSessions(target.id)
+  if (kept) {
+    await db.transaction(async (tx) => {
+      await tx.update(users).set({ managerId: null, updatedAt: new Date() }).where(eq(users.managerId, target.id))
+      await tx
+        .update(users)
+        .set({
+          status: 'deleted',
+          email: `deleted-${target.id}@deleted.invalid`,
+          phone: null,
+          passwordHash: null,
+          totpSecret: null,
+          totpEnabledAt: null,
+          recoveryCodes: null,
+          referralCode: null,
+          managerId: null,
+          notificationPrefs: {},
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, target.id))
+    })
+  } else {
+    await db.delete(users).where(eq(users.id, target.id))
+  }
+  await recordAudit({ req, actor, action: 'user.deleted', entityType: 'user', entityId: target.id, detail: { name: target.name, role: target.role, historyKept: kept } })
+  return { ok: true, historyKept: kept }
+}
+
 export const userRoutes = [
   ['GET', '/users', listUsers],
   ['POST', '/users', inviteUser],
   ['GET', '/users/managers', listManagers],
   ['PATCH', '/users/:id', updateUser],
   ['POST', '/users/:id/password-link', sendPasswordLink],
+  ['DELETE', '/users/:id', deleteUser],
 ]

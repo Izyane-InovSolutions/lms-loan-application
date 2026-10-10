@@ -301,7 +301,7 @@ const forgotPassword = async (req) => {
 
   const db = await getDb()
   const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1)
-  if (user && isStaffRole(user.role) && user.status !== 'disabled') {
+  if (user && isStaffRole(user.role) && !['disabled', 'deleted'].includes(user.status)) {
     // Someone who never finished their invite gets a fresh invite rather than a "reset".
     await issuePasswordLink(req, { user, purpose: user.status === 'invited' ? 'invite' : 'reset', actor: null })
     await recordAudit({ req, actor: user, action: 'auth.password_reset_requested', entityType: 'user', entityId: user.id })
@@ -325,7 +325,7 @@ const findPasswordToken = async (token) => {
       )
     )
     .limit(1)
-  return row && row.user.status !== 'disabled' ? row : null
+  return row && !['disabled', 'deleted'].includes(row.user.status) ? row : null
 }
 
 const describePasswordToken = async (req, res, { query }) => {
@@ -383,7 +383,7 @@ const customerSignIn = async (req, res) => {
   if (user && isStaffRole(user.role)) {
     fail(403, 'This email belongs to a staff account. Sign in on the staff page instead.', 'staff_account')
   }
-  if (user?.status === 'disabled') fail(403, 'This account has been disabled.', 'disabled')
+  if (user?.status === 'disabled' || user?.status === 'deleted') fail(403, 'This account has been disabled.', 'disabled')
 
   await consumeOtp('login', email)
   if (!user) {

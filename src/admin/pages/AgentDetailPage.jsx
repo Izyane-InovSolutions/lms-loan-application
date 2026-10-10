@@ -106,13 +106,15 @@ function AgentView({ agent, periods, recent, scope, highlighted: chosen }) {
             <p className="mt-1 text-sm text-muted-foreground">
               {agent.roleLabel}
               {scope === 'all' ? (agent.managerName ? ` · reports to ${agent.managerName}` : ' · no manager') : ''}
-              {agent.status === 'disabled' ? ' · switched off' : agent.status === 'invited' ? ' · invited, not signed in yet' : ''}
+              {agent.status === 'deleted' ? ' · account deleted' : agent.status === 'disabled' ? ' · switched off' : agent.status === 'invited' ? ' · invited, not signed in yet' : ''}
             </p>
             <p className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground">
-              <a href={`mailto:${agent.email}`} className="inline-flex items-center gap-1.5 hover:text-foreground">
-                <Mail className="size-3.5" aria-hidden="true" />
-                {agent.email}
-              </a>
+              {agent.email ? (
+                <a href={`mailto:${agent.email}`} className="inline-flex items-center gap-1.5 hover:text-foreground">
+                  <Mail className="size-3.5" aria-hidden="true" />
+                  {agent.email}
+                </a>
+              ) : null}
               {agent.phone ? (
                 <a href={`tel:${agent.phone}`} className="inline-flex items-center gap-1.5 hover:text-foreground">
                   <Phone className="size-3.5" aria-hidden="true" />
