@@ -64,6 +64,7 @@ export const runPrescreen = async (applicationId, { actor = null } = {}) => {
         applicant: application.data,
         loan: { amount: application.amount, tenure: application.tenure, monthlyInstalment: application.monthlyInstalment, totalRepayable: application.totalRepayable },
         documents: documents.map((document) => ({
+          id: document.id,
           docType: document.docType,
           slot: document.label,
           required: true,

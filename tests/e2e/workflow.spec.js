@@ -93,8 +93,8 @@ test('an admin builds the workflow in the editor, and cases follow it', async ({
   await expect(manager.getByText('Underwriting').first()).toBeVisible()
   await manager.getByRole('button', { name: 'Take the case' }).click()
   await expect(manager.getByText('The case is yours at this stage')).toBeVisible()
-  // A recorded step: the case says what's next, and the Stages panel marks it done.
-  await expect(manager.getByText('Next: Underwriting')).toBeVisible()
+  // A recorded step: the case says what's next, which opens the Workflow tab where its Stages panel marks it done.
+  await manager.getByRole('button', { name: 'Next: Underwriting' }).click()
   await manager.getByRole('button', { name: 'Mark as done' }).click()
   await manager.getByRole('dialog').getByRole('button', { name: 'Mark as done' }).click()
   await expect(manager.getByText('Underwriting done')).toBeVisible()

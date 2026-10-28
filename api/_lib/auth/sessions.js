@@ -20,7 +20,13 @@ const limitsFor = (role) => (isStaffRole(role) ? LIMITS.staff : LIMITS.customer)
 // last_seen_at is refreshed at most this often, so reads do not each cost a write.
 const TOUCH_INTERVAL_MS = 5 * 60 * 1000
 
-const isSecureContext = () => Boolean(process.env.VERCEL) || process.env.NODE_ENV === 'production'
+const isSecureContext = () => {
+  const configured = (process.env.SESSION_COOKIE_SECURE || '').trim().toLowerCase()
+  if (configured === 'true') return true
+  if (configured === 'false') return false
+  if (configured) throw new Error('SESSION_COOKIE_SECURE must be "true" or "false".')
+  return Boolean(process.env.VERCEL) || process.env.NODE_ENV === 'production'
+}
 
 const serializeCookie = (value, maxAgeSeconds) =>
   [

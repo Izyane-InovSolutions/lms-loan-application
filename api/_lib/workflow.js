@@ -466,7 +466,7 @@ const UTILITY = {
     }
   },
 
-  /** Ticks or clears a checklist item. Ticking needs a note of what was seen. */
+  /** Ticks or clears a checklist item. */
   async check(tx, viewer, application, input, ctx) {
     requireCase(viewer, 'cases.work')
     const listed = [...(ctx.state.requiredChecks || []), ...(ctx.state.actions || []).flatMap((action) => action.options?.checks || [])]
@@ -476,7 +476,7 @@ const UTILITY = {
     const item = (ctx.flow.definition.checklist || []).find((check) => check.key === input.check)
     if (!item) fail(400, 'Unknown check.', 'invalid_input')
     const done = Boolean(input.done)
-    const note = done ? reason(input.note, 'Note what you checked, e.g. which document or reference.') : text(input.note, 500)
+    const note = text(input.note, 500)
     const checks = { ...(application.checks || {}), [input.check]: { done, note, by: viewer.name, at: new Date().toISOString() } }
     return {
       changes: { checks },
