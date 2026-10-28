@@ -92,15 +92,13 @@ test('a referred personal loan goes from application to payout', async ({ browse
   await applicant.getByRole('button', { name: 'Send reply' }).click()
   await expect(applicant.getByText('Here is a clearer scan.')).toBeVisible()
 
-  // The officer verifies and recommends.
+  // The officer verifies in the recommend dialog, then recommends.
   await officer.reload()
-  for (const check of ['Identity verified', 'Documents reviewed', 'Income or cash flow verified']) {
-    await officer.getByRole('button', { name: new RegExp(`^${check}: not done`) }).click()
-    await officer.locator('#action-note').fill('Seen the original')
-    await officer.getByRole('button', { name: 'Mark as done' }).click()
-    await expect(officer.getByRole('button', { name: new RegExp(`^${check}: done`) })).toBeVisible()
-  }
   await officer.getByRole('button', { name: 'Recommend' }).click()
+  for (const check of ['Identity verified', 'Documents reviewed', 'Income or cash flow verified']) {
+    await officer.getByRole('dialog').getByRole('button', { name: new RegExp(`^${check}: not done`) }).click()
+    await expect(officer.getByRole('dialog').getByRole('button', { name: new RegExp(`^${check}: done`) })).toBeVisible()
+  }
   await officer.locator('#action-rationale').fill('Affordable on verified income.')
   await officer.getByRole('button', { name: 'Recommend approval' }).click()
   await expect(officer.getByText(/a colleague makes the decision/)).toBeVisible()

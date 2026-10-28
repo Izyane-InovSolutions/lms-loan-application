@@ -28,8 +28,10 @@ from that folder.
 - A domain on Cloudflare, for the [Cloudflare Tunnel](#cloudflare-tunnel). The server
   only needs outgoing internet access: no open ports, no public IP. (Or, with
   [Caddy instead](#caddy-instead-of-the-tunnel), a hostname pointing at the server with
-  ports 80 and 443 open.) HTTPS is required either way: session cookies are `Secure` in
-  production, so sign-in fails over plain HTTP.
+  ports 80 and 443 open.) HTTPS is strongly recommended. Session cookies are `Secure`
+  by default in production; to use plain HTTP, set `SESSION_COOKIE_SECURE=false` in
+  `.env`. This sends session cookies without transport encryption, so only do this on
+  an isolated, trusted network.
 - SMTP credentials for the email codes and invitations.
 
 ## First install

@@ -63,7 +63,14 @@ describe('the workflow made from today’s settings', () => {
   it('keeps status and state together through the usual journey', async () => {
     await act(officer, id, 'start_review')
     expect(await consistent(id)).toMatchObject({ state: 'in_review', status: 'in_review' })
-    for (const check of ['identity', 'documents', 'income']) await act(officer, id, 'check', { check, done: true, note: 'Seen' })
+    for (const check of ['identity', 'documents', 'income']) await act(officer, id, 'check', { check, done: true })
+    expect(await consistent(id)).toMatchObject({
+      checks: {
+        identity: { done: true, note: '' },
+        documents: { done: true, note: '' },
+        income: { done: true, note: '' },
+      },
+    })
     await act(officer, id, 'request_info', { message: 'Send a clearer NRC please' })
     expect(await consistent(id)).toMatchObject({ state: 'in_review', status: 'info_requested' })
     expect((await act(officer, id, 'recommend', { verdict: 'approve', rationale: 'Fine' })).body.code).toBe('invalid_state')

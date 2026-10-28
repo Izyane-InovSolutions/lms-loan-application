@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { AlertTriangle, Check, CircleDashed, Loader2, MapPin, RefreshCw, Send, ShieldAlert, ShieldCheck, Sparkles } from 'lucide-react'
+import { AlertTriangle, Check, CircleDashed, Loader2, MapPin, Send, ShieldAlert, ShieldCheck } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -8,104 +8,11 @@ import { LMS_SYNC_LABELS } from '@/config/applications'
 import { checklistOf } from '@/config/stages'
 import { PHASES } from '@/config/workflow'
 import { roleLabel } from '@/config/roles'
-import { FACTS, OUTCOMES, describeCondition, formatFact } from '@/config/creditRules'
+import { FACTS, formatFact } from '@/config/creditRules'
 import { consentText } from '@/config/consent'
 import { useBranding } from '@/components/brand/BrandingProvider'
-import { OutcomeMark, Panel, dateTime, money, timeAgo } from '../components'
+import { Panel, dateTime, money, timeAgo } from '../components'
 import { LocationMap } from './LocationMap'
-
-const OUTCOME_ORDER = { decline: 0, refer: 1, warn: 2 }
-
-/** The credit rules' result: what fired, with the actual value beside the threshold. */
-export function RulesPanel({ prescreen, canRerun, onRerun }) {
-  const [busy, setBusy] = useState(false)
-  const rerun = async () => {
-    setBusy(true)
-    try {
-      await onRerun()
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  if (!prescreen) {
-    return (
-      <Panel title="Policy rules">
-        <p className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-          Prescreening…
-        </p>
-      </Panel>
-    )
-  }
-  const fired = prescreen.ruleResults.filter((result) => result.state === 'fired').sort((a, b) => OUTCOME_ORDER[a.outcome] - OUTCOME_ORDER[b.outcome])
-  const unknown = prescreen.ruleResults.filter((result) => result.state === 'not_evaluated')
-  const passed = prescreen.ruleResults.filter((result) => result.state === 'passed')
-
-  return (
-    <Panel
-      title="Policy rules"
-      description={`Version ${prescreen.rulesetVersion}, run ${timeAgo(prescreen.updatedAt)}`}
-      action={
-        canRerun ? (
-          <Button variant="ghost" size="sm" onClick={rerun} disabled={busy} title="Run the current rules again">
-            <RefreshCw className={cn(busy && 'animate-spin')} />
-            <span className="sr-only">Run again</span>
-          </Button>
-        ) : null
-      }
-    >
-      <OutcomeMark outcome={prescreen.outcome} className="text-sm" />
-      {fired.length ? (
-        <ul className="mt-4 space-y-3">
-          {fired.map((result) => (
-            <li key={result.id} className="flex gap-2.5 text-sm">
-              <AlertTriangle
-                className={cn('mt-0.5 size-4 shrink-0', result.outcome === 'decline' ? 'text-destructive' : result.outcome === 'refer' ? 'text-warning' : 'text-muted-foreground')}
-                aria-hidden="true"
-              />
-              <div className="min-w-0">
-                <p className="text-foreground">{result.message}</p>
-                <p className="text-xs text-muted-foreground">
-                  {OUTCOMES[result.outcome].label}.{' '}
-                  {result.operator === 'missing'
-                    ? result.reason || `${FACTS[result.fact]?.label} isn’t known.`
-                    : `${FACTS[result.fact]?.label}: ${formatFact(result.fact, result.actual)} (rule: ${describeCondition(result).replace(`${FACTS[result.fact]?.label} `, '')})${result.source ? `. ${result.source}.` : ''}`}
-                </p>
-              </div>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="mt-3 text-sm text-muted-foreground">No rule raised a concern.</p>
-      )}
-      {unknown.length || passed.length ? (
-        <details className="mt-4 text-sm">
-          <summary className="cursor-pointer text-xs font-medium text-muted-foreground hover:text-foreground">
-            {passed.length} passed{unknown.length ? `, ${unknown.length} couldn’t be checked` : ''}
-          </summary>
-          <ul className="mt-2 space-y-1.5">
-            {unknown.map((result) => (
-              <li key={result.id} className="flex gap-2 text-xs">
-                <CircleDashed className="mt-px size-3.5 shrink-0 text-warning" aria-hidden="true" />
-                <span className="min-w-0">
-                  <span className="block text-foreground">{describeCondition(result)}</span>
-                  <span className="block text-muted-foreground">Couldn’t be checked. {result.reason || `${FACTS[result.fact]?.label || 'This figure'} isn’t known for this application.`}</span>
-                </span>
-              </li>
-            ))}
-            {passed.map((result) => (
-              <li key={result.id} className="flex gap-2 text-xs text-muted-foreground">
-                <Check className="mt-px size-3.5 shrink-0 text-success" aria-hidden="true" />
-                {FACTS[result.fact]?.label}: {formatFact(result.fact, result.actual)}
-              </li>
-            ))}
-          </ul>
-        </details>
-      ) : null}
-    </Panel>
-  )
-}
 
 const FACT_SNAPSHOT = {
   personal: ['monthly_instalment', 'net_monthly_pay', 'debt_to_income', 'average_monthly_credits', 'applicant_age'],
@@ -156,7 +63,9 @@ export function AffordabilityPanel({ application, prescreen, onSaveFigures }) {
   const [editing, setEditing] = useState(false)
   if (!prescreen) return null
   const notes = prescreen.facts?._notes || { reasons: {}, sources: {} }
-  const missing = FACT_SNAPSHOT[application.loanType].filter((fact) => notes.reasons?.[fact] && prescreen.facts[fact] == null)
+  // Why a figure is unknown, unless a rule that couldn't be checked already says so in the summary.
+  const explained = new Set(prescreen.ruleResults.filter((result) => result.state === 'not_evaluated').map((result) => result.fact))
+  const missing = FACT_SNAPSHOT[application.loanType].filter((fact) => notes.reasons?.[fact] && prescreen.facts[fact] == null && !explained.has(fact))
   return (
     <Panel
       title="Affordability"
@@ -275,37 +184,6 @@ function FiguresForm({ application, onCancel, onSave }) {
   )
 }
 
-/** The model's explanation. Advisory: shown next to the rules, never instead of them. */
-export function AiReviewPanel({ prescreen }) {
-  const review = prescreen?.aiReview
-  if (!review && !prescreen?.aiError) return null
-  return (
-    <Panel title="AI review" description={review?.sample ? 'Sample review (demo data)' : 'Advisory. The rules and your judgement decide.'}>
-      {review ? (
-        <div className="space-y-3 text-sm">
-          <p className="flex items-center gap-2 text-foreground">
-            <Sparkles className="size-4 text-primary" aria-hidden="true" />
-            Risk: <span className="font-medium capitalize">{review.riskLevel}</span>
-          </p>
-          <p className="leading-relaxed text-muted-foreground">{review.summary}</p>
-          {review.missingInformation?.length ? (
-            <div>
-              <p className="text-xs font-medium text-foreground">Missing information</p>
-              <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-muted-foreground">
-                {review.missingInformation.map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-        </div>
-      ) : (
-        <p className="text-sm text-muted-foreground">The AI review couldn’t run for this application. The policy rules still apply.</p>
-      )}
-    </Panel>
-  )
-}
-
 const ZRA_STATUS = {
   verified: { label: 'Verified with ZRA', tone: 'text-success', icon: ShieldCheck },
   mismatch: { label: 'ZRA record differs', tone: 'text-warning', icon: ShieldAlert },
@@ -318,7 +196,7 @@ function ZraResult({ zra }) {
   const status = ZRA_STATUS[zra.status] || ZRA_STATUS.unavailable
   const Icon = status.icon
   return (
-    <div className="mb-4 rounded-lg border bg-muted/30 p-3 text-sm">
+    <div className="rounded-lg border bg-muted/30 p-3 text-sm">
       <p className={cn('flex items-center gap-2 font-medium', status.tone)}>
         <Icon className="size-4 shrink-0" aria-hidden="true" />
         {status.label}
@@ -344,18 +222,20 @@ function ZraResult({ zra }) {
   )
 }
 
-/** The officer's checklist (Settings → Stages). Ticking asks for a note of what was checked. */
-export function ChecklistPanel({ application, stages, editable, onToggle }) {
-  const checklist = checklistOf(stages)
-  const required = checklist.filter((check) => check.requiredToApprove)
+/**
+ * The officer's checks (Settings → Stages), ticked where an action needs them: in the
+ * recommend and stage dialogs. `only` limits it to those keys; `required` marks the ones
+ * the action waits for.
+ */
+export function VerificationChecklist({ application, checklist, only, required = [], editable, onToggle, showZra = false }) {
+  const checks = checklistOf({ checklist }).filter((check) => !only || only.includes(check.key))
+  if (!checks.length && !(showZra && application.checks?.zra)) return null
   return (
-    <Panel
-      title="Verification"
-      description={editable && required.length ? `Required before recommending approval: ${required.map((check) => check.label.toLowerCase()).join(', ')}.` : undefined}
-    >
-      {application.checks?.zra ? <ZraResult zra={application.checks.zra} /> : null}
+    <fieldset className="space-y-3 rounded-lg border p-4">
+      <legend className="px-1 text-sm font-medium text-foreground">Verification</legend>
+      {showZra && application.checks?.zra ? <ZraResult zra={application.checks.zra} /> : null}
       <ul className="space-y-3">
-        {checklist.map((check) => {
+        {checks.map((check) => {
           const { key } = check
           const state = application.checks?.[key]
           return (
@@ -376,15 +256,19 @@ export function ChecklistPanel({ application, stages, editable, onToggle }) {
               <div className="min-w-0 text-sm">
                 <p className="text-foreground">
                   {check.label}
-                  {check.requiredToApprove ? <span className="text-muted-foreground"> *</span> : null}
+                  {required.includes(key) ? <span className="text-muted-foreground"> (required)</span> : null}
                 </p>
-                <p className="text-xs text-muted-foreground">{state?.done ? `${state.note} (${state.by})` : check.hint}</p>
+                {state?.done && state.by ? (
+                  <p className="text-xs text-muted-foreground">
+                    {state.by}, {timeAgo(state.at)}
+                  </p>
+                ) : null}
               </div>
             </li>
           )
         })}
       </ul>
-    </Panel>
+    </fieldset>
   )
 }
 
@@ -439,7 +323,7 @@ export function StagesPanel({ workflow, application, onComplete, onReopen, canRe
                           </p>
                         )}
                         {allowed && application.status !== 'info_requested' ? (
-                          <Button size="sm" variant="outline" className="mt-2" onClick={() => onComplete(step)} disabled={missing.length > 0}>
+                          <Button size="sm" variant="outline" className="mt-2" onClick={() => onComplete(step)}>
                             Mark as done
                           </Button>
                         ) : null}

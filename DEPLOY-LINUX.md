@@ -19,8 +19,10 @@ Everything for the server lives in [`deploy/`](deploy).
 
 ## Before you start
 
-- A server with a sudo user, and a public HTTPS address for it. HTTPS is required: with
-  `NODE_ENV=production` session cookies are `Secure`, so sign-in fails over plain HTTP.
+- A server with a sudo user, and a public HTTPS address for it. HTTPS is strongly
+  recommended. Production session cookies are `Secure` by default; to use plain HTTP,
+  set `SESSION_COOKIE_SECURE=false` in `/etc/los.env`. This sends session cookies without
+  transport encryption, so only do this on an isolated, trusted network.
   No domain? See [No domain: getting a public address](#no-domain-getting-a-public-address).
 - SMTP credentials for the email codes and invitations.
 
@@ -295,7 +297,7 @@ Then in a browser:
 | --- | --- |
 | `curl /healthz` gives 503 | `journalctl -u los -n 50`. Usually a wrong `DATABASE_URL`, Postgres not running (`systemctl status postgresql`), or migrations not applied. |
 | `password authentication failed` | The password in `DATABASE_URL` differs from the one set in `CREATE USER`, or it has unencoded special characters. Reset: `sudo -u postgres psql -c "ALTER USER los PASSWORD 'new'"` and update `/etc/los.env`. |
-| Site loads but sign-in loops or fails | You are on plain HTTP. Secure cookies need HTTPS (step 11). |
+| Site loads but sign-in loops or fails | On plain HTTP, set `SESSION_COOKIE_SECURE=false` in `/etc/los.env` and restart `los`; HTTPS is strongly recommended instead. |
 | 502 Bad Gateway from nginx | The service is down: `systemctl status los`. |
 | No emails arrive | Check `EMAIL_*` in `/etc/los.env`, then `journalctl -u los`. Gmail needs an app password. |
 | Upload fails with 413 | nginx `client_max_body_size` too small, or the file is over 4 MB. |

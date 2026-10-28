@@ -20,26 +20,26 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { cn } from '@/lib/utils'
 import { LOAN_TYPE_LABELS, OPEN_STATUSES, WITHDRAWABLE_STATUSES, channelLabel, statusLabel } from '@/config/applications'
 import { hasPermission, roleLabel } from '@/config/roles'
+import { checklistOf } from '@/config/stages'
 import { SignaturePad } from '@/components/application/SignaturePad'
 import { findFormMismatches } from '@/utils/documentChecks'
 import { api } from '../api'
 import { useAuth } from '../auth'
-import { FormError, StatusBadge, dateTime, money, timeAgo, useToast } from '../components'
+import { FormError, Panel, StatusBadge, dateTime, money, timeAgo, useToast } from '../components'
 import { ActionDialog } from './ActionDialog'
 import {
   AffordabilityPanel,
-  AiReviewPanel,
   AppraisalsPanel,
-  ChecklistPanel,
   ConsentPanel,
   CrbPanel,
   LmsPanel,
   LocationPanel,
-  RulesPanel,
   SignaturesPanel,
   StageDocumentsPanel,
   StagesPanel,
+  VerificationChecklist,
 } from './CasePanels'
+import { CaseSummary, expectedForSlot } from './CaseSummary'
 import { sectionsFor } from './fields'
 
 const withinAssignmentRange = (person, amount) =>
@@ -52,7 +52,9 @@ export function CasePage() {
   const { user } = useAuth()
   const notify = useToast()
   const [state, setState] = useState({ status: 'loading' })
-  const [tab, setTab] = useState('details')
+  const [tab, setTab] = useState('analysis')
+  const [documentId, setDocumentId] = useState(null)
+  const tabs = useRef(null)
   const [dialog, setDialog] = useState(null)
   const [officers, setOfficers] = useState([])
 
@@ -174,6 +176,11 @@ export function CasePage() {
   const canTake = withinAssignmentRange(user, application.amount)
   const lastRecommendation = appraisals.find((appraisal) => appraisal.kind === 'recommendation')
   const hasCrbConsent = consents.some((consent) => consent.type === 'crb' && consent.granted)
+  // From the summary: show that part of the case and bring it into view.
+  const showTab = (value) => {
+    setTab(value)
+    tabs.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
   const checklistEditable = may.work && (['submitted', 'in_review', 'info_requested'].includes(application.status) || workflow?.state.checks.length > 0)
 
   return (
@@ -221,6 +228,7 @@ export function CasePage() {
           onClaim={(action) => act('transition', { actionId: action.id }, action.label === 'Start review' ? 'Review started' : `Moved to ${action.toLabel}`)}
           onTake={() => act('assign', { officerId: user.id }, 'The case is yours')}
           onTakeHere={() => act('take', {}, 'The case is yours at this stage')}
+          onShowWorkflow={() => showTab('workflow')}
         />
       </header>
 
@@ -236,82 +244,113 @@ export function CasePage() {
         </div>
       ) : null}
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
-        <div className="min-w-0 space-y-4">
-          <nav className="flex gap-1 border-b" aria-label="Case sections">
-            {[
-              ['details', 'Details'],
-              ['documents', `Documents (${documents.length})`],
-              ['timeline', 'Timeline'],
-            ].map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => setTab(value)}
-                aria-current={tab === value ? 'page' : undefined}
-                className={cn(
-                  '-mb-px border-b-2 px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                  tab === value ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'
-                )}
-              >
-                {label}
-              </button>
-            ))}
-          </nav>
-          {tab === 'details' ? <Details application={application} /> : null}
-          {tab === 'documents' ? (
-            <Documents application={application} documents={documents} onUpload={may.note ? (form) => uploadStaffDocument(id, form, setState, notify) : null} />
-          ) : null}
-          {tab === 'timeline' ? <Timeline events={events} onNote={may.note ? (message) => act('note', { message }, 'Note added') : null} /> : null}
-        </div>
+      <div className="space-y-4">
+        <nav ref={tabs} className="flex scroll-mt-4 gap-1 overflow-x-auto border-b" aria-label="Case sections">
+          {[
+            ['analysis', 'AI Analysis'],
+            ['details', 'Details'],
+            ['documents', `Documents (${documents.length})`],
+            ['workflow', 'Workflow'],
+            ['timeline', 'Timeline'],
+          ].map(([value, label]) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => setTab(value)}
+              aria-current={tab === value ? 'page' : undefined}
+              className={cn(
+                '-mb-px shrink-0 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                tab === value ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'
+              )}
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
 
-        <aside className="space-y-4">
-          <RulesPanel prescreen={prescreen} canRerun={may.work} onRerun={() => post('/prescreen', {}, 'Policy rules run again')} />
-          <AffordabilityPanel application={application} prescreen={prescreen} onSaveFigures={may.work ? (values) => post('/figures', values, 'Figures saved; the rules ran again') : null} />
-          {may.work || may.decide ? <AiReviewPanel prescreen={prescreen} /> : null}
-          <StagesPanel
-            workflow={workflow}
+        {/* The assessment, with the figures and bureau report the rules rest on. */}
+        {tab === 'analysis' ? (
+          <div className="space-y-4">
+            <CaseSummary
+              application={application}
+              documents={documents}
+              prescreen={prescreen}
+              zra={application.checks?.zra}
+              showAi={may.work || may.decide}
+              canRerun={may.work}
+              onRerun={() => post('/prescreen', {}, 'Policy rules run again')}
+              onOpenDocument={(value) => {
+                setDocumentId(value)
+                showTab('documents')
+              }}
+              onOpenDetails={() => showTab('details')}
+            />
+            <div className="grid items-start gap-4 lg:grid-cols-2">
+              <AffordabilityPanel application={application} prescreen={prescreen} onSaveFigures={may.work ? (values) => post('/figures', values, 'Figures saved; the rules ran again') : null} />
+              <CrbPanel
+                reports={crbReports}
+                provider={crbProvider}
+                hasConsent={hasCrbConsent}
+                canRun={may.work}
+                pulling={crbPull.status === 'pulling'}
+                error={crbPull.status === 'error' ? crbPull.message : null}
+                onRun={() => pullCrb('Credit report added')}
+              />
+            </div>
+          </div>
+        ) : null}
+
+        {/* What the applicant told us, where they were, and what they agreed to. */}
+        {tab === 'details' ? (
+          <Details
             application={application}
-            canReopen={may.work}
-            onComplete={(stage) => setDialog({ type: 'complete_stage', stage })}
-            onReopen={(stage) => setDialog({ type: 'reopen_stage', stage })}
+            cards={consents.length ? [<ConsentPanel key="consent" consents={consents} />] : []}
+            wide={<LocationPanel points={locations} facts={prescreen?.facts} onLogVisit={may.note ? (position) => post('/visits', position, 'Visit logged') : null} />}
           />
-          <StageDocumentsPanel
-            documents={stageDocuments}
-            applicationId={application.id}
-            canWork={may.work && !['declined', 'withdrawn', 'expired'].includes(application.status)}
-            onResend={() => post('/stage-documents/send', {}, 'Documents emailed to the applicant again')}
-            onReceived={(document, note) => post(`/stage-documents/${document.id}/received`, { note }, `${document.label} marked received`)}
-          />
-          <ChecklistPanel
-            application={application}
-            stages={{ checklist: workflow?.checklist }}
-            editable={checklistEditable}
-            onToggle={(check, done) =>
-              done ? setDialog({ type: 'check', check }) : act('check', { check, done: false }, 'Check reopened').catch((error) => notify(error.message, { tone: 'error' }))
-            }
-          />
-          <AppraisalsPanel appraisals={appraisals} />
-          <CrbPanel
-            reports={crbReports}
-            provider={crbProvider}
-            hasConsent={hasCrbConsent}
-            canRun={may.work}
-            pulling={crbPull.status === 'pulling'}
-            error={crbPull.status === 'error' ? crbPull.message : null}
-            onRun={() => pullCrb('Credit report added')}
-          />
-          <LocationPanel points={locations} facts={prescreen?.facts} onLogVisit={may.note ? (position) => post('/visits', position, 'Visit logged') : null} />
-          <LmsPanel
-            application={application}
-            lmsConfigured={lmsConfigured}
-            canAct={may.disburse}
-            onSend={() => post('/lms/send', {}, 'Sent to the LMS').catch((error) => notify(error.message, { tone: 'error' }))}
-            onReconcile={() => setDialog({ type: 'reconcile' })}
-          />
-          <SignaturesPanel signatures={signatures} applicationId={application.id} />
-          <ConsentPanel consents={consents} />
-        </aside>
+        ) : null}
+
+        {/* What they sent, and what we sent them to sign. */}
+        {tab === 'documents' ? (
+          <div className="space-y-4">
+            <Documents application={application} documents={documents} selectedId={documentId} onSelect={setDocumentId} onUpload={may.note ? (form) => uploadStaffDocument(id, form, setState, notify) : null} />
+            <div className="grid items-start gap-4 lg:grid-cols-2">
+              <StageDocumentsPanel
+                documents={stageDocuments}
+                applicationId={application.id}
+                canWork={may.work && !['declined', 'withdrawn', 'expired'].includes(application.status)}
+                onResend={() => post('/stage-documents/send', {}, 'Documents emailed to the applicant again')}
+                onReceived={(document, note) => post(`/stage-documents/${document.id}/received`, { note }, `${document.label} marked received`)}
+              />
+              <SignaturesPanel signatures={signatures} applicationId={application.id} />
+            </div>
+          </div>
+        ) : null}
+
+        {/* Where the case is: its stages and checks, the decisions on it, and the hand-off to the LMS. */}
+        {tab === 'workflow' ? (
+          <div className="grid items-start gap-4 lg:grid-cols-2">
+            <StagesPanel
+              workflow={workflow}
+              application={application}
+              canReopen={may.work}
+              onComplete={(stage) => setDialog({ type: 'complete_stage', stage })}
+              onReopen={(stage) => setDialog({ type: 'reopen_stage', stage })}
+            />
+            <AppraisalsPanel appraisals={appraisals} />
+            <LmsPanel
+              application={application}
+              lmsConfigured={lmsConfigured}
+              canAct={may.disburse}
+              onSend={() => post('/lms/send', {}, 'Sent to the LMS').catch((error) => notify(error.message, { tone: 'error' }))}
+              onReconcile={() => setDialog({ type: 'reconcile' })}
+            />
+            {!workflow?.steps?.length && !appraisals.length && !(lmsConfigured || application.lmsSyncStatus !== 'not_configured') ? (
+              <p className="text-sm text-muted-foreground">No stages, decisions or LMS hand-off for this case yet.</p>
+            ) : null}
+          </div>
+        ) : null}
+
+        {tab === 'timeline' ? <Timeline events={events} onNote={may.note ? (message) => act('note', { message }, 'Note added') : null} /> : null}
       </div>
 
       <CaseDialogs
@@ -324,6 +363,11 @@ export function CasePage() {
         act={act}
         post={post}
         requireSignature={offersRequireSignature}
+        verification={{
+          workflow,
+          editable: checklistEditable,
+          onToggle: (check, done) => act('check', { check, done }, done ? 'Check recorded' : 'Check reopened').catch((error) => notify(error.message, { tone: 'error' })),
+        }}
       />
     </div>
   )
@@ -469,7 +513,7 @@ export const groupActions = (actions) => {
   return groups
 }
 
-function CaseActions({ application, workflow, may, canTake, hasEligibleOfficers, onOpen, onClaim, onTake, onTakeHere }) {
+function CaseActions({ application, workflow, may, canTake, hasEligibleOfficers, onOpen, onClaim, onTake, onTakeHere, onShowWorkflow }) {
   const [busy, setBusy] = useState(null)
   const notify = useToast()
   const run = (key, fn) => async () => {
@@ -568,7 +612,12 @@ function CaseActions({ application, workflow, may, canTake, hasEligibleOfficers,
           Cancel the request
         </Button>
       ) : null}
-      {stepHere && !waiting ? <p className="max-w-xs self-center text-sm text-muted-foreground">Next: {state.stepName}</p> : null}
+      {/* The step itself is marked done on the Workflow tab. */}
+      {stepHere && !waiting ? (
+        <button type="button" onClick={onShowWorkflow} className="max-w-xs self-center text-left text-sm text-muted-foreground underline-offset-2 hover:text-foreground hover:underline">
+          Next: {state.stepName}
+        </button>
+      ) : null}
       {may.record && state?.type === 'offer' ? (
         <Button variant="outline" onClick={() => onOpen({ type: 'accept' })}>
           Record acceptance
@@ -587,8 +636,8 @@ function CaseActions({ application, workflow, may, canTake, hasEligibleOfficers,
 /** The recommend dialog's choices: both verdicts for a recommendation, or the decision actions a person may take. */
 const recommendVerdicts = (dialog) => {
   if (dialog?.type !== 'recommend') return []
-  const approve = { value: 'approve', label: 'Approve', hint: 'On the terms below' }
-  const decline = { value: 'decline', label: 'Decline', hint: 'The applicant is told it was not approved' }
+  const approve = { value: 'approve', label: 'Approve', tone: 'primary' }
+  const decline = { value: 'decline', label: 'Decline', tone: 'destructive' }
   if (!dialog?.group?.single) return [approve, decline]
   const usable = dialog.group.actions.filter((action) => !action.blocked)
   return [...(usable.some((action) => action.kind === 'approve') ? [approve] : []), ...(usable.some((action) => action.kind === 'reject') ? [decline] : [])]
@@ -601,13 +650,35 @@ const decideVerdicts = (dialog) =>
     .map((action) => ({
       value: { approve: 'approve', reject: 'decline', return: 'return' }[action.kind],
       label: action.kind === 'return' ? action.label : { approve: 'Approve', reject: 'Decline' }[action.kind],
-      hint: action.kind === 'return' ? `Back to “${action.toLabel}”` : undefined,
+      tone: { approve: 'primary', reject: 'destructive' }[action.kind],
       actionId: action.id,
     }))
 
-function CaseDialogs({ dialog, onClose, application, lastRecommendation, officers, user, act, post, requireSignature }) {
+function CaseDialogs({ dialog, onClose, application, lastRecommendation, officers, user, act, post, requireSignature, verification }) {
   const open = (type) => dialog?.type === type
   const common = (type) => ({ open: open(type), onOpenChange: (value) => !value && onClose() })
+
+  // Verification is done where it's needed: in the dialog of the action that waits for it.
+  // The checks an action needs are the server's: the state's own, plus the action's (for a
+  // recommendation, only when it is to approve).
+  const { workflow } = verification
+  const actionChecks = (action) => workflow?.actions.find((entry) => entry.id === action?.id)?.checks || []
+  const neededFor = (action, verdict) => [...new Set([...(workflow?.state.requiredChecks || []), ...(action?.kind === 'recommend' && verdict !== 'approve' ? [] : actionChecks(action))])]
+  const outstanding = (keys) => {
+    const missing = keys.filter((key) => !application.checks?.[key]?.done)
+    const label = (key) => checklistOf({ checklist: workflow?.checklist }).find((check) => check.key === key)?.label.toLowerCase() || key
+    return missing.length ? `Complete these checks first: ${missing.map(label).join(', ')}.` : null
+  }
+  const checklist = (required, only) => (
+    <VerificationChecklist application={application} checklist={workflow?.checklist} required={required} only={only} editable={verification.editable} onToggle={verification.onToggle} showZra={!only} />
+  )
+  // The action a recommend or decide dialog would take for the verdict picked.
+  const chosenAction = (values) => {
+    if (dialog?.type === 'decide') return dialog.group?.actions.find((action) => action.id === decideVerdicts(dialog).find((option) => option.value === values.verdict)?.actionId)
+    if (!dialog?.group?.single) return dialog?.action
+    return dialog.group.actions.find((action) => (values.verdict === 'decline' ? action.kind === 'reject' : action.kind === 'approve'))
+  }
+  const stageChecks = dialog?.stage ? [...new Set([...(dialog.stage.checks || []), ...actionChecks({ id: dialog.stage.moveActionId })])] : []
   return (
     <>
       <ActionDialog
@@ -619,17 +690,11 @@ function CaseDialogs({ dialog, onClose, application, lastRecommendation, officer
         onSubmit={(values) => act('request_info', values, 'Request sent to the applicant')}
       />
       <ActionDialog
-        {...common('check')}
-        title={`Mark as done`}
-        description="Note what you checked, so the approver and auditors can see it."
-        fields={[{ name: 'note', label: 'What did you check?', type: 'textarea', hint: 'For example: NRC original seen, matches photo.' }]}
-        submitLabel="Mark as done"
-        onSubmit={(values) => act('check', { check: dialog?.check, done: true, note: values.note }, 'Check recorded')}
-      />
-      <ActionDialog
         {...common('complete_stage')}
         title={`Mark “${dialog?.stage?.label || ''}” as done`}
         description={dialog?.stage?.description || 'Recorded with your name and the time, on the case timeline.'}
+        before={stageChecks.length ? () => checklist(stageChecks, stageChecks) : undefined}
+        blocked={() => outstanding(stageChecks)}
         fields={[{ name: 'note', label: 'Note (optional)', type: 'textarea', rows: 3, optional: true, hint: 'For example: committee minutes reference, who you spoke to.' }]}
         submitLabel="Mark as done"
         onSubmit={(values) => act('transition', { actionId: dialog?.stage?.moveActionId, note: values.note }, `${dialog?.stage?.label} done`)}
@@ -647,11 +712,14 @@ function CaseDialogs({ dialog, onClose, application, lastRecommendation, officer
         title={dialog?.group?.single ? 'Make the decision' : dialog?.group?.label && dialog.group.label !== 'Recommend' ? dialog.group.label : 'Recommend a decision'}
         description={dialog?.group?.single ? 'Your decision stands, within your approval limit.' : `A colleague reviews your recommendation and makes the final decision${dialog?.action?.toLabel ? ` (${dialog.action.toLabel})` : ''}.`}
         initial={{ verdict: recommendVerdicts(dialog)[0]?.value || 'approve', amount: application.amount, tenure: application.tenure }}
+        before={(values) => checklist(neededFor(chosenAction(values), values.verdict))}
+        blocked={(values) => outstanding(neededFor(chosenAction(values), values.verdict))}
         fields={[
           {
             name: 'verdict',
             label: dialog?.group?.single ? 'Decision' : 'Your recommendation',
             type: 'choice',
+            buttons: true,
             options: recommendVerdicts(dialog),
           },
           { name: 'amount', label: 'Amount (K)', type: 'number', showIf: (values) => values.verdict === 'approve', hint: `Asked for ${money(application.amount)}` },
@@ -677,11 +745,14 @@ function CaseDialogs({ dialog, onClose, application, lastRecommendation, officer
             : undefined
         }
         initial={{ verdict: lastRecommendation && decideVerdicts(dialog).some((option) => option.value === lastRecommendation.verdict) ? lastRecommendation.verdict : decideVerdicts(dialog)[0]?.value, amount: lastRecommendation?.amount ?? application.amount, tenure: lastRecommendation?.tenure ?? application.tenure }}
+        before={(values) => checklist(neededFor(chosenAction(values), values.verdict))}
+        blocked={(values) => outstanding(neededFor(chosenAction(values), values.verdict))}
         fields={[
           {
             name: 'verdict',
             label: 'Decision',
             type: 'choice',
+            buttons: true,
             options: decideVerdicts(dialog),
           },
           { name: 'amount', label: 'Amount (K)', type: 'number', showIf: (values) => values.verdict === 'approve' },
@@ -781,32 +852,43 @@ function CaseDialogs({ dialog, onClose, application, lastRecommendation, officer
   )
 }
 
-function Details({ application }) {
-  const sections = useMemo(() => sectionsFor(application), [application])
+/**
+ * The applicant's answers, then `cards` (more half-width panels) and `wide` (one
+ * full-width panel). Cards in a row share its height; an odd last card spans the row.
+ */
+function Details({ application, cards = [], wide = null }) {
+  const sections = useMemo(() => sectionsFor(application).filter((section) => section.rows.some(([, value]) => value)), [application])
+  const all = [
+    ...sections.map((section) => (
+      <Panel key={section.title} title={section.title}>
+        <dl className="space-y-2.5">
+          {section.rows
+            .filter(([, value]) => value)
+            .map(([label, value]) => (
+              <div key={label} className="grid grid-cols-[9rem_1fr] gap-3 text-sm">
+                <dt className="text-muted-foreground">{label}</dt>
+                <dd className="text-foreground [overflow-wrap:anywhere]">{value}</dd>
+              </div>
+            ))}
+        </dl>
+      </Panel>
+    )),
+    ...cards,
+  ]
   return (
     <div className="grid gap-4 lg:grid-cols-2">
-      {sections.map((section) => (
-        <section key={section.title} className="rounded-xl border bg-card p-5">
-          <h2 className="text-sm font-semibold text-foreground">{section.title}</h2>
-          <dl className="mt-3 space-y-2.5">
-            {section.rows
-              .filter(([, value]) => value)
-              .map(([label, value]) => (
-                <div key={label} className="grid grid-cols-[9rem_1fr] gap-3 text-sm">
-                  <dt className="text-muted-foreground">{label}</dt>
-                  <dd className="text-foreground [overflow-wrap:anywhere]">{value}</dd>
-                </div>
-              ))}
-          </dl>
-        </section>
+      {all.map((card, index) => (
+        <div key={card.key} className={cn('[&>section]:h-full', all.length % 2 === 1 && index === all.length - 1 && 'lg:col-span-2')}>
+          {card}
+        </div>
       ))}
+      {wide ? <div className="lg:col-span-2">{wide}</div> : null}
     </div>
   )
 }
 
 /** Document list beside a viewer, with the AI findings for the one on screen. */
-function Documents({ application, documents, onUpload }) {
-  const [selectedId, setSelectedId] = useState(documents[0]?.id || null)
+function Documents({ application, documents, selectedId, onSelect: setSelectedId, onUpload }) {
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
   const input = useRef(null)
@@ -894,26 +976,6 @@ function Documents({ application, documents, onUpload }) {
       )}
     </div>
   )
-}
-
-const expectedForSlot = (application, slot) => {
-  const data = application.data
-  if (application.loanType === 'personal') {
-    const info = data?.personalInfo || {}
-    const name = [info.firstName, info.middleName, info.surname].filter(Boolean).join(' ')
-    if (slot === 'payslips' || slot === 'nrcCopy') return { name, nrc: info.nrc }
-    if (slot === 'bankStatements' || slot === 'tpin') return { name }
-    return {}
-  }
-  const director = /^director\.(\d+)\.nrc$/.exec(slot)
-  if (director) {
-    const person = data?.directorInfo?.directors?.[Number(director[1])] || {}
-    return { name: person.name, nrc: person.nrc }
-  }
-  if (['orderOrInvoice', 'passportPhoto'].includes(slot) || slot.startsWith('director.') || slot.startsWith('extra.') || slot.startsWith('response.')) return {}
-  const company = { companyName: data?.businessInfo?.companyName, holderIsCompany: true }
-  // ZRA documents also print the company's TPIN.
-  return ['taxClearance', 'latestTaxComplianceReturn'].includes(slot) ? { ...company, tpin: data?.businessInfo?.tpin } : company
 }
 
 function DocumentFindings({ application, document }) {
