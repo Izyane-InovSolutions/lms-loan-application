@@ -1,4 +1,5 @@
 import { and, desc, eq, gt, inArray, isNull, ne } from 'drizzle-orm'
+import { features } from '../_lib/features.js'
 import kv from '../_lib/kv.js'
 import { getDb, schema } from '../_lib/db/client.js'
 import { fail, text, email as parseEmail, parseCookies, secretLinkOrigin } from '../_lib/http.js'
@@ -91,6 +92,8 @@ const me = async (req) => {
   return {
     user: user ? { ...publicUser(user), twoFactorSetupRequired: isStaffRole(user.role) && (await needsTwoFactorSetup(user)) } : null,
     demoEnabled: demoEnabled(),
+    // Admin tools a deployment switches on by variable (features.js).
+    features: features(),
   }
 }
 

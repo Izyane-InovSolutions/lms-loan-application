@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm'
 import { requireUser } from '../_lib/rbac.js'
+import { features } from '../_lib/features.js'
 import { getDb, schema } from '../_lib/db/client.js'
 import { fail, text } from '../_lib/http.js'
 import { recordAudit } from '../_lib/audit.js'
@@ -381,7 +382,8 @@ const getSettings = async (req) => {
 const saveSetting = async (req, res, { params }) => {
   const actor = await requireUser(req, { permission: 'settings.manage' })
   const validate = VALIDATORS[params.key]
-  if (!validate) fail(404, 'Unknown setting.', 'not_found')
+  // Retention periods are only edited where LOS_RETENTION_SETTINGS_ENABLED allows it (features.js).
+  if (!validate || (params.key === 'retention' && !features().retentionSettings)) fail(404, 'Unknown setting.', 'not_found')
   let value
   try {
     value = await validate(req.body || {})

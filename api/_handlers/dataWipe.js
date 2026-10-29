@@ -7,6 +7,7 @@ import { recordAudit } from '../_lib/audit.js'
 import { deleteApplications } from '../_lib/retention.js'
 import { deleteBlobsForDraft } from '../_lib/blob.js'
 import { verifyPassword } from '../_lib/auth/password.js'
+import { features } from '../_lib/features.js'
 import { WIPE_CATEGORIES, WIPE_KEYS, WIPE_PHRASE } from '../../src/config/dataWipe.js'
 
 /*
@@ -73,7 +74,11 @@ const WIPERS = {
   auditLog: async (db) => (await db.delete(auditLog).returning({ id: auditLog.id })).length,
 }
 
-const requireAdmin = (req) => requireUser(req, { roles: ['admin'] })
+// Switched off (LOS_DATA_WIPE_ENABLED, features.js): as if the endpoint weren't there.
+const requireAdmin = (req) => {
+  if (!features().dataWipe) fail(404, 'Not found.', 'not_found')
+  return requireUser(req, { roles: ['admin'] })
+}
 
 /** How many records of each kind there are, for the choosing step. */
 const summary = async (req) => {

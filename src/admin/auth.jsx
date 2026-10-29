@@ -15,11 +15,11 @@ const AuthContext = createContext(null)
  * and renamed statuses show wherever roleLabel() and statusLabel() are used.
  */
 export function AuthProvider({ children }) {
-  const [state, setState] = useState({ status: 'loading', user: null, demoEnabled: false, roles: [], stages: DEFAULT_STAGES_CONFIG, requireAcceptance: true, workflow: null })
+  const [state, setState] = useState({ status: 'loading', user: null, demoEnabled: false, features: {}, roles: [], stages: DEFAULT_STAGES_CONFIG, requireAcceptance: true, workflow: null })
 
   const refresh = useCallback(async () => {
     try {
-      const { user, demoEnabled } = await api('/auth/me')
+      const { user, demoEnabled, features = {} } = await api('/auth/me')
       let roles = []
       let flow = { stages: DEFAULT_STAGES_CONFIG, requireAcceptance: true }
       let workflow = null
@@ -36,7 +36,7 @@ export function AuthProvider({ children }) {
         registerRoles(roles)
         registerStatusLabels(flow.stages.labels)
       }
-      setState({ status: user ? 'signed-in' : 'signed-out', user, demoEnabled, roles, stages: flow.stages, requireAcceptance: flow.requireAcceptance, workflow })
+      setState({ status: user ? 'signed-in' : 'signed-out', user, demoEnabled, features, roles, stages: flow.stages, requireAcceptance: flow.requireAcceptance, workflow })
       return user
     } catch {
       setState((prev) => ({ ...prev, status: 'signed-out', user: null }))
