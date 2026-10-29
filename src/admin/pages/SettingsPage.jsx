@@ -49,13 +49,14 @@ const TABS = [
   { id: "crb", label: "Credit bureau" },
   { id: "notifications", label: "Notifications and SMS" },
   { id: "ai", label: "AI document checks" },
-  { id: "retention", label: "Data retention" },
+  // Shown only where the server switches the tool on (api/_lib/features.js).
+  { id: "retention", label: "Data retention", feature: "retentionSettings" },
   { id: "security", label: "Security" },
   { id: "branding", label: "Branding" },
   { id: "documents", label: "Offer documents" },
   { id: "legal", label: "Terms and privacy" },
   { id: "demo", label: "Sample data", demoOnly: true },
-  { id: "danger", label: "Danger zone", adminOnly: true },
+  { id: "danger", label: "Danger zone", adminOnly: true, feature: "dataWipe" },
 ];
 
 function Toggle({ id, label, description, checked, onChange, disabled }) {
@@ -147,7 +148,7 @@ export function useSettingGroup(key, initial, notify) {
 
 export function SettingsPage() {
   const notify = useToast();
-  const { demoEnabled, user } = useAuth();
+  const { demoEnabled, user, features } = useAuth();
   const [params, setParams] = useSearchParams();
   const [state, setState] = useState({ status: "loading" });
   const tab = params.get("tab") || "workflow";
@@ -165,7 +166,8 @@ export function SettingsPage() {
   const tabs = TABS.filter(
     (entry) =>
       (!entry.demoOnly || demoEnabled) &&
-      (!entry.adminOnly || user?.role === "admin"),
+      (!entry.adminOnly || user?.role === "admin") &&
+      (!entry.feature || features?.[entry.feature]),
   );
 
   return (
@@ -259,7 +261,7 @@ export function SettingsPage() {
               onSaved={load}
             />
           ) : null}
-          {tab === "retention" ? (
+          {tab === "retention" && features?.retentionSettings ? (
             <RetentionTab initial={state.settings.retention} notify={notify} />
           ) : null}
           {tab === "security" ? (
@@ -277,7 +279,7 @@ export function SettingsPage() {
           {tab === "demo" && demoEnabled ? (
             <SampleData notify={notify} />
           ) : null}
-          {tab === "danger" && user?.role === "admin" ? (
+          {tab === "danger" && user?.role === "admin" && features?.dataWipe ? (
             <DangerZoneTab notify={notify} />
           ) : null}
         </>

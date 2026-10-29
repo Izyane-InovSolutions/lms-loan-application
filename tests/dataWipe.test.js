@@ -72,3 +72,38 @@ describe('wipe data', () => {
     expect(entries[0]).toMatchObject({ actorLabel: expect.stringContaining('wipe.admin@example.com'), detail: expect.objectContaining({ removed: expect.objectContaining({ applications: 1 }) }) })
   })
 })
+
+describe('switched-off admin tools', () => {
+  const admin = client(handler)
+
+  beforeAll(async () => {
+    await admin.post('/auth/demo', { role: 'admin' })
+  })
+
+  it('are on locally, off on a deployment unless its variable says true', async () => {
+    const { features } = await import('../api/_lib/features.js')
+    expect(features()).toEqual({ dataWipe: true, retentionSettings: true })
+    vi.stubEnv('NODE_ENV', 'production')
+    try {
+      expect(features()).toEqual({ dataWipe: false, retentionSettings: false })
+      vi.stubEnv('LOS_DATA_WIPE_ENABLED', 'true')
+      expect(features()).toEqual({ dataWipe: true, retentionSettings: false })
+    } finally {
+      vi.unstubAllEnvs()
+    }
+  })
+
+  it('are refused by the server, not only hidden, when off', async () => {
+    vi.stubEnv('LOS_DATA_WIPE_ENABLED', 'false')
+    vi.stubEnv('LOS_RETENTION_SETTINGS_ENABLED', 'false')
+    try {
+      expect((await admin.get('/auth/me')).body.features).toEqual({ dataWipe: false, retentionSettings: false })
+      expect((await admin.get('/admin/wipe')).status).toBe(404)
+      expect((await admin.post('/admin/wipe', { categories: ['applications'], confirm: 'WIPE' })).status).toBe(404)
+      expect((await admin.put('/settings/retention', { declinedDays: 30 })).status).toBe(404)
+    } finally {
+      vi.unstubAllEnvs()
+    }
+    expect((await admin.put('/settings/retention', { declinedDays: 30 })).status).toBe(200)
+  })
+})

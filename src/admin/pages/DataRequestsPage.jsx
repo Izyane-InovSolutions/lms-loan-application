@@ -478,7 +478,7 @@ export function DataRequestsPage() {
                         </li>
                       ))}
                     </ul>
-                    <p>Retention periods are set under Settings, Data retention. Once a record is removed, the rest can be erased.</p>
+                    <p>Retention periods are set by an administrator (Settings, Data retention, where it is switched on for this server). Once a record is removed, the rest can be erased.</p>
                   </div>
                 )}
               </Panel>
