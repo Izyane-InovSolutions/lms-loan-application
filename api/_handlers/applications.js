@@ -25,7 +25,7 @@ import { runPrescreen } from '../_lib/prescreen/run.js'
 import { verifyApplicationWithZra } from '../_lib/zra/verifyApplication.js'
 import { priceLoan } from '../../src/config/loanProducts.js'
 import { getProductConfig, getProducts } from '../_lib/products.js'
-import { APPLICATION_STATUSES, APPROVED_STATUSES, OPEN_STATUSES, WITHDRAWABLE_STATUSES, describeSlot, requiredSlots, slotFromDraftPath } from '../../src/config/applications.js'
+import { APPLICATION_STATUSES, APPROVED_STATUSES, OPEN_STATUSES, WITHDRAWABLE_STATUSES, describeSlot, requiredSlots, slotFromDraftPath, supersededDocuments } from '../../src/config/applications.js'
 import { isStaffRole } from '../../src/config/roles.js'
 import { CONSENT_NOTICES } from '../../src/config/consent.js'
 import { checkOtp, consumeOtp } from '../_lib/otp.js'
@@ -468,6 +468,8 @@ export const loadCase = async (applicationId, viewer) => {
     db.select().from(crbReports).where(eq(crbReports.applicationId, applicationId)).orderBy(desc(crbReports.createdAt)),
   ])
   const { submissionKey, ...application } = row.application
+  // A document replaced by a newer copy stays on the case, marked with the one that replaced it.
+  const replaced = supersededDocuments(documents)
   return {
     application: {
       ...application,
@@ -476,7 +478,7 @@ export const loadCase = async (applicationId, viewer) => {
       assignedOfficerName: row.assignedOfficerName,
       assignedRmName: row.assignedRmName,
     },
-    documents: documents.map(publicDocument),
+    documents: documents.map((document) => ({ ...publicDocument(document), supersededBy: replaced[document.id] || null })),
     events,
     prescreen: prescreen || null,
     appraisals: appraisalRows,

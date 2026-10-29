@@ -16,9 +16,10 @@ import {
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Select } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
-import { LOAN_TYPE_LABELS, OPEN_STATUSES, WITHDRAWABLE_STATUSES, channelLabel, statusLabel } from '@/config/applications'
+import { LOAN_TYPE_LABELS, OPEN_STATUSES, WITHDRAWABLE_STATUSES, channelLabel, requestableSlots, statusLabel } from '@/config/applications'
 import { hasPermission, roleLabel } from '@/config/roles'
 import { checklistOf } from '@/config/stages'
 import { SignaturePad } from '@/components/application/SignaturePad'
@@ -240,6 +241,11 @@ export function CasePage() {
             <span className="text-muted-foreground">
               {application.infoRequest.message} (asked by {application.infoRequest.requestedBy}, {timeAgo(application.infoRequest.requestedAt)})
             </span>
+            {application.infoRequest.documents?.length ? (
+              <span className="mt-1 block text-xs text-muted-foreground">
+                New copies asked for: {application.infoRequest.documents.map((entry) => entry.label).join(', ')}. Each is checked automatically when it arrives.
+              </span>
+            ) : null}
           </p>
         </div>
       ) : null}
@@ -685,7 +691,17 @@ function CaseDialogs({ dialog, onClose, application, lastRecommendation, officer
         {...common('request_info')}
         title="Ask the applicant for something"
         description="They see this on their page and get an email. The case waits until they reply."
-        fields={[{ name: 'message', label: 'What do they need to send or explain?', type: 'textarea', rows: 4 }]}
+        fields={[
+          {
+            name: 'documents',
+            label: 'Documents to send again (optional)',
+            type: 'checkboxes',
+            hint: 'Each one is checked by the AI when it arrives and replaces the earlier copy in the summary and the rules.',
+            options: requestableSlots(application.loanType, application.data).map((entry) => ({ value: entry.slot, label: entry.label })),
+          },
+          { name: 'message', label: 'What do they need to send or explain?', type: 'textarea', rows: 4, hint: 'Optional when you pick documents above.' },
+        ]}
+        blocked={(values) => (values.documents?.length || (values.message || '').trim().length >= 3 ? null : 'Pick a document or say what you need.')}
         submitLabel="Send request"
         onSubmit={(values) => act('request_info', values, 'Request sent to the applicant')}
       />
@@ -891,6 +907,8 @@ function Details({ application, cards = [], wide = null }) {
 function Documents({ application, documents, selectedId, onSelect: setSelectedId, onUpload }) {
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
+  // Which document the next upload is: a known one replaces the earlier copy and is checked by the AI.
+  const [slot, setSlot] = useState('')
   const input = useRef(null)
   const selected = documents.find((document) => document.id === selectedId) || documents[0]
   const src = selected ? `/api/v1/applications/${application.id}/documents/${selected.id}` : null
@@ -905,8 +923,10 @@ function Documents({ application, documents, selectedId, onSelect: setSelectedId
     try {
       const form = new FormData()
       form.append('label', file.name)
+      if (slot) form.append('slot', slot)
       form.append('file', file)
       await onUpload(form)
+      setSlot('')
     } catch (uploadError) {
       setError(uploadError.message)
     } finally {
@@ -919,7 +939,7 @@ function Documents({ application, documents, selectedId, onSelect: setSelectedId
       <div className="space-y-2">
         <ul className="space-y-1">
           {documents.map((document) => {
-            const flagged = document.aiAnalysis && (document.aiAnalysis.matchesExpectedType === false || document.aiAnalysis.authenticityConcerns?.length || document.aiAnalysis.issues?.length)
+            const flagged = !document.supersededBy && document.aiAnalysis && (document.aiAnalysis.matchesExpectedType === false || document.aiAnalysis.authenticityConcerns?.length || document.aiAnalysis.issues?.length)
             return (
               <li key={document.id}>
                 <button
@@ -927,13 +947,15 @@ function Documents({ application, documents, selectedId, onSelect: setSelectedId
                   onClick={() => setSelectedId(document.id)}
                   className={cn(
                     'flex w-full items-start gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                    selected?.id === document.id ? 'bg-card shadow-sm ring-1 ring-border' : 'hover:bg-card/60'
+                    selected?.id === document.id ? 'bg-card shadow-sm ring-1 ring-border' : 'hover:bg-card/60',
+                    document.supersededBy && 'opacity-60'
                   )}
                 >
                   <FileText className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-foreground">{document.label}</span>
                     <span className="block text-xs text-muted-foreground">{document.source === 'applicant' ? 'From the application' : document.source === 'info_response' ? 'Sent after a request' : document.source === 'signed_copy' ? 'Signed copy from the applicant' : document.source === 'system' ? (document.meta?.signed ? 'Signed by the customer' : `Generated, template version ${document.meta?.templateVersion ?? '?'}`) : 'Added by staff'}</span>
+                    {document.supersededBy ? <span className="block text-xs text-muted-foreground">Replaced by a newer copy</span> : null}
                   </span>
                   {flagged ? <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" aria-label="Has findings" /> : null}
                 </button>
@@ -943,10 +965,18 @@ function Documents({ application, documents, selectedId, onSelect: setSelectedId
         </ul>
         {onUpload ? (
           <>
+            <Select value={slot} onChange={(event) => setSlot(event.target.value)} aria-label="What the document is" className="h-9 text-sm">
+              <option value="">Something else</option>
+              {requestableSlots(application.loanType, application.data).map((entry) => (
+                <option key={entry.slot} value={entry.slot}>
+                  New copy of: {entry.label}
+                </option>
+              ))}
+            </Select>
             <input ref={input} type="file" accept=".pdf,image/*" className="sr-only" onChange={upload} aria-label="Add a document" />
             <Button variant="outline" size="sm" className="w-full" onClick={() => input.current?.click()} disabled={uploading}>
               {uploading ? <Loader2 className="animate-spin" /> : <Paperclip />}
-              Add a document
+              {slot ? 'Upload and check' : 'Add a document'}
             </Button>
             {error ? <p className="text-xs text-destructive">{error}</p> : null}
           </>
@@ -955,6 +985,14 @@ function Documents({ application, documents, selectedId, onSelect: setSelectedId
 
       {selected ? (
         <div className="min-w-0 space-y-3">
+          {selected.supersededBy ? (
+            <p className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+              A newer copy replaced this one. The rules, the AI review and the summary use the newer copy.{' '}
+              <button type="button" className="font-medium text-primary hover:underline" onClick={() => setSelectedId(selected.supersededBy)}>
+                Open it
+              </button>
+            </p>
+          ) : null}
           <DocumentFindings application={application} document={selected} />
           <div className="overflow-hidden rounded-xl border bg-muted/40">
             <div className="flex items-center justify-between border-b bg-card px-4 py-2 text-sm">

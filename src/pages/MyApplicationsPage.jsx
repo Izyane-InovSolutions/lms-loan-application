@@ -815,14 +815,26 @@ function WithdrawLink({ application, onDone }) {
   )
 }
 
-/** Answering "we need something from you": attach files one at a time, add a note, send. */
+/**
+ * Answering "we need something from you": a row for each document the officer asked for
+ * again (checked as it arrives, so problems can be fixed before sending), any other files,
+ * and a note.
+ */
 function RespondToRequest({ application, onDone }) {
+  const requested = application.infoRequest.documents || []
   const [message, setMessage] = useState('')
   const [attached, setAttached] = useState([])
-  const [uploading, setUploading] = useState(false)
+  // The slot being uploaded ('' for "something else"), or null.
+  const [uploading, setUploading] = useState(null)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
   const fileInput = useRef(null)
+  const target = useRef('')
+
+  const pick = (slot) => {
+    target.current = slot
+    fileInput.current?.click()
+  }
 
   const upload = async (event) => {
     const file = event.target.files?.[0]
@@ -832,20 +844,23 @@ function RespondToRequest({ application, onDone }) {
       setError('That file is larger than 4 MB. Upload a smaller scan or photo.')
       return
     }
-    setUploading(true)
+    const slot = target.current
+    setUploading(slot)
     setError('')
     try {
       const form = new FormData()
       form.append('label', file.name)
+      if (slot) form.append('slot', slot)
       form.append('file', file)
       const response = await fetch(`/api/v1/me/applications/${application.id}/documents`, { method: 'POST', body: form, credentials: 'same-origin' })
       const body = await response.json().catch(() => ({}))
       if (!response.ok) throw new Error(body.message || 'The upload failed. Try again.')
-      setAttached((current) => [...current, body.document])
+      // A new copy of a requested document replaces the one sent a moment ago.
+      setAttached((current) => [...current.filter((document) => !slot || document.slot !== slot), body.document])
     } catch (uploadError) {
       setError(uploadError.message)
     } finally {
-      setUploading(false)
+      setUploading(null)
     }
   }
 
@@ -861,6 +876,10 @@ function RespondToRequest({ application, onDone }) {
     }
   }
 
+  const requestedSlots = new Set(requested.map((entry) => entry.slot))
+  const others = attached.filter((document) => !requestedSlots.has(document.slot))
+  const busy = uploading !== null
+
   return (
     <section aria-labelledby="request-title" className="mt-8 rounded-xl border border-warning/50 bg-warning/5 p-5">
       <h2 id="request-title" className="flex items-center gap-2 font-semibold">
@@ -868,6 +887,38 @@ function RespondToRequest({ application, onDone }) {
         We need something from you
       </h2>
       <p className="mt-2 text-sm">{application.infoRequest.message}</p>
+      <input ref={fileInput} type="file" accept=".pdf,image/*" className="sr-only" onChange={upload} aria-label="Choose a file to upload" />
+      {requested.length ? (
+        <ul className="mt-4 divide-y rounded-lg border bg-background">
+          {requested.map((entry) => {
+            const sent = attached.find((document) => document.slot === entry.slot)
+            const problems = sent?.check?.checked ? [...(sent.check.matchesExpectedType === false ? [`This looks like ${sent.check.detectedType ? `a ${sent.check.detectedType}` : 'a different document'}, not your ${entry.label.toLowerCase()}.`] : []), ...sent.check.issues] : []
+            return (
+              <li key={entry.slot} className="flex flex-wrap items-start gap-3 px-4 py-3 text-sm">
+                {sent ? (
+                  problems.length ? <CircleAlert className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" /> : <Check className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" />
+                ) : (
+                  <FileText className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium">{entry.label}</p>
+                  {sent ? <p className="truncate text-xs text-muted-foreground">{sent.filename}</p> : null}
+                  {problems.map((problem) => (
+                    <p key={problem} className="mt-1 text-xs text-foreground">
+                      {problem}
+                    </p>
+                  ))}
+                  {sent && sent.check?.checked && !problems.length ? <p className="mt-1 text-xs text-success">Looks right.</p> : null}
+                </div>
+                <Button type="button" size="sm" variant={sent && !problems.length ? 'ghost' : 'outline'} onClick={() => pick(entry.slot)} disabled={busy}>
+                  {uploading === entry.slot ? <Loader2 className="animate-spin" /> : <Upload />}
+                  {uploading === entry.slot ? 'Checking…' : sent ? 'Replace' : 'Upload'}
+                </Button>
+              </li>
+            )
+          })}
+        </ul>
+      ) : null}
       <div className="mt-4 space-y-3">
         <Label htmlFor="reply" className="text-sm">
           Your reply (optional)
@@ -879,9 +930,9 @@ function RespondToRequest({ application, onDone }) {
           onChange={(event) => setMessage(event.target.value)}
           className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         />
-        {attached.length ? (
+        {others.length ? (
           <ul className="space-y-1 text-sm">
-            {attached.map((document) => (
+            {others.map((document) => (
               <li key={document.id} className="flex items-center gap-2">
                 <Check className="size-4 text-success" aria-hidden="true" />
                 {document.filename}
@@ -895,12 +946,11 @@ function RespondToRequest({ application, onDone }) {
           </p>
         ) : null}
         <div className="flex flex-wrap gap-2">
-          <input ref={fileInput} type="file" accept=".pdf,image/*" className="sr-only" onChange={upload} aria-label="Attach a document" />
-          <Button type="button" variant="outline" onClick={() => fileInput.current?.click()} disabled={uploading}>
-            {uploading ? <Loader2 className="animate-spin" /> : attached.length ? <Paperclip /> : <Upload />}
-            {attached.length ? 'Attach another' : 'Attach a document'}
+          <Button type="button" variant="outline" onClick={() => pick('')} disabled={busy}>
+            {uploading === '' ? <Loader2 className="animate-spin" /> : others.length ? <Paperclip /> : <Upload />}
+            {requested.length ? 'Attach something else' : others.length ? 'Attach another' : 'Attach a document'}
           </Button>
-          <Button type="button" onClick={send} disabled={sending || uploading || (!message.trim() && !attached.length)}>
+          <Button type="button" onClick={send} disabled={sending || busy || (!message.trim() && !attached.length)}>
             {sending ? <Loader2 className="animate-spin" /> : <Send />}
             Send reply
           </Button>

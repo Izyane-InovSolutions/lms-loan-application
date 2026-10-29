@@ -4,6 +4,7 @@ import { addEvent } from '../applications.js'
 import { createZraClient, missingZraConfig, ZraError } from './client.js'
 import { getZraConfig } from './config.js'
 import { companiesMatch, namesMatch } from '../../../src/utils/documentChecks.js'
+import { currentDocuments } from '../../../src/config/applications.js'
 
 const { applications, applicationDocuments } = schema
 
@@ -62,7 +63,7 @@ export const verifyApplicationWithZra = async (applicationId, { clientFactory = 
 
       // The TPIN on the uploaded ZRA documents should be the one ZRA holds.
       const documents = await db.select().from(applicationDocuments).where(eq(applicationDocuments.applicationId, applicationId))
-      const printed = documents
+      const printed = currentDocuments(documents)
         .map((document) => ({ slot: document.slot, label: document.label, tpin: document.aiAnalysis?.extracted?.tpinNumber }))
         .filter((document) => document.tpin)
       const documentMismatches = printed.filter((document) => digits(document.tpin) !== digits(taxpayer.tpin)).map(({ slot, label, tpin }) => ({ slot, label, tpin }))

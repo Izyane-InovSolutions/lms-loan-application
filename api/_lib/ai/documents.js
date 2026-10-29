@@ -1,4 +1,5 @@
-import { generateJson } from './index.js'
+import { AiUnsupportedInputError, canReadMimeType, generateJson, getAiProvider } from './index.js'
+import { consumeAiQuota } from '../aiQuota.js'
 
 /*
  * What each upload slot is supposed to contain, and what to pull out of it.
@@ -225,5 +226,23 @@ export const analyzeDocument = async ({ docType, file }) => {
     provider,
     model,
     analyzedAt: new Date().toISOString(),
+  }
+}
+
+/**
+ * The same check for a file added to a case after submission: sent in reply to a request,
+ * or added by staff. Returns the analysis, or null when it can't run (AI off, a type the
+ * model can't read, the daily quota spent, or the call failed) — the document is then
+ * "not checked", as before. `quotaKey` is whose daily allowance it counts against.
+ */
+export const analyzeCaseUpload = async ({ docType, file, quotaKey, req }) => {
+  if (!DOCUMENT_SPECS[docType] || !(await getAiProvider())) return null
+  try {
+    if (!(await canReadMimeType(file.contentType))) return null
+    if (!(await consumeAiQuota(quotaKey, req))) return null
+    return await analyzeDocument({ docType, file: { mimeType: file.contentType, data: file.data } })
+  } catch (error) {
+    if (!(error instanceof AiUnsupportedInputError)) console.warn('[ai] case upload analysis failed', { docType, error: String(error?.message || error) })
+    return null
   }
 }

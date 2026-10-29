@@ -34,7 +34,7 @@ const documentReason = (spec, documents, { aiOn, submittedAt }) => {
     if (!aiOn) return `The ${spec.document} wasn’t read: AI document checks are switched off or no AI model is connected (Settings → AI document checks). ${ENTER}`
     // Added on the case after submission (by staff, or in reply to a request): not read.
     const after = (document) => submittedAt && new Date(document.createdAt).getTime() - new Date(submittedAt).getTime() > 60 * 1000
-    if (uploads.every(after)) return `The ${spec.document} was added after submission, so the AI didn’t read it. ${ENTER}`
+    if (uploads.every(after)) return `The ${spec.document} was added after submission and couldn’t be read automatically. ${ENTER}`
     return `The AI didn’t finish reading the ${spec.document} before the application was submitted, or couldn’t reach the AI service. ${ENTER}`
   }
   const analysis = read.aiAnalysis

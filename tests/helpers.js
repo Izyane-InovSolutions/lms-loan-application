@@ -131,7 +131,7 @@ export const client = (handler, { origin } = {}) => {
   }
 }
 
-const PDF = Buffer.from('%PDF-1.4\n% test\n')
+export const PDF = Buffer.from('%PDF-1.4\n% test\n')
 
 /**
  * Puts a ready-to-submit draft in place, as the wizard would have: files in storage,

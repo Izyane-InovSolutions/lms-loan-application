@@ -248,6 +248,7 @@ const seed = async (req) => {
           sample: true,
           recommendation: outcome === 'pass' ? 'proceed' : outcome === 'refer' ? 'review' : 'decline_likely',
           riskLevel: outcome === 'pass' ? 'low' : outcome === 'refer' ? 'medium' : 'high',
+          score: outcome === 'pass' ? 84 : outcome === 'refer' ? 61 : 32,
           summary:
             outcome === 'pass'
               ? 'Documents are complete and consistent, and the repayment is comfortably affordable on the stated income. Sample review.'
