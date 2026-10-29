@@ -50,7 +50,7 @@ export function DraftDialog({ draftId, onOpenChange, onChanged }) {
       const { draftToken, draft } = await api(`/drafts/${draftId}/resume`, { method: 'POST' })
       const hydrated = await hydrateDraftFiles(draft, draftToken)
       setAssistedFlag()
-      navigate(applyPath(draft.loanType, draft.currentStep || 0), { state: { resumedDraft: { ...hydrated, draftToken } } })
+      navigate(applyPath(draft.loanData?.productId || draft.loanType, draft.currentStep || 0, draft.loanType), { state: { resumedDraft: { ...hydrated, draftToken } } })
     } catch (continueError) {
       setError(continueError.message)
       setBusy(null)

@@ -5,6 +5,7 @@ import { consumeAiQuota } from '../_lib/aiQuota.js'
 import { canReadMimeType, getAiProviders, AiUnavailableError, AiUnsupportedInputError, classifyAiFailure } from '../_lib/ai/index.js'
 import { DOCUMENT_SPECS, analyzeDocument } from '../_lib/ai/documents.js'
 import { sniffType } from '../_lib/fileChecks.js'
+import { getProductConfig } from '../_lib/products.js'
 
 // Same backstop as api/draft/documents.js: Vercel rejects bodies over 4.5 MB before this
 // handler runs, and the client already caps files at 4 MB.
@@ -26,7 +27,9 @@ const normalizeMimeType = (file) => {
 }
 
 /**
- * POST multipart { docType, file } with the applicant's draft token.
+ * POST multipart { docType, file, fieldKey?, productId? } with the applicant's draft token.
+ * A product's own document (docType "custom") names its product and slot (fieldKey), so
+ * what it should be is read from the product's settings, not taken from the browser.
  *
  * 200 { status: 'analyzed', analysis }  — findings for the upload
  * 200 { status: 'skipped', reason }     — the configured model cannot read this file type
@@ -96,7 +99,13 @@ export default async function handler(req, res) {
     }
 
     const data = head
-    const analysis = await analyzeDocument({ docType, file: { mimeType, data } })
+    let expected = null
+    if (docType === 'custom') {
+      const product = await getProductConfig(String(fields.productId?.[0] || '').slice(0, 40))
+      expected = product?.documents.find((entry) => entry.slot === fieldKey && entry.docType === 'custom') || null
+      if (!expected) return res.status(200).json({ status: 'skipped', reason: 'This document isn’t one the product asks for.' })
+    }
+    const analysis = await analyzeDocument({ docType, file: { mimeType, data }, expected })
     if (fieldKey) {
       // Matched to the draft's copy of the file by name and size at submit time.
       await kv.set(

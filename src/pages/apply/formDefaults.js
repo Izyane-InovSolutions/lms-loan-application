@@ -3,6 +3,8 @@
  * (DashboardPage.tailwind.jsx) and its step screens (WizardSteps.jsx).
  */
 
+import { BUSINESS_STRUCTURES } from '@/config/applicantRules'
+
 export const GENDER_OPTIONS = ['Male', 'Female']
 export const MARITAL_STATUS_OPTIONS = ['Single', 'Married', 'Widowed', 'Divorced', 'Separated']
 export const NATIONALITY_OPTIONS = ['Kenya', 'Malawi', 'Rwanda', 'Uganda', 'Zambia', 'Zimbabwe']
@@ -19,12 +21,8 @@ export const RELATIONSHIP_OPTIONS = [
   'Guardian',
   'Friend',
 ]
-export const BUSINESS_TYPE_OPTIONS = [
-  'Sole Proprietorship',
-  'Partnership',
-  'Limited Liability Company (LLC)',
-  'Corporation',
-]
+// The legal forms, from applicantRules.js, which says what each one is asked for.
+export const BUSINESS_TYPE_OPTIONS = BUSINESS_STRUCTURES.map((entry) => entry.value)
 
 /** Shared MUI DatePicker styling, mapped onto our design tokens. */
 
@@ -37,6 +35,7 @@ export const personalInitial = {
     email: '',
     nrc: '',
     tpin: '',
+    // In place of the NRC, for applicants who aren't Zambian.
     passportNumber: '',
     zraVerifiedName: '',
     gender: '',
@@ -60,7 +59,12 @@ export const personalInitial = {
     nrcCopy: null,
     passportPhoto: null,
     tpin: null,
+    // A product's own documents, by key (slot custom.<key>), and one proof per collateral item.
+    custom: {},
+    collateral: [],
   },
+  // What is pledged, when the product asks for collateral (src/config/collateral.js).
+  collateral: { items: [] },
 }
 
 export const businessInitial = {
@@ -73,7 +77,6 @@ export const businessInitial = {
     establishedDate: '',
     natureOfBusiness: '',
     registeredOffice: '',
-    collateralPledged: '',
     purposeOfLoan: '',
   },
   directorInfo: {
@@ -84,11 +87,14 @@ export const businessInitial = {
     applicantPhone: '',
     applicantEmail: '',
     applicantNrc: '',
+    applicantPassportNumber: '',
     applicantGender: '',
     applicantMaritalStatus: '',
     applicantBirthDate: '',
     applicantAddress: '',
     applicantPosition: '',
+    // What they typed when the position is "Other".
+    applicantPositionOther: '',
     applicantNationality: '',
   },
   documents: {
@@ -101,7 +107,10 @@ export const businessInitial = {
     bankStatements: null,
     passportPhoto: null,
     boardResolution: null,
+    custom: {},
+    collateral: [],
   },
+  collateral: { items: [] },
 }
 
 // Ask for credit bureau consent only where a bureau is connected.

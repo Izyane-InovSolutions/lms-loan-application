@@ -19,6 +19,8 @@ import { brandingRoutes } from '../_handlers/branding.js'
 import { workflowConfigRoutes } from '../_handlers/workflowConfig.js'
 import { zraRoutes } from '../_handlers/zra.js'
 import { reportRoutes } from '../_handlers/reports.js'
+import { dataWipeRoutes } from '../_handlers/dataWipe.js'
+import { refreshCrb } from '../_lib/crb/index.js'
 
 /*
  * Every /api/v1 endpoint, behind one Vercel function.
@@ -27,7 +29,7 @@ import { reportRoutes } from '../_handlers/reports.js'
  * and lets all of them share a warm instance (and its database pool). Handlers live in
  * api/_handlers; add a feature's routes to this list.
  */
-export default createRouter([
+const router = createRouter([
   ...authRoutes,
   ...userRoutes,
   ...auditRoutes,
@@ -40,6 +42,7 @@ export default createRouter([
   ...demoRoutes,
   ...settingsRoutes,
   ...privacyRoutes,
+  ...dataWipeRoutes,
   ...notificationRoutes,
   ...healthRoutes,
   ...roleRoutes,
@@ -50,3 +53,13 @@ export default createRouter([
   // Last: /drafts/:id must not shadow GET /drafts/file in applicationRoutes.
   ...draftRoutes,
 ])
+
+/*
+ * The credit bureau setup (Settings → Credit bureau) is read synchronously by its callers,
+ * so the stored setting is brought up to date here first (at most every 30 seconds). If
+ * it can't be read, the last known one (or the environment) still applies.
+ */
+export default async function handler(req, res) {
+  await refreshCrb().catch(() => {})
+  return router(req, res)
+}

@@ -179,7 +179,10 @@ export const applications = pgTable(
     // Sent by the browser with each submit attempt; a retry after a dropped connection
     // finds the existing row instead of filing the loan twice.
     submissionKey: text('submission_key').notNull(),
+    // The application form used (personal / business): what the credit rules and the LMS mapping read.
     loanType: text('loan_type').notNull(),
+    // The loan product applied for (Settings → Loan products). Null on applications from before products: their form's built-in one.
+    productId: text('product_id'),
     status: text('status').notNull().default('submitted'),
     version: integer('version').notNull().default(0),
 
@@ -242,6 +245,7 @@ export const applications = pgTable(
     uniqueIndex('applications_reference_key').on(table.reference),
     uniqueIndex('applications_submission_key').on(table.submissionKey),
     index('applications_status_idx').on(table.status),
+    index('applications_product_idx').on(table.productId),
     index('applications_state_idx').on(table.workflowVersion, table.state),
     index('applications_email_idx').on(table.applicantEmail),
     index('applications_sourced_by_idx').on(table.sourcedBy),

@@ -1,4 +1,5 @@
 import path from 'node:path'
+import { readFile } from 'node:fs/promises'
 import * as schema from './schema.js'
 import { isDeployed } from '../runtime.js'
 
@@ -22,6 +23,20 @@ const MIGRATIONS_FOLDER = path.resolve(process.cwd(), 'api/_lib/db/migrations')
 // LOS_PGLITE_DIR=memory:// gives tests a throwaway database.
 const LOCAL_DATA_DIR = process.env.LOS_PGLITE_DIR || path.resolve(process.cwd(), '.local-pg')
 
+/**
+ * Postgres isn't migrated on connect (npm run db:migrate does it), so code newer than the
+ * database fails on its first query with a bare "Failed query". Say so plainly at startup.
+ */
+const warnIfBehind = (pool) => {
+  readFile(path.join(MIGRATIONS_FOLDER, 'meta/_journal.json'), 'utf8')
+    .then(async (journal) => {
+      const latest = Math.max(...JSON.parse(journal).entries.map((entry) => entry.when))
+      const { rows } = await pool.query('select max(created_at) as applied from drizzle.__drizzle_migrations')
+      if (Number(rows[0]?.applied || 0) < latest) console.error('[db] The database is behind the code: migrations are pending. Run `npm run db:migrate`.')
+    })
+    .catch(() => {})
+}
+
 const createPostgres = async (connectionString) => {
   const { default: pg } = await import('pg')
   const { drizzle } = await import('drizzle-orm/node-postgres')
@@ -32,6 +47,7 @@ const createPostgres = async (connectionString) => {
   const pool = new pg.Pool({ connectionString, max, idleTimeoutMillis: 10000 })
   // An idle connection dropped by Postgres (a restart) must not crash the process.
   pool.on('error', (error) => console.error(`[db] idle connection: ${error.message}`))
+  warnIfBehind(pool)
   return drizzle(pool, { schema })
 }
 

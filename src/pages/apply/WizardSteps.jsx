@@ -6,6 +6,7 @@ import {
   Fingerprint,
   FolderOpen,
   Home,
+  Landmark,
   Phone,
   Plus,
   Printer,
@@ -19,6 +20,10 @@ import { DatePicker } from '@mui/x-date-pickers/DatePicker'
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs'
 import dayjs from 'dayjs'
 import { aiFailureMessage, isRetryableAiFailure } from '../../services/aiApi'
+import { COLLATERAL_REQUIREMENTS, MAX_COLLATERAL_ITEMS, acceptedTypes, collateralValue, typeLabel } from '@/config/collateral'
+import { formatKwacha } from '@/config/loanProducts'
+import { acceptsPhotos, readDocument } from '@/utils/documentSlots'
+import { EMPLOYMENT_OPTIONS, businessPeople, employerField, idField, positionLabel, positionsFor, presentDocuments } from '@/config/applicantRules'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -75,6 +80,7 @@ const datePickerSlotProps = (id) => ({
  */
 export function WizardStep(props) {
   const {
+    addCollateralItem,
     addDirector,
     addDirectorUpload,
     allowCrb,
@@ -82,6 +88,7 @@ export function WizardStep(props) {
     applicantEmail,
     assistedBy,
     businessData,
+    collateralTypes,
     consentCode,
     consentCodeState,
     currentStep,
@@ -101,6 +108,8 @@ export function WizardStep(props) {
     prescreen,
     prescreenView,
     price,
+    product,
+    removeCollateralItem,
     removeDirector,
     removeDirectorUpload,
     retryPrescreen,
@@ -112,6 +121,7 @@ export function WizardStep(props) {
     setPreviewAttachment,
     setShowCameraCapture,
     totalRepayable,
+    updateCollateralItem,
     updateDirectorField,
     updateSectionField,
     validationErrors,
@@ -161,11 +171,14 @@ export function WizardStep(props) {
         {(field) => (
           <Select {...field} value={value ?? ''} onChange={(event) => onChange(event.target.value)}>
             <option value="">{placeholder}</option>
-            {options.map((option) => (
-              <option key={option} value={option}>
-                {option}
-              </option>
-            ))}
+            {options.map((option) => {
+              const { value: optionValue, label: optionLabel } = typeof option === 'string' ? { value: option, label: option } : option
+              return (
+                <option key={optionValue} value={optionValue}>
+                  {optionLabel}
+                </option>
+              )
+            })}
           </Select>
         )}
       </FormField>
@@ -215,11 +228,12 @@ export function WizardStep(props) {
     )
   }
 
-  const renderUploadField = (label, field, file, required = false, acceptTypes = '.pdf', errorKey = '', cameraCapable = false) => (
+  const renderUploadField = (label, field, file, required = false, acceptTypes = '.pdf', errorKey = '', cameraCapable = false, description = '') => (
     <FileUploadField
       key={field}
       name={errorKey || `documents.${field}`}
       label={label}
+      description={description}
       file={file}
       accept={acceptTypes}
       required={required}
@@ -257,74 +271,230 @@ export function WizardStep(props) {
     renderSummaryRow('Total repayable', `K${totalRepayable.toFixed(2)}`),
   ]
 
-  const personalAttachments = [
-    { key: 'payslips', label: 'Latest three payslips', file: personalData.documents.payslips },
-    { key: 'bankStatements', label: 'Bank statements', file: personalData.documents.bankStatements },
-    { key: 'nrcCopy', label: 'NRC copy', file: personalData.documents.nrcCopy },
-    { key: 'passportPhoto', label: 'Passport photo', file: personalData.documents.passportPhoto },
-    { key: 'tpin', label: 'TPIN certificate', file: personalData.documents.tpin },
-  ]
+  const activeData = selectedLoanType === 'personal' ? personalData : businessData
+  const collateralRule = product.collateral?.requirement || 'none'
+  // A company's directors, a partnership's partners, or a sole proprietor (applicantRules.js).
+  const people = businessPeople(businessData.businessInfo.businessType)
+  const isZambianApplicant = idField(personalData.employmentInfo.nationality).kind === 'nrc'
+  const collateralItems = collateralRule === 'none' ? [] : activeData.collateral?.items || []
+
+  // The product's documents, in the order it lists them, each where its file lives (utils/documentSlots.js).
+  const productAttachments = presentDocuments(product, activeData).filter((document) => !document.skipped).map((document) => ({ key: document.slot, label: document.label, file: readDocument(activeData.documents, document.slot) }))
+  const collateralAttachments = collateralItems
+    .map((item, index) => ({ key: `collateral-${index}`, label: `Collateral ${index + 1} proof`, file: readDocument(activeData.documents, `collateral.${index}`) }))
+    .filter((attachment) => attachment.file)
+
+  const personalAttachments = [...productAttachments, ...collateralAttachments]
 
   const businessAttachments = [
-    { key: 'pacraCertificate', label: 'PACRA certificate', file: businessData.documents.pacraCertificate },
-    { key: 'form2', label: 'Form 2', file: businessData.documents.form2 },
-    { key: 'taxClearance', label: 'Tax clearance certificate / TPIN', file: businessData.documents.taxClearance },
-    {
-      key: 'latestTaxComplianceReturn',
-      label: 'Latest tax compliance return',
-      file: businessData.documents.latestTaxComplianceReturn,
-    },
-    { key: 'orderOrInvoice', label: 'Order / Invoice', file: businessData.documents.orderOrInvoice },
-    { key: 'bankStatements', label: 'Bank statements', file: businessData.documents.bankStatements },
-    { key: 'passportPhoto', label: 'Passport photo', file: businessData.documents.passportPhoto },
-    { key: 'boardResolution', label: 'Board resolution', file: businessData.documents.boardResolution },
+    ...productAttachments,
+    ...collateralAttachments,
     ...(businessData.documents.directorUploads || []).flatMap((upload, index) => [
-      { key: `director-${index}-nrc`, label: `Director ${index + 1} NRC upload`, file: upload.nrc },
-      { key: `director-${index}-photo`, label: `Director ${index + 1} passport photo`, file: upload.passportPhoto },
+      { key: `director-${index}-nrc`, label: `${people.one} ${index + 1} NRC upload`, file: upload.nrc },
+      { key: `director-${index}-photo`, label: `${people.one} ${index + 1} passport photo`, file: upload.passportPhoto },
     ]),
   ]
+
+  /** The upload fields for the product's documents, or a note when it asks for none. */
+  const renderProductDocuments = () =>
+    product.documents.length ? (
+      presentDocuments(product, activeData).map((document) =>
+        document.skipped ? (
+          <div key={document.slot} className="rounded-md border border-dashed bg-muted/30 px-4 py-3 text-sm">
+            <p className="font-medium text-foreground">{document.label}</p>
+            <p className="mt-0.5 text-muted-foreground">{document.skipped}</p>
+          </div>
+        ) : renderUploadField(
+          document.label,
+          document.slot,
+          readDocument(activeData.documents, document.slot),
+          document.required,
+          acceptsPhotos(document.slot) ? 'application/pdf,image/*' : '.pdf',
+          `documents.${document.slot}`,
+          document.slot === 'passportPhoto',
+          document.description
+        )
+      )
+    ) : (
+      <p className="text-sm text-muted-foreground md:col-span-2">This loan doesn’t need any documents from you.</p>
+    )
+
+  // Said on the documents step, so collateral proof isn't looked for here.
+  const collateralNext =
+    collateralRule !== 'none' ? (
+      <p className="flex items-start gap-2 rounded-md bg-accent/60 px-4 py-3 text-sm text-accent-foreground md:col-span-2">
+        <Landmark className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+        <span>
+          This loan {collateralRule === 'required' ? 'needs' : 'can take'} collateral. You’ll list what you’re pledging, and attach its proof, on the next step.
+        </span>
+      </p>
+    ) : null
+
+  const collateralSummaryRows = collateralItems.map((item, index) =>
+    renderSummaryRow(
+      `${typeLabel(item.type, collateralTypes)}${collateralItems.length > 1 ? ` (${index + 1})` : ''}`,
+      [item.description, Number(item.value) > 0 ? formatKwacha(item.value) : ''].filter(Boolean).join(' · ')
+    )
+  )
+
+  const renderCollateralSummary = () =>
+    collateralRule === 'none' ? null : renderSummarySection('Collateral', collateralSummaryRows.length ? collateralSummaryRows : [renderSummaryRow('Pledged', 'None')], 3)
 
   // ---------------------------------------------------------------------------
   // Steps
   // ---------------------------------------------------------------------------
 
-  const renderLoanTerms = () => (
-    <div className="grid gap-6 xl:grid-cols-[1.35fr_1fr]">
-      <FieldGroup title="Choose your loan" description="Drag the slider or type an exact amount." icon={Wallet} columns={2}>
-        <div className="md:col-span-2">
-          <p className="text-sm text-muted-foreground">Loan amount</p>
-          <p className="mt-1 text-4xl font-bold tracking-tight text-foreground">
-            K{loanData.amount.toLocaleString()}
-          </p>
-          <input
-            type="range"
-            min={minAmount}
-            max={maxAmount}
-            step="100"
-            value={loanData.amount}
-            onChange={(event) => setLoanData((prev) => ({ ...prev, amount: Number(event.target.value) }))}
-            aria-label="Loan amount"
-            className="mt-5 w-full accent-primary"
-          />
-          <div className="mt-2 flex justify-between text-xs font-medium text-muted-foreground">
-            <span>K{minAmount.toLocaleString()}</span>
-            <span>K{maxAmount.toLocaleString()}</span>
+  /**
+   * What the applicant pledges, when the product asks: a row per item (kind, description,
+   * estimated value) with an optional proof each. The minimum cover follows the amount.
+   */
+  const renderCollateral = () => {
+    const types = acceptedTypes(product, collateralTypes)
+    const cover = Number(product.collateral?.minCoverage) || 0
+    const needed = cover > 0 ? Math.ceil(loanData.amount * cover) : 0
+    const pledged = collateralValue(collateralItems)
+    const required = collateralRule === 'required'
+    return (
+      <fieldset className="rounded-lg border bg-card p-5 shadow-soft sm:p-6">
+        <legend className="sr-only">Collateral</legend>
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border pb-4">
+          <div className="flex items-start gap-3">
+            <span className="grid size-9 shrink-0 place-items-center rounded-md bg-accent text-accent-foreground">
+              <Landmark className="size-4" aria-hidden="true" />
+            </span>
+            <div>
+              <h2 className="flex items-baseline gap-2 text-base font-semibold tracking-tight">
+                Collateral
+                <span className={required ? 'text-xs font-medium text-destructive' : 'text-xs font-normal text-muted-foreground'}>
+                  {COLLATERAL_REQUIREMENTS[collateralRule]?.label.toLowerCase()}
+                </span>
+              </h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {required ? 'This loan needs security. List what you are pledging and what each item is worth.' : 'You can pledge security for this loan. List each item and what it is worth.'}
+                {needed ? ` Pledge at least ${formatKwacha(needed)}: ${Math.round(cover * 100)}% of the loan.` : ''}
+              </p>
+            </div>
           </div>
+          {collateralItems.length < MAX_COLLATERAL_ITEMS ? (
+            <Button type="button" variant="outline" size="sm" onClick={addCollateralItem}>
+              <Plus />
+              {collateralItems.length ? 'Add another item' : 'Add an item'}
+            </Button>
+          ) : null}
         </div>
 
-        {renderField('Enter amount', loanData.amount, (value) => {
-          const amount = Number(value.replace(/[^0-9]/g, '') || 0)
-          const constrained = Math.min(Math.max(amount, minAmount), maxAmount)
-          setLoanData((prev) => ({ ...prev, amount: constrained }))
-        }, 'number', `Between ${minAmount} and ${maxAmount}`, { min: minAmount, max: maxAmount }, true)}
+        {validationErrors.collateral ? (
+          <p id="field-collateral" tabIndex={-1} role="alert" className="mt-4 text-sm font-medium text-destructive">
+            {validationErrors.collateral}
+          </p>
+        ) : null}
 
-        {renderField('Tenure (months)', loanData.tenure, (value) => {
-          const tenure = Number(value)
-          if (tenure >= minTenure && tenure <= maxTenure) {
-            setLoanData((prev) => ({ ...prev, tenure }))
-          }
-        }, 'number', `${minTenure} to ${maxTenure}`, { min: minTenure, max: maxTenure }, true)}
-      </FieldGroup>
+        <div className="mt-5 space-y-4">
+          {collateralItems.length ? (
+            collateralItems.map((item, index) => (
+              <div key={index} className="rounded-md border border-border bg-secondary/40 p-4">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <Badge variant="secondary">Item {index + 1}</Badge>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => removeCollateralItem(index)}
+                    className="h-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  >
+                    <Trash2 />
+                    Remove
+                  </Button>
+                </div>
+                <div className="grid gap-5 md:grid-cols-3">
+                  <FormField name={`collateral.items.${index}.type`} label="Kind of collateral" required error={validationErrors[`collateral.items.${index}.type`]} hint={types.find((type) => type.key === item.type)?.description}>
+                    {(field) => (
+                      <Select {...field} value={item.type || ''} onChange={(event) => updateCollateralItem(index, 'type', event.target.value)}>
+                        <option value="">Select a kind</option>
+                        {types.map((type) => (
+                          <option key={type.key} value={type.key}>
+                            {type.label}
+                          </option>
+                        ))}
+                      </Select>
+                    )}
+                  </FormField>
+                  <FormField name={`collateral.items.${index}.description`} label="Description" required error={validationErrors[`collateral.items.${index}.description`]} hint="For example make and registration, or plot number.">
+                    {(field) => <Input {...field} value={item.description || ''} maxLength={200} onChange={(event) => updateCollateralItem(index, 'description', event.target.value)} />}
+                  </FormField>
+                  <FormField name={`collateral.items.${index}.value`} label="Estimated value (K)" required error={validationErrors[`collateral.items.${index}.value`]}>
+                    {(field) => <Input {...field} inputMode="numeric" value={item.value || ''} placeholder="e.g. 150000" onChange={(event) => updateCollateralItem(index, 'value', event.target.value)} />}
+                  </FormField>
+                  <div className="md:col-span-3">
+                    {renderUploadField(
+                      'Proof of ownership or value',
+                      `collateral.${index}`,
+                      readDocument(activeData.documents, `collateral.${index}`),
+                      false,
+                      'application/pdf,image/*',
+                      `documents.collateral.${index}`,
+                      false,
+                      'For example a title deed, white book, valuation or invoice.'
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))
+          ) : (
+            <p className="text-sm text-muted-foreground">{required ? 'Add at least one item.' : 'No collateral added.'}</p>
+          )}
+          {collateralItems.length ? (
+            <p className="text-sm text-muted-foreground">
+              Total pledged: <span className="font-semibold text-foreground">{formatKwacha(pledged)}</span>
+              {needed ? ` of ${formatKwacha(needed)} needed` : ''}
+            </p>
+          ) : null}
+        </div>
+      </fieldset>
+    )
+  }
+
+  const renderLoanTerms = () => (
+    <div className="grid gap-6 xl:grid-cols-[1.35fr_1fr]">
+      <div className="grid content-start gap-6">
+        <FieldGroup title="Choose your loan" description="Drag the slider or type an exact amount." icon={Wallet} columns={2}>
+          <div className="md:col-span-2">
+            <p className="text-sm text-muted-foreground">Loan amount</p>
+            <p className="mt-1 text-4xl font-bold tracking-tight text-foreground">
+              K{loanData.amount.toLocaleString()}
+            </p>
+            <input
+              type="range"
+              min={minAmount}
+              max={maxAmount}
+              step="100"
+              value={loanData.amount}
+              onChange={(event) => setLoanData((prev) => ({ ...prev, amount: Number(event.target.value) }))}
+              aria-label="Loan amount"
+              className="mt-5 w-full accent-primary"
+            />
+            <div className="mt-2 flex justify-between text-xs font-medium text-muted-foreground">
+              <span>K{minAmount.toLocaleString()}</span>
+              <span>K{maxAmount.toLocaleString()}</span>
+            </div>
+          </div>
+
+          {renderField('Enter amount', loanData.amount, (value) => {
+            const amount = Number(value.replace(/[^0-9]/g, '') || 0)
+            const constrained = Math.min(Math.max(amount, minAmount), maxAmount)
+            setLoanData((prev) => ({ ...prev, amount: constrained }))
+          }, 'number', `Between ${minAmount} and ${maxAmount}`, { min: minAmount, max: maxAmount }, true)}
+
+          {renderField('Tenure (months)', loanData.tenure, (value) => {
+            const tenure = Number(value)
+            if (tenure >= minTenure && tenure <= maxTenure) {
+              setLoanData((prev) => ({ ...prev, tenure }))
+            }
+          }, 'number', `${minTenure} to ${maxTenure}`, { min: minTenure, max: maxTenure }, true)}
+        </FieldGroup>
+
+        {collateralRule !== 'none' ? renderCollateral() : null}
+      </div>
 
       <div className="xl:sticky xl:top-8 xl:self-start">
         <div className="rounded-lg border bg-card p-6 shadow-soft">
@@ -397,14 +567,14 @@ export function WizardStep(props) {
   const renderPersonalOverview = () => (
     <div className="grid gap-6">
       {overviewIntro}
-      <ApplicationSummary loanTypeLabel="Personal Loan" generatedOn={generatedOn}>
+      <ApplicationSummary loanTypeLabel={product.name} generatedOn={generatedOn}>
         <div className="grid gap-5 pt-5">
           <SummaryHighlights items={summaryHighlights} />
           {renderSummarySection('Personal information', [
           renderSummaryRow('Full name', [personalData.personalInfo.firstName, personalData.personalInfo.middleName, personalData.personalInfo.surname].filter(Boolean).join(' ')),
           renderSummaryRow('Phone', personalData.personalInfo.phone),
           renderSummaryRow('Email', personalData.personalInfo.email),
-          renderSummaryRow('NRC', personalData.personalInfo.nrc),
+          isZambianApplicant ? renderSummaryRow('NRC', personalData.personalInfo.nrc) : renderSummaryRow('Passport number', personalData.personalInfo.passportNumber),
           renderSummaryRow('Gender', personalData.personalInfo.gender),
           renderSummaryRow('Marital status', personalData.personalInfo.maritalStatus),
           renderSummaryRow('Birth date', personalData.personalInfo.birthDate),
@@ -412,7 +582,7 @@ export function WizardStep(props) {
           {renderSummarySection('Residence & Employment', [
           renderSummaryRow('Residential address', personalData.employmentInfo.residentialAddress),
           renderSummaryRow('Occupation', personalData.employmentInfo.occupation),
-          renderSummaryRow('Employer name', personalData.employmentInfo.employerName),
+          employerField(personalData.employmentInfo.occupation) ? renderSummaryRow(employerField(personalData.employmentInfo.occupation).label, personalData.employmentInfo.employerName) : null,
           renderSummaryRow('Nationality', personalData.employmentInfo.nationality),
           renderSummaryRow('Principal objective of loan', personalData.employmentInfo.principalObjectiveOfLoan),
           renderSummaryRow('Next of kin', personalData.employmentInfo.nextOfKinName),
@@ -426,6 +596,7 @@ export function WizardStep(props) {
           </SummarySection>
 
           {renderSummarySection('Loan terms', loanTermRows, 3)}
+          {renderCollateralSummary()}
         </div>
       </ApplicationSummary>
     </div>
@@ -434,7 +605,7 @@ export function WizardStep(props) {
   const renderBusinessOverview = () => (
     <div className="grid gap-6">
       {overviewIntro}
-      <ApplicationSummary loanTypeLabel="Business Loan" generatedOn={generatedOn}>
+      <ApplicationSummary loanTypeLabel={product.name} generatedOn={generatedOn}>
         <div className="grid gap-5 pt-5">
           <SummaryHighlights items={summaryHighlights} />
           {renderSummarySection('Business information', [
@@ -444,28 +615,27 @@ export function WizardStep(props) {
             renderSummaryRow('Established date', businessData.businessInfo.establishedDate),
             renderSummaryRow('Nature of business', businessData.businessInfo.natureOfBusiness),
             renderSummaryRow('Registered office', businessData.businessInfo.registeredOffice),
-            renderSummaryRow('Collateral pledged', businessData.businessInfo.collateralPledged),
             renderSummaryRow('Purpose of loan', businessData.businessInfo.purposeOfLoan),
           ], 0)}
           {renderSummarySection('Applicant', [
             renderSummaryRow('Full name', [businessData.directorInfo.applicantFirstName, businessData.directorInfo.applicantMiddleName, businessData.directorInfo.applicantLastName].filter(Boolean).join(' ')),
             renderSummaryRow('Phone', businessData.directorInfo.applicantPhone),
             renderSummaryRow('Email', businessData.directorInfo.applicantEmail),
-            renderSummaryRow('NRC', businessData.directorInfo.applicantNrc),
+            idField(businessData.directorInfo.applicantNationality).kind === 'nrc' ? renderSummaryRow('NRC', businessData.directorInfo.applicantNrc) : renderSummaryRow('Passport number', businessData.directorInfo.applicantPassportNumber),
             renderSummaryRow('Gender', businessData.directorInfo.applicantGender),
             renderSummaryRow('Marital status', businessData.directorInfo.applicantMaritalStatus),
             renderSummaryRow('Birth date', businessData.directorInfo.applicantBirthDate),
             renderSummaryRow('Address', businessData.directorInfo.applicantAddress),
-            renderSummaryRow('Position', businessData.directorInfo.applicantPosition),
+            renderSummaryRow('Position', positionLabel(businessData.directorInfo)),
             renderSummaryRow('Nationality', businessData.directorInfo.applicantNationality),
           ], 1)}
           {renderSummarySection(
-            'Directors',
+            people.many,
             businessData.directorInfo.directors.flatMap((director, index) => [
-              renderSummaryRow(`Director ${index + 1} name`, director.name),
-              renderSummaryRow(`Director ${index + 1} phone`, director.phone),
-              renderSummaryRow(`Director ${index + 1} email`, director.email),
-              renderSummaryRow(`Director ${index + 1} NRC`, director.nrc),
+              renderSummaryRow(`${people.one} ${index + 1} name`, director.name),
+              renderSummaryRow(`${people.one} ${index + 1} phone`, director.phone),
+              renderSummaryRow(`${people.one} ${index + 1} email`, director.email),
+              renderSummaryRow(`${people.one} ${index + 1} NRC`, director.nrc),
             ]),
             1
           )}
@@ -475,6 +645,7 @@ export function WizardStep(props) {
           </SummarySection>
 
           {renderSummarySection('Loan terms', loanTermRows, 3)}
+          {renderCollateralSummary()}
         </div>
       </ApplicationSummary>
     </div>
@@ -486,7 +657,7 @@ export function WizardStep(props) {
         case 0:
           return (
             <div className="grid gap-6">
-              <FieldGroup title="Your name" description="Enter your names exactly as they appear on your NRC." icon={User} columns={3}>
+              <FieldGroup title="Your name" description="Enter your names exactly as they appear on your NRC or passport." icon={User} columns={3}>
                 {renderField('First name', personalData.personalInfo.firstName, (value) => updateSectionField('personalInfo', 'firstName', value, 'alpha'), 'text', '', {}, true, 'personalInfo.firstName')}
                 {renderField('Middle name (Optional)', personalData.personalInfo.middleName, (value) => updateSectionField('personalInfo', 'middleName', value, 'alpha'), 'text', '', {}, false)}
                 {renderField('Surname', personalData.personalInfo.surname, (value) => updateSectionField('personalInfo', 'surname', value, 'alpha'), 'text', '', {}, true, 'personalInfo.surname')}
@@ -498,7 +669,11 @@ export function WizardStep(props) {
               </FieldGroup>
 
               <FieldGroup title="Identity" icon={Fingerprint} columns={2}>
-                {renderField('NRC', personalData.personalInfo.nrc, (value) => updateSectionField('personalInfo', 'nrc', value, 'nrc'), 'text', '123456/78/9', { maxLength: 12 }, true, 'personalInfo.nrc')}
+                {/* Asked first, so the ID that follows is the right one: an NRC for Zambians, a passport for anyone else. */}
+                {renderSelectField('Nationality', personalData.employmentInfo.nationality, (value) => updateSectionField('employmentInfo', 'nationality', value), NATIONALITY_OPTIONS, 'Select nationality', true, 'employmentInfo.nationality')}
+                {idField(personalData.employmentInfo.nationality).kind === 'nrc'
+                  ? renderField('NRC', personalData.personalInfo.nrc, (value) => updateSectionField('personalInfo', 'nrc', value, 'nrc'), 'text', '123456/78/9', { maxLength: 12 }, true, 'personalInfo.nrc')
+                  : renderField('Passport number', personalData.personalInfo.passportNumber, (value) => updateSectionField('personalInfo', 'passportNumber', value.toUpperCase().replace(/[^A-Z0-9]/g, '')), 'text', 'As printed in your passport', { maxLength: 12 }, true, 'personalInfo.passportNumber')}
                 {renderBirthDateField('Birth date', personalData.personalInfo.birthDate, (value) => updateSectionField('personalInfo', 'birthDate', value), true, 'personalInfo.birthDate')}
                 {renderSelectField('Gender', personalData.personalInfo.gender, (value) => updateSectionField('personalInfo', 'gender', value, 'alpha'), GENDER_OPTIONS, 'Select gender', true, 'personalInfo.gender')}
                 {renderSelectField('Marital status', personalData.personalInfo.maritalStatus, (value) => updateSectionField('personalInfo', 'maritalStatus', value, 'alpha'), MARITAL_STATUS_OPTIONS, 'Select marital status', true, 'personalInfo.maritalStatus')}
@@ -510,9 +685,12 @@ export function WizardStep(props) {
             <div className="grid gap-6">
               <FieldGroup title="Residence & employment" description="Where you live and what you do." icon={Briefcase} columns={3}>
                 {renderField('Residential address', personalData.employmentInfo.residentialAddress, (value) => updateSectionField('employmentInfo', 'residentialAddress', value), 'text', '', {}, true, 'employmentInfo.residentialAddress')}
-                {renderField('Occupation', personalData.employmentInfo.occupation, (value) => updateSectionField('employmentInfo', 'occupation', value), 'text', '', {}, true, 'employmentInfo.occupation')}
-                {renderField('Employer name', personalData.employmentInfo.employerName, (value) => updateSectionField('employmentInfo', 'employerName', value), 'text', '', {}, true, 'employmentInfo.employerName')}
-                {renderSelectField('Nationality', personalData.employmentInfo.nationality, (value) => updateSectionField('employmentInfo', 'nationality', value), NATIONALITY_OPTIONS, 'Select nationality', true, 'employmentInfo.nationality')}
+                {renderSelectField('Occupation', personalData.employmentInfo.occupation, (value) => {
+                  updateSectionField('employmentInfo', 'occupation', value)
+                  // Retired, students and those not working have no employer or business to name.
+                  if (!employerField(value)) updateSectionField('employmentInfo', 'employerName', '')
+                }, EMPLOYMENT_OPTIONS, 'Select occupation', true, 'employmentInfo.occupation')}
+                {employerField(personalData.employmentInfo.occupation) ? renderField(employerField(personalData.employmentInfo.occupation).label, personalData.employmentInfo.employerName, (value) => updateSectionField('employmentInfo', 'employerName', value), 'text', '', {}, true, 'employmentInfo.employerName') : null}
                 {renderField('Principal objective of loan', personalData.employmentInfo.principalObjectiveOfLoan, (value) => updateSectionField('employmentInfo', 'principalObjectiveOfLoan', value), 'text', '', {}, true, 'employmentInfo.principalObjectiveOfLoan')}
               </FieldGroup>
 
@@ -527,11 +705,8 @@ export function WizardStep(props) {
         case 2:
           return (
             <FieldGroup title="Supporting documents" description="Attach each document below. They are sent when you submit the application." icon={FolderOpen} columns={2}>
-              {renderUploadField('Latest three payslips', 'payslips', personalData.documents.payslips, true, '.pdf', 'documents.payslips')}
-              {renderUploadField('Bank statements (3 months)', 'bankStatements', personalData.documents.bankStatements, true, '.pdf', 'documents.bankStatements')}
-              {renderUploadField('NRC copy', 'nrcCopy', personalData.documents.nrcCopy, true, '.pdf', 'documents.nrcCopy')}
-              {renderUploadField('TPIN certificate', 'tpin', personalData.documents.tpin, true, '.pdf', 'documents.tpin')}
-              {renderUploadField('Passport-sized photo', 'passportPhoto', personalData.documents.passportPhoto, true, 'application/pdf,image/*', 'documents.passportPhoto', true)}
+              {renderProductDocuments()}
+              {collateralNext}
             </FieldGroup>
           )
         case 3:
@@ -555,9 +730,8 @@ export function WizardStep(props) {
               {renderField('Nature of business', businessData.businessInfo.natureOfBusiness, (value) => updateSectionField('businessInfo', 'natureOfBusiness', value), 'text', '', {}, true, 'businessInfo.natureOfBusiness')}
             </FieldGroup>
 
-            <FieldGroup title="Office & loan purpose" icon={Home} columns={3}>
+            <FieldGroup title="Office & loan purpose" icon={Home} columns={2}>
               {renderField('Registered office', businessData.businessInfo.registeredOffice, (value) => updateSectionField('businessInfo', 'registeredOffice', value), 'text', '', {}, true, 'businessInfo.registeredOffice')}
-              {renderField('Collateral pledged', businessData.businessInfo.collateralPledged, (value) => updateSectionField('businessInfo', 'collateralPledged', value), 'text', '', {}, true, 'businessInfo.collateralPledged')}
               {renderField('Purpose of loan', businessData.businessInfo.purposeOfLoan, (value) => updateSectionField('businessInfo', 'purposeOfLoan', value), 'text', '', {}, true, 'businessInfo.purposeOfLoan')}
             </FieldGroup>
           </div>
@@ -566,23 +740,25 @@ export function WizardStep(props) {
         return (
           <div className="grid gap-6">
             <fieldset className="rounded-lg border bg-card p-5 shadow-soft sm:p-6">
-              <legend className="sr-only">Directors</legend>
+              <legend className="sr-only">{people.many}</legend>
               <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border pb-4">
                 <div className="flex items-start gap-3">
                   <span className="grid size-9 shrink-0 place-items-center rounded-md bg-accent text-accent-foreground">
                     <Users className="size-4" aria-hidden="true" />
                   </span>
                   <div>
-                    <h2 className="text-base font-semibold tracking-tight">Directors</h2>
+                    <h2 className="text-base font-semibold tracking-tight">{people.many}</h2>
                     <p className="mt-1 text-sm text-muted-foreground">
-                      Add up to 3 directors. Each director requires a name, phone, email, and NRC.
+                      {people.max === 1
+                        ? `The ${people.one.toLowerCase()}’s name, phone, email and NRC.`
+                        : `Add up to ${people.max} ${people.many.toLowerCase()}. Each needs a name, phone, email and NRC.`}
                     </p>
                   </div>
                 </div>
-                {businessData.directorInfo.directors.length < 3 && (
+                {businessData.directorInfo.directors.length < people.max && (
                   <Button type="button" variant="outline" size="sm" onClick={addDirector}>
                     <Plus />
-                    Add director
+                    Add {people.one.toLowerCase()}
                   </Button>
                 )}
               </div>
@@ -591,7 +767,9 @@ export function WizardStep(props) {
                 {businessData.directorInfo.directors.map((director, index) => (
                   <div key={index} className="rounded-md border border-border bg-secondary/40 p-4">
                     <div className="mb-4 flex items-center justify-between gap-3">
-                      <Badge variant="secondary">Director {index + 1}</Badge>
+                      <Badge variant="secondary">
+                        {people.one} {index + 1}
+                      </Badge>
                       {index > 0 && (
                         <Button
                           type="button"
@@ -606,10 +784,10 @@ export function WizardStep(props) {
                       )}
                     </div>
                     <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-                      {renderField(`Director ${index + 1} name`, director.name, (value) => updateDirectorField(index, 'name', value, 'alpha'), 'text', '', {}, true, `directorInfo.directors[${index}].name`)}
-                      {renderField(`Director ${index + 1} phone`, director.phone, (value) => updateDirectorField(index, 'phone', value, 'phone'), 'tel', '123456789', { maxLength: 9 }, true, `directorInfo.directors[${index}].phone`)}
-                      {renderField(`Director ${index + 1} email`, director.email, (value) => updateDirectorField(index, 'email', value, 'email'), 'email', 'name@example.com', {}, true, `directorInfo.directors[${index}].email`)}
-                      {renderField(`Director ${index + 1} NRC`, director.nrc, (value) => updateDirectorField(index, 'nrc', value, 'nrc'), 'text', '123456/78/9', { maxLength: 12 }, true, `directorInfo.directors[${index}].nrc`)}
+                      {renderField(`${people.one} ${index + 1} name`, director.name, (value) => updateDirectorField(index, 'name', value, 'alpha'), 'text', '', {}, true, `directorInfo.directors[${index}].name`)}
+                      {renderField(`${people.one} ${index + 1} phone`, director.phone, (value) => updateDirectorField(index, 'phone', value, 'phone'), 'tel', '123456789', { maxLength: 9 }, true, `directorInfo.directors[${index}].phone`)}
+                      {renderField(`${people.one} ${index + 1} email`, director.email, (value) => updateDirectorField(index, 'email', value, 'email'), 'email', 'name@example.com', {}, true, `directorInfo.directors[${index}].email`)}
+                      {renderField(`${people.one} ${index + 1} NRC`, director.nrc, (value) => updateDirectorField(index, 'nrc', value, 'nrc'), 'text', '123456/78/9', { maxLength: 12 }, true, `directorInfo.directors[${index}].nrc`)}
                     </div>
                   </div>
                 ))}
@@ -625,7 +803,10 @@ export function WizardStep(props) {
             <FieldGroup title="Applicant contact & identity" icon={Fingerprint} columns={3}>
               {renderField('Applicant phone', businessData.directorInfo.applicantPhone, (value) => updateSectionField('directorInfo', 'applicantPhone', value, 'phone'), 'tel', '123456789', { maxLength: 9 }, true, 'directorInfo.applicantPhone')}
               {renderField('Applicant email', businessData.directorInfo.applicantEmail, (value) => updateSectionField('directorInfo', 'applicantEmail', value, 'email'), 'email', 'you@example.com', {}, true, 'directorInfo.applicantEmail')}
-              {renderField('Applicant NRC', businessData.directorInfo.applicantNrc, (value) => updateSectionField('directorInfo', 'applicantNrc', value, 'nrc'), 'text', '123456/78/9', { maxLength: 12 }, true, 'directorInfo.applicantNrc')}
+              {renderSelectField('Applicant nationality', businessData.directorInfo.applicantNationality, (value) => updateSectionField('directorInfo', 'applicantNationality', value), NATIONALITY_OPTIONS, 'Select nationality', true, 'directorInfo.applicantNationality')}
+              {idField(businessData.directorInfo.applicantNationality).kind === 'nrc'
+                ? renderField('Applicant NRC', businessData.directorInfo.applicantNrc, (value) => updateSectionField('directorInfo', 'applicantNrc', value, 'nrc'), 'text', '123456/78/9', { maxLength: 12 }, true, 'directorInfo.applicantNrc')
+                : renderField('Applicant passport number', businessData.directorInfo.applicantPassportNumber, (value) => updateSectionField('directorInfo', 'applicantPassportNumber', value.toUpperCase().replace(/[^A-Z0-9]/g, '')), 'text', 'As printed in the passport', { maxLength: 12 }, true, 'directorInfo.applicantPassportNumber')}
               {renderBirthDateField('Birth date', businessData.directorInfo.applicantBirthDate, (value) => updateSectionField('directorInfo', 'applicantBirthDate', value), true, 'directorInfo.applicantBirthDate')}
               {renderSelectField('Applicant gender', businessData.directorInfo.applicantGender, (value) => updateSectionField('directorInfo', 'applicantGender', value, 'alpha'), GENDER_OPTIONS, 'Select gender', true, 'directorInfo.applicantGender')}
               {renderSelectField('Marital status', businessData.directorInfo.applicantMaritalStatus, (value) => updateSectionField('directorInfo', 'applicantMaritalStatus', value, 'alpha'), MARITAL_STATUS_OPTIONS, 'Select marital status', true, 'directorInfo.applicantMaritalStatus')}
@@ -633,8 +814,8 @@ export function WizardStep(props) {
 
             <FieldGroup title="Applicant address & role" icon={Home} columns={2}>
               {renderField('Applicant address', businessData.directorInfo.applicantAddress, (value) => updateSectionField('directorInfo', 'applicantAddress', value), 'text', '', {}, true, 'directorInfo.applicantAddress')}
-              {renderField('Applicant position', businessData.directorInfo.applicantPosition, (value) => updateSectionField('directorInfo', 'applicantPosition', value), 'text', '', {}, true, 'directorInfo.applicantPosition')}
-              {renderSelectField('Applicant nationality', businessData.directorInfo.applicantNationality, (value) => updateSectionField('directorInfo', 'applicantNationality', value), NATIONALITY_OPTIONS, 'Select nationality', true, 'directorInfo.applicantNationality')}
+              {renderSelectField('Applicant position', businessData.directorInfo.applicantPosition, (value) => updateSectionField('directorInfo', 'applicantPosition', value), positionsFor(businessData.businessInfo.businessType), 'Select position', true, 'directorInfo.applicantPosition')}
+              {businessData.directorInfo.applicantPosition === 'Other' ? renderField('Your position', businessData.directorInfo.applicantPositionOther, (value) => updateSectionField('directorInfo', 'applicantPositionOther', value), 'text', 'e.g. Finance manager', {}, true, 'directorInfo.applicantPositionOther') : null}
             </FieldGroup>
           </div>
         )
@@ -642,14 +823,8 @@ export function WizardStep(props) {
         return (
           <div className="grid gap-6">
             <FieldGroup title="Company documents" description="Attach each document below. They are sent when you submit the application." icon={FolderOpen} columns={2}>
-              {renderUploadField('PACRA certificate', 'pacraCertificate', businessData.documents.pacraCertificate, true, '.pdf', 'documents.pacraCertificate')}
-              {renderUploadField('Form 2', 'form2', businessData.documents.form2, true, '.pdf', 'documents.form2')}
-              {renderUploadField('Tax clearance certificate / TPIN', 'taxClearance', businessData.documents.taxClearance, true, '.pdf', 'documents.taxClearance')}
-              {renderUploadField('Latest tax compliance return', 'latestTaxComplianceReturn', businessData.documents.latestTaxComplianceReturn, true, '.pdf', 'documents.latestTaxComplianceReturn')}
-              {renderUploadField('Order / Invoice (if applying for order financing or invoice discounting)', 'orderOrInvoice', businessData.documents.orderOrInvoice, false, '.pdf', 'documents.orderOrInvoice')}
-              {renderUploadField('Bank statements (6 months)', 'bankStatements', businessData.documents.bankStatements, true, '.pdf', 'documents.bankStatements')}
-              {renderUploadField('Board resolution', 'boardResolution', businessData.documents.boardResolution, true, '.pdf', 'documents.boardResolution')}
-              {renderUploadField('Applicant Passport-sized photo', 'passportPhoto', businessData.documents.passportPhoto, true, 'application/pdf,image/*', 'documents.passportPhoto', true)}
+              {renderProductDocuments()}
+              {collateralNext}
             </FieldGroup>
 
             <fieldset className="rounded-lg border bg-card p-5 shadow-soft sm:p-6">
@@ -660,16 +835,16 @@ export function WizardStep(props) {
                     <Users className="size-4" aria-hidden="true" />
                   </span>
                   <div>
-                    <h2 className="text-base font-semibold tracking-tight">Director documents</h2>
+                    <h2 className="text-base font-semibold tracking-tight">{people.one} documents</h2>
                     <p className="mt-1 text-sm text-muted-foreground">
-                      Add up to 3 director NRC and passport photo uploads.
+                      An NRC and a passport photo for each {people.one.toLowerCase()}.
                     </p>
                   </div>
                 </div>
-                {(businessData.documents.directorUploads || []).length < 3 && (
+                {(businessData.documents.directorUploads || []).length < people.max && (
                   <Button type="button" variant="outline" size="sm" onClick={addDirectorUpload}>
                     <Plus />
-                    Add director upload
+                    Add {people.one.toLowerCase()} upload
                   </Button>
                 )}
               </div>
@@ -678,7 +853,9 @@ export function WizardStep(props) {
                 {(businessData.documents.directorUploads || []).map((upload, index) => (
                   <div key={index} className="rounded-md border border-border bg-secondary/40 p-4">
                     <div className="mb-4 flex items-center justify-between gap-3">
-                      <Badge variant="secondary">Director {index + 1}</Badge>
+                      <Badge variant="secondary">
+                        {people.one} {index + 1}
+                      </Badge>
                       {index > 0 && (
                         <Button
                           type="button"

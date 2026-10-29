@@ -61,6 +61,7 @@ export function ApplicationsPage() {
   const filters = {
     status: params.get('status') || 'open',
     loanType: params.get('loanType') || 'all',
+    product: params.get('product') || 'all',
     channel: params.get('channel') || 'all',
     assigned: params.get('assigned') || 'all',
     sort: params.get('sort') || 'newest',
@@ -142,7 +143,7 @@ export function ApplicationsPage() {
           row.reference,
           row.applicantName,
           row.companyName || '',
-          LOAN_TYPE_LABELS[row.loanType],
+          row.productName || LOAN_TYPE_LABELS[row.loanType],
           row.amount,
           row.tenure,
           statusLabel(row.status),
@@ -162,7 +163,7 @@ export function ApplicationsPage() {
   }
 
   const pages = Math.max(1, Math.ceil(result.total / (result.pageSize || 25)))
-  const hasFilters = filters.loanType !== 'all' || filters.channel !== 'all' || filters.assigned !== 'all' || filters.q
+  const hasFilters = filters.loanType !== 'all' || filters.product !== 'all' || filters.channel !== 'all' || filters.assigned !== 'all' || filters.q
 
   return (
     <div className="space-y-6">
@@ -241,10 +242,14 @@ export function ApplicationsPage() {
         </div>
         <div className="grid grid-cols-2 gap-3 sm:flex">
           <div className="sm:w-40">
-            <Select aria-label="Product" value={filters.loanType} onChange={(event) => setFilter('loanType', event.target.value)} className="h-10 text-sm">
+            <Select aria-label="Product" value={filters.product} onChange={(event) => setFilter('product', event.target.value)} className="h-10 text-sm">
               <option value="all">All products</option>
-              <option value="personal">Personal</option>
-              <option value="business">Business</option>
+              {(result.products || [{ id: 'personal', name: LOAN_TYPE_LABELS.personal }, { id: 'business', name: LOAN_TYPE_LABELS.business }]).map((product) => (
+                <option key={product.id} value={product.id}>
+                  {product.name}
+                  {product.enabled === false ? ' (off)' : ''}
+                </option>
+              ))}
             </Select>
           </div>
           <div className="sm:w-44">
@@ -316,7 +321,7 @@ export function ApplicationsPage() {
                       <div className="min-w-0">
                         <p className="truncate font-medium text-foreground">{row.companyName || row.applicantName}</p>
                         <p className="text-xs text-muted-foreground">
-                          {row.reference}, {money(row.amount)} {LOAN_TYPE_LABELS[row.loanType].toLowerCase()}
+                          {row.reference}, {money(row.amount)} {(row.productName || LOAN_TYPE_LABELS[row.loanType]).toLowerCase()}
                         </p>
                       </div>
                       <StatusBadge status={row.status} label={statusLabel(row.status)} />
@@ -354,7 +359,7 @@ export function ApplicationsPage() {
                             <span className="block font-medium text-foreground group-hover:text-primary">{row.companyName || row.applicantName}</span>
                             <span className="block text-xs text-muted-foreground">
                               {row.reference}
-                              {row.companyName ? `, ${row.applicantName}` : ''}, {LOAN_TYPE_LABELS[row.loanType].toLowerCase()}
+                              {row.companyName ? `, ${row.applicantName}` : ''}, {(row.productName || LOAN_TYPE_LABELS[row.loanType]).toLowerCase()}
                             </span>
                           </Link>
                         </td>

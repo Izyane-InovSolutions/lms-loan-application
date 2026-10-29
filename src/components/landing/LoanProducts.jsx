@@ -11,7 +11,7 @@ export function LoanProducts({ onApply }) {
       <div className="container">
         <SectionHeading
           eyebrow="Our loans"
-          title="Two products, one straightforward form"
+          title={products.length === 1 ? 'One product, one straightforward form' : 'Pick the loan that fits'}
           description="Pick the journey that matches you. Each is priced simply — an interest rate plus a one-off facility fee, with no compounding."
         />
 
@@ -21,7 +21,7 @@ export function LoanProducts({ onApply }) {
               key={product.id}
               product={product}
               onApply={onApply}
-              featured={product.id === 'personal'}
+              featured={product.id === products[0]?.id}
             />
           ))}
         </div>

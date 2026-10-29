@@ -1,10 +1,12 @@
+import { sql } from 'drizzle-orm'
 import { requireUser } from '../_lib/rbac.js'
+import { getDb, schema } from '../_lib/db/client.js'
 import { fail, text } from '../_lib/http.js'
 import { recordAudit } from '../_lib/audit.js'
 import { getPublicSetting, getSetting, setSetting, SETTING_DEFAULTS } from '../_lib/settings.js'
 import { describeLms, getLms } from '../_lib/lms/index.js'
 import { createFrappeLms } from '../_lib/lms/frappe.js'
-import { getCrb } from '../_lib/crb/index.js'
+import { CrbError, crbProviderFor, describeCrb, product109ConfigFrom, refreshCrb, resolveCrb } from '../_lib/crb/index.js'
 import { describeAi, testAiService } from '../_lib/ai/index.js'
 import { parseServiceAccount } from '../_lib/ai/cloud/google.js'
 import { AI_CONNECTIONS, AI_FIELDS, AI_MODEL_PROVIDERS, OCR_ENGINES } from '../../src/config/aiProviders.js'
@@ -21,6 +23,8 @@ import { getZraConfig } from '../_lib/zra/config.js'
 
 const LEGACY_WORKFLOW_KEYS = ['workflow', 'offers', 'stages', 'lms']
 import { BRAND_NAME_MAX } from '../../src/config/branding.js'
+import { APPLICANT_FORMS, BUILT_IN_PRODUCT_IDS, DOCUMENT_CATALOGUE, PRODUCT_ID_PATTERN, buildProducts, defaultDocuments } from '../../src/config/loanProducts.js'
+import { COLLATERAL_REQUIREMENTS } from '../../src/config/collateral.js'
 import { isHexColour, normaliseTheme } from '../../src/config/theme.js'
 
 /*
@@ -28,7 +32,9 @@ import { isHexColour, normaliseTheme } from '../../src/config/theme.js'
  * validated here before it is stored; credentials are encrypted by settings.js.
  */
 
-const number = (value, { min = -Infinity, max = Infinity, integer = false, label }) => {
+const CRB_PROVIDERS = ['environment', 'none', 'demo', 'product109']
+
+const number =(value, { min = -Infinity, max = Infinity, integer = false, label }) => {
   const parsed = Number(value)
   if (!Number.isFinite(parsed) || parsed < min || parsed > max || (integer && !Number.isInteger(parsed))) {
     throw new Error(`${label} must be ${integer ? 'a whole number' : 'a number'}${Number.isFinite(min) ? ` from ${min}` : ''}${Number.isFinite(max) ? ` to ${max}` : ''}.`)
@@ -38,8 +44,7 @@ const number = (value, { min = -Infinity, max = Infinity, integer = false, label
 
 const optionalDays = (value, label) => (value === null || value === '' || value === undefined ? null : number(value, { min: 1, max: 3650, integer: true, label }))
 
-const validatePricing = (id, value) => {
-  const label = id === 'personal' ? 'Personal loan' : 'Business loan'
+const validatePricing = (id, value, label = id === 'personal' ? 'Personal loan' : 'Business loan') => {
   const pricing = {
     enabled: Boolean(value.enabled),
     minAmount: number(value.minAmount, { min: 1, label: `${label}: minimum amount` }),
@@ -59,6 +64,95 @@ const validatePricing = (id, value) => {
   if (pricing.exampleAmount < pricing.minAmount || pricing.exampleAmount > pricing.maxAmount) throw new Error(`${label}: the example amount must be within the amount range.`)
   if (pricing.facilityFeeType === 'percent' && pricing.facilityFee > 1) throw new Error(`${label}: a percentage fee is a fraction, e.g. 0.02 for 2%.`)
   return pricing
+}
+
+const CUSTOM_DOCUMENT_SLOT = /^custom\.[a-z0-9-]{2,40}$/
+
+/** A product's document list: catalogue documents of its form, or its own (custom.*), each once. */
+const validateProductDocuments = (form, value, label) => {
+  const catalogue = Object.fromEntries(DOCUMENT_CATALOGUE[form].map((entry) => [entry.slot, entry]))
+  const seen = new Set()
+  const documents = (Array.isArray(value) ? value : []).slice(0, 30).map((entry) => {
+    const slot = text(entry?.slot, 50)
+    const known = catalogue[slot]
+    if (!known && !CUSTOM_DOCUMENT_SLOT.test(slot)) throw new Error(`${label}: unknown document "${slot}".`)
+    if (seen.has(slot)) throw new Error(`${label}: "${known?.label || slot}" is listed twice.`)
+    seen.add(slot)
+    const name = text(entry.label, 80) || known?.label
+    if (!name) throw new Error(`${label}: every document needs a name.`)
+    return { slot, label: name, docType: known ? known.docType : 'custom', description: text(entry.description, 300), required: Boolean(entry.required) }
+  })
+  return documents
+}
+
+/** One product, built-in or added: its words, form, pricing, documents and collateral rules. */
+const validateProduct = (id, value, current, collateralTypes) => {
+  const builtIn = BUILT_IN_PRODUCT_IDS.includes(id)
+  const form = builtIn ? id : current?.form || value.form
+  if (!APPLICANT_FORMS[form]) throw new Error(`Choose the application form "${text(value.name, 80) || id}" uses.`)
+  const name = text(value.name, 80)
+  if (name.length < 3) throw new Error('Every loan product needs a name of at least 3 characters.')
+  const label = name
+  const requirement = Object.keys(COLLATERAL_REQUIREMENTS).includes(value.collateral?.requirement) ? value.collateral.requirement : 'none'
+  const known = new Set(collateralTypes.map((type) => type.key))
+  const coverage = value.collateral?.minCoverage
+  return {
+    ...validatePricing(id, value, label),
+    form,
+    name,
+    tagline: text(value.tagline, 120),
+    description: text(value.description, 600),
+    // Left out of the request: kept as they are (or the form's usual ones), never emptied by omission.
+    documents: value.documents === undefined ? current?.documents || defaultDocuments(form) : validateProductDocuments(form, value.documents, label),
+    collateral: {
+      requirement,
+      types: (Array.isArray(value.collateral?.types) ? value.collateral.types : []).filter((key, index, list) => known.has(key) && list.indexOf(key) === index),
+      minCoverage: requirement === 'none' || coverage === null || coverage === '' || coverage === undefined ? null : number(coverage, { min: 0.1, max: 10, label: `${label}: minimum collateral cover` }),
+    },
+    // Added products keep the time they were made, which orders them after the built-in ones.
+    ...(builtIn ? {} : { createdAt: current?.createdAt || new Date().toISOString() }),
+  }
+}
+
+const validateProducts = async (value) => {
+  const stored = await getSetting('products')
+  const { types } = await getSetting('collateral')
+  const products = {}
+  for (const [id, entry] of Object.entries(value || {})) {
+    if (!BUILT_IN_PRODUCT_IDS.includes(id) && !PRODUCT_ID_PATTERN.test(id)) throw new Error(`"${id}" can’t be a product id: use lower-case letters, numbers and dashes.`)
+    products[id] = validateProduct(id, entry || {}, stored[id], types)
+  }
+  if (!buildProducts({ ...stored, ...products }).some((product) => product.enabled)) throw new Error('Keep at least one loan product switched on.')
+  return products
+}
+
+/** Whether any application pledged collateral of this type. */
+const collateralTypeInUse = async (key) => {
+  const db = await getDb()
+  const [row] = await db
+    .select({ id: schema.applications.id })
+    .from(schema.applications)
+    .where(sql`${schema.applications.data} -> 'collateral' -> 'items' @> ${JSON.stringify([{ type: key }])}::jsonb`)
+    .limit(1)
+  return Boolean(row)
+}
+
+/** The collateral types. One left out is deleted, unless applications already name it: then it is switched off, so they still read. */
+const validateCollateralTypes = async (value) => {
+  const { types: stored } = await getSetting('collateral')
+  const seen = new Set()
+  const types = (Array.isArray(value?.types) ? value.types : []).slice(0, 40).map((entry) => {
+    const key = text(entry?.key, 40)
+    if (!/^[a-z][a-z0-9_]{1,39}$/.test(key)) throw new Error(`"${key}" can’t be a collateral type key: use lower-case letters, numbers and underscores.`)
+    if (seen.has(key)) throw new Error(`The collateral type "${key}" is listed twice.`)
+    seen.add(key)
+    const label = text(entry.label, 60)
+    if (label.length < 2) throw new Error('Every collateral type needs a name.')
+    return { key, label, description: text(entry.description, 200), retired: Boolean(entry.retired) }
+  })
+  for (const type of stored) if (!seen.has(type.key) && (await collateralTypeInUse(type.key))) types.push({ ...type, retired: true })
+  if (!types.some((type) => !type.retired)) throw new Error('Keep at least one collateral type active.')
+  return { types }
 }
 
 // A single leading slash: "//host/…" is a protocol-relative URL and would leave the LMS host.
@@ -179,6 +273,43 @@ const VALIDATORS = {
       timeoutSeconds: number(value.timeoutSeconds, { min: 5, max: 120, integer: true, label: 'The ZRA timeout' }),
     }
   },
+  crb: (value) => {
+    const provider = CRB_PROVIDERS.includes(value.provider) ? value.provider : 'environment'
+    const wsdlUrl = text(value.wsdlUrl, 500)
+    if (wsdlUrl) {
+      let url
+      try {
+        url = new URL(wsdlUrl)
+      } catch {
+        throw new Error('The WSDL address must be a valid HTTPS address.')
+      }
+      // Plain HTTP only to this machine, as the adapter allows (a local stand-in).
+      const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname)
+      if (!(url.protocol === 'https:' || (local && url.protocol === 'http:')) || url.username || url.password) {
+        throw new Error('The WSDL address must use HTTPS and carry no credentials.')
+      }
+    }
+    const testIdentity = text(value.testIdentity, 200)
+    if (testIdentity && testIdentity.split('|').map((part) => part.trim()).filter(Boolean).length !== 3) {
+      throw new Error('The bureau test identity must be "NRC|other names|surname".')
+    }
+    // Passwords are kept as typed: spaces may be part of them.
+    const secret = (field) => (value[field] === null ? null : String(value[field] || '').slice(0, 500))
+    return {
+      provider,
+      wsdlUrl,
+      transportUsername: text(value.transportUsername, 200),
+      transportPassword: secret('transportPassword'),
+      messageUsername: text(value.messageUsername, 200),
+      messagePassword: secret('messagePassword'),
+      code: text(value.code, 100),
+      infinityCode: text(value.infinityCode, 100),
+      reportReason: number(value.reportReason, { min: 1, max: 99, integer: true, label: 'The report reason' }),
+      reportSector: number(value.reportSector, { min: 1, max: 99, integer: true, label: 'The report sector' }),
+      timeoutSeconds: number(value.timeoutSeconds, { min: 5, max: 120, integer: true, label: 'The bureau timeout' }),
+      testIdentity,
+    }
+  },
   workflow: (value) => ({
     requireSecondApproval: Boolean(value.requireSecondApproval),
     slaDays: number(value.slaDays, { min: 1, max: 60, integer: true, label: 'The target days' }),
@@ -189,7 +320,8 @@ const VALIDATORS = {
     expiryDays: number(value.expiryDays, { min: 1, max: 90, integer: true, label: 'The offer period' }),
   }),
   prescreen: (value) => ({ autoDecline: Boolean(value.autoDecline) }),
-  products: (value) => ({ personal: validatePricing('personal', value.personal || {}), business: validatePricing('business', value.business || {}) }),
+  products: validateProducts,
+  collateral: validateCollateralTypes,
   retention: (value) => ({
     declinedDays: optionalDays(value.declinedDays, 'Declined applications'),
     withdrawnDays: optionalDays(value.withdrawnDays, 'Withdrawn applications'),
@@ -228,12 +360,13 @@ const getSettings = async (req) => {
   const entries = await Promise.all(Object.keys(SETTING_DEFAULTS).map(async (key) => [key, await getPublicSetting(key)]))
   const [lms, terms, privacy] = await Promise.all([describeLms(), getPublishedLegal('terms'), getPublishedLegal('privacy')])
   const zraConfig = await getZraConfig()
+  await refreshCrb({ force: true })
   return {
     settings: Object.fromEntries(entries),
     integrations: {
       lms,
       zra: { source: zraConfig.source, configured: missingZraConfig(zraConfig.config).length === 0 },
-      crb: getCrb()?.name || null,
+      crb: describeCrb(),
       ai: await describeAi(),
       geocoder: (process.env.GEOCODER || '').trim() || null,
       sms: Boolean(await getSms()),
@@ -264,6 +397,7 @@ const saveSetting = async (req, res, { params }) => {
     fail(400, error.message, 'cannot_save')
   }
   if (params.key === 'security') clearTwoFactorCache()
+  if (params.key === 'crb') await refreshCrb({ force: true })
   // These still describe the workflow until someone publishes one from the editor.
   if (LEGACY_WORKFLOW_KEYS.includes(params.key)) await regenerateLegacyWorkflow(actor)
   await recordAudit({ req, actor, action: 'settings.updated', entityType: 'setting', entityId: params.key, detail: { before, after: saved } })
@@ -340,6 +474,56 @@ const testZra = async (req) => {
   } catch (error) {
     await recordAudit({ req, actor, action: 'settings.zra_tested', detail: { ok: false } })
     return { ok: false, message: error instanceof ZraError ? error.message : 'ZRA could not be reached.' }
+  }
+}
+
+/**
+ * Tries the credit bureau — the saved setup, or the form's values before saving — without
+ * an enquiry (product109.js testConnection). Passwords left blank fall back to the saved
+ * or environment ones only for the same WSDL address, as for the LMS and ZRA.
+ */
+const testCrb = async (req) => {
+  const actor = await requireUser(req, { permission: 'settings.manage' })
+  let resolved
+  if (req.body && Object.keys(req.body).length) {
+    let form
+    try {
+      form = VALIDATORS.crb(req.body)
+    } catch (error) {
+      fail(400, error.message, 'invalid_input')
+    }
+    if (form.provider === 'environment') {
+      resolved = resolveCrb(null)
+    } else {
+      const [saved, environment] = await Promise.all([getSetting('crb'), Promise.resolve(resolveCrb(null).config)])
+      const fallback = saved.wsdlUrl && form.wsdlUrl === saved.wsdlUrl ? saved : environment.wsdlUrl && form.wsdlUrl === environment.wsdlUrl ? environment : {}
+      resolved = {
+        source: 'settings',
+        provider: form.provider,
+        config: product109ConfigFrom({ ...form, transportPassword: form.transportPassword || fallback.transportPassword || '', messagePassword: form.messagePassword || fallback.messagePassword || '' }),
+      }
+    }
+  } else {
+    await refreshCrb({ force: true })
+    resolved = resolveCrb()
+  }
+
+  let crb
+  try {
+    crb = crbProviderFor(resolved)
+  } catch (error) {
+    fail(400, error.message, 'invalid_input')
+  }
+  if (!crb) fail(400, 'No credit bureau is selected.', 'crb_not_configured')
+  if (crb.sample) return { ok: true, message: 'Sample data needs no connection: credit checks will return made-up scores.' }
+
+  try {
+    const { milliseconds } = await crb.testConnection()
+    await recordAudit({ req, actor, action: 'settings.crb_tested', detail: { ok: true, source: resolved.source } })
+    return { ok: true, message: `Reached the bureau and its Product 109 service in ${milliseconds} ms. The message username and password are only checked by a real credit check.` }
+  } catch (error) {
+    await recordAudit({ req, actor, action: 'settings.crb_tested', detail: { ok: false, source: resolved.source, code: error?.code || null } })
+    return { ok: false, message: error instanceof CrbError ? error.message : 'The credit bureau could not be reached.' }
   }
 }
 
@@ -438,6 +622,7 @@ export const settingsRoutes = [
   ['PUT', '/settings/:key', saveSetting],
   ['POST', '/settings/lms/test', testLms],
   ['POST', '/settings/zra/test', testZra],
+  ['POST', '/settings/crb/test', testCrb],
   ['POST', '/settings/sms/test', testSms],
   ['POST', '/settings/ai/test', testAi],
   ['GET', '/legal/:kind', publishedLegal],

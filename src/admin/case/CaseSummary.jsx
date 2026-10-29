@@ -36,6 +36,7 @@ export const expectedForSlot = (application, slot) => {
     const info = data?.personalInfo || {}
     const name = [info.firstName, info.middleName, info.surname].filter(Boolean).join(' ')
     if (slot === 'payslips' || slot === 'nrcCopy') return { name, nrc: info.nrc }
+    if (slot === 'passportCopy') return { name, passport: info.passportNumber }
     if (slot === 'bankStatements' || slot === 'tpin') return { name }
     return {}
   }
@@ -91,7 +92,7 @@ const RATIO_OF = {
   loan_to_turnover: 'annual_turnover',
   loan_to_order: 'order_value',
 }
-const FROM_FORM = ['amount', 'tenure', 'monthly_instalment', 'applicant_age', 'age_at_maturity', 'business_age_months', 'directors_count']
+const FROM_FORM = ['amount', 'tenure', 'monthly_instalment', 'applicant_age', 'age_at_maturity', 'business_age_months', 'directors_count', 'collateral_value', 'collateral_cover']
 const FROM_LOCATION = ['location_provided', 'location_distance_km', 'address_found']
 
 /** What a rule's figure rests on: the documents it came from, or the form, location or bureau. */

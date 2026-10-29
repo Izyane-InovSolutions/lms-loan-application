@@ -147,7 +147,9 @@ export const createRouter = (routes) => {
       if (error instanceof HttpError) {
         return res.status(error.status).json({ code: error.code || null, message: error.message })
       }
-      console.error(`[api] ${req.method} ${path} failed: ${error?.message || error}`)
+      // Drizzle wraps database errors ("Failed query: …"); the reason, such as a missing column, is the cause.
+      const cause = error?.cause?.message ? ` (cause: ${error.cause.message})` : ''
+      console.error(`[api] ${req.method} ${path} failed: ${error?.message || error}${cause}`)
       // Loaded lazily: the error log needs the database, and http.js must not.
       import('./errors.js')
         .then(({ reportError }) => reportError({ source: 'server', message: error?.message || String(error), stack: error?.stack, route: `${req.method} ${path.replace(/[0-9a-f-]{36}/gi, ':id')}` }))

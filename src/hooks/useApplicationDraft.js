@@ -193,7 +193,7 @@ export function useApplicationDraft({
   const resumeLocalDraft = useCallback(() => {
     if (!localDraftSummary) return
     if (localDraftSummary.draftToken) setDraftToken(localDraftSummary.draftToken)
-    setSelectedLoanType(localDraftSummary.loanType)
+    setSelectedLoanType(localDraftSummary.loanType, localDraftSummary.loanData?.productId)
     setCurrentStep(localDraftSummary.currentStep)
     setPersonalData(localDraftSummary.personalData)
     setBusinessData(localDraftSummary.businessData)
@@ -222,7 +222,7 @@ export function useApplicationDraft({
     (draft) => {
       autosavePausedRef.current = false
       setDraftToken(draft.draftToken || null)
-      setSelectedLoanType(draft.loanType)
+      setSelectedLoanType(draft.loanType, draft.loanData?.productId)
       setCurrentStep(draft.currentStep || 0)
       setPersonalData(draft.personalData)
       setBusinessData(draft.businessData)

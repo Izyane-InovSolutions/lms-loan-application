@@ -8,11 +8,13 @@ const authHeaders = (token) => ({ Authorization: `Bearer ${token}` })
 // Model calls on a multi-page PDF routinely take 10–30 s; this only guards against a hang.
 const ANALYZE_TIMEOUT_MS = 90000
 
-export const analyzeDocument = (token, docType, file, { signal, fieldKey } = {}) => {
+export const analyzeDocument = (token, docType, file, { signal, fieldKey, productId } = {}) => {
   const formData = new FormData()
   formData.append('docType', docType)
   // Lets the server keep this result for the submitted application.
   if (fieldKey) formData.append('fieldKey', fieldKey)
+  // A product's own document: the server reads what it should be from the product.
+  if (productId) formData.append('productId', productId)
   formData.append('file', file)
   return aiApiClient
     .post('/ai/analyze-document', formData, { headers: authHeaders(token), signal, timeout: ANALYZE_TIMEOUT_MS })

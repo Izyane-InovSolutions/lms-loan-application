@@ -1,6 +1,7 @@
 import React from 'react'
 
 import { Button } from '@/components/ui/button'
+import { useProducts } from '@/hooks/useProducts'
 import {
   Dialog,
   DialogContent,
@@ -9,10 +10,12 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 
+/** Picks the loan product a customer is applying for; `onChoose` gets its id (the wizard reads its form from it). */
 export function AssistedApplicationTypeDialog({ open, onOpenChange, onChoose }) {
-  const choose = (loanType) => {
+  const products = useProducts()
+  const choose = (productId) => {
     onOpenChange?.(false)
-    onChoose(loanType)
+    onChoose(productId)
   }
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -22,12 +25,11 @@ export function AssistedApplicationTypeDialog({ open, onOpenChange, onChoose }) 
           <DialogDescription>Select the loan product the customer wants to apply for.</DialogDescription>
         </DialogHeader>
         <div className="grid gap-2 sm:grid-cols-2">
-          <Button variant="outline" onClick={() => choose('personal')}>
-            Personal loan
-          </Button>
-          <Button variant="outline" onClick={() => choose('business')}>
-            Business loan
-          </Button>
+          {products.map((product) => (
+            <Button key={product.id} variant="outline" onClick={() => choose(product.id)}>
+              {product.name}
+            </Button>
+          ))}
         </div>
       </DialogContent>
     </Dialog>

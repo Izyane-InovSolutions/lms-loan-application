@@ -8,6 +8,8 @@ import { getLms, LmsError } from './index.js'
 import { creditStaffIds, notifyUsers } from '../notify.js'
 import { buildPersonalPayload, buildBusinessPayload } from '../../../src/utils/loanPayloadMapper.js'
 import { currentDocuments } from '../../../src/config/applications.js'
+import { describeCollateral } from '../../../src/config/collateral.js'
+import { getCollateralTypes } from '../products.js'
 
 const { applications, applicationDocuments, prescreens } = schema
 
@@ -34,6 +36,24 @@ const buildPayload = (application, fileUrls) => {
     }
   })
   return buildBusinessPayload(application.data, uploaded, directorUploaded, loanDetails)
+}
+
+// Uploads the fixed mapping doesn't name: a product's own documents and collateral proofs.
+const EXTRA_SLOT = /^(custom|collateral)\./
+
+/**
+ * What products added on top of the form: their own documents and collateral proofs go
+ * in the form's document list under their own names, and itemised collateral fills
+ * collateral_pledged (the business form's free text, on applications from before).
+ */
+const addProductExtras = (payload, application, documents, fileUrls, collateralTypes) => {
+  const list = application.loanType === 'personal' ? payload.documents : payload.business_documents
+  for (const document of documents) {
+    if (EXTRA_SLOT.test(document.slot) && fileUrls[document.slot]) list.push({ document_for: application.loanType === 'personal' ? 'Personal' : 'Applicant', document_name: document.label, file: fileUrls[document.slot] })
+  }
+  const collateral = describeCollateral(application.data, collateralTypes)
+  if (collateral) payload.collateral_pledged = collateral
+  return payload
 }
 
 /**
@@ -91,7 +111,7 @@ export const syncApplicationToLms = async (applicationId, { actor = null } = {})
       fileUrls[document.slot] = document.lmsFileUrl
     }
 
-    const payload = buildPayload(claimed, fileUrls)
+    const payload = addProductExtras(buildPayload(claimed, fileUrls), claimed, documents, fileUrls, await getCollateralTypes())
     if (lms.referenceField) payload[lms.referenceField] = claimed.reference
     const { sendPrescreen } = await getSetting('lms')
     if (sendPrescreen) {

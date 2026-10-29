@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { acceptTermsAndSubmit, attachAll, choose, customerSignIn, emailedCode, fill, next, signInAs, typeDate } from './helpers.js'
+import { acceptTermsAndSubmit, attachAll, choose, fieldId, customerSignIn, emailedCode, fill, next, signInAs, typeDate } from './helpers.js'
 
 /*
  * The whole life of a personal loan, as people use it: an applicant arrives through an
@@ -39,7 +39,7 @@ test('a referred personal loan goes from application to payout', async ({ browse
   await next(applicant)
 
   await fill(applicant, 'employmentInfo.residentialAddress', 'Plot 12, Kabulonga, Lusaka')
-  await fill(applicant, 'employmentInfo.occupation', 'Teacher')
+  await applicant.locator(fieldId('employmentInfo.occupation')).selectOption('Civil servant')
   await fill(applicant, 'employmentInfo.employerName', 'Ministry of Education')
   await choose(applicant, 'employmentInfo.nationality')
   await fill(applicant, 'employmentInfo.principalObjectiveOfLoan', 'School fees')

@@ -5,6 +5,8 @@
 
 import { roleLabel } from './roles.js'
 import { DEFAULT_CHECKLIST } from './stages.js'
+import { DOCUMENT_CATALOGUE, defaultDocuments, getProduct } from './loanProducts.js'
+import { PASSPORT_DOCUMENT, presentDocuments } from './applicantRules.js'
 
 /**
  * `customer` is what the applicant sees — plain, and never an internal verdict. A case
@@ -112,31 +114,20 @@ export const CHANNELS = {
 /** An application's channel is "self" or the role of whoever brought it in, custom roles included. */
 export const channelLabel = (channel) => CHANNELS[channel] || roleLabel(channel)
 
-/** Upload slots per product: key (the wizard's field), label, whether required, and the AI doc type. */
-export const DOCUMENT_SLOTS = {
-  personal: [
-    { slot: 'payslips', label: 'Latest three payslips', required: true, docType: 'payslips' },
-    { slot: 'bankStatements', label: 'Bank statements', required: true, docType: 'bankStatements' },
-    { slot: 'nrcCopy', label: 'NRC copy', required: true, docType: 'nrcCopy' },
-    { slot: 'passportPhoto', label: 'Passport photo', required: true, docType: 'passportPhoto' },
-    { slot: 'tpin', label: 'TPIN certificate', required: true, docType: 'tpin' },
-  ],
-  business: [
-    { slot: 'pacraCertificate', label: 'PACRA certificate', required: true, docType: 'pacraCertificate' },
-    { slot: 'form2', label: 'Form 2', required: true, docType: 'form2' },
-    { slot: 'taxClearance', label: 'Tax clearance certificate / TPIN', required: true, docType: 'taxClearance' },
-    { slot: 'latestTaxComplianceReturn', label: 'Latest tax compliance return', required: true, docType: 'latestTaxComplianceReturn' },
-    { slot: 'orderOrInvoice', label: 'Order / invoice', required: false, docType: 'orderOrInvoice' },
-    { slot: 'bankStatements', label: 'Bank statements', required: true, docType: 'bankStatements' },
-    { slot: 'boardResolution', label: 'Board resolution', required: true, docType: 'boardResolution' },
-    { slot: 'passportPhoto', label: 'Applicant passport photo', required: true, docType: 'passportPhoto' },
-  ],
-}
+/**
+ * The built-in products' document slots, by form — for demo data and tests. Live
+ * applications read their product's own list (product.documents, Settings → Loan products).
+ */
+export const DOCUMENT_SLOTS = Object.fromEntries(Object.keys(DOCUMENT_CATALOGUE).map((form) => [form, defaultDocuments(form)]))
 
 const DIRECTOR_SLOT = /^director\.(\d+)\.(nrc|passportPhoto)$/
+const COLLATERAL_SLOT = /^collateral\.(\d+)$/
 
-/** Label and doc type for any slot, including the per-director ones (director.0.nrc). */
-export const describeSlot = (loanType, slot) => {
+// Helpers take a product, or (older callers, and applications from before products) a form name.
+const asProduct = (product) => (typeof product === 'string' ? getProduct(product) || getProduct('personal') : product || getProduct('personal'))
+
+/** Label and doc type for any slot: the product's own, the per-director ones (director.0.nrc), and collateral proofs (collateral.0). */
+export const describeSlot = (product, slot) => {
   const director = DIRECTOR_SLOT.exec(slot)
   if (director) {
     const number = Number(director[1]) + 1
@@ -144,12 +135,23 @@ export const describeSlot = (loanType, slot) => {
       ? { slot, label: `Director ${number} NRC`, required: true, docType: 'directorNrc' }
       : { slot, label: `Director ${number} passport photo`, required: true, docType: 'directorPassportPhoto' }
   }
-  return (DOCUMENT_SLOTS[loanType] || []).find((entry) => entry.slot === slot) || { slot, label: slot, required: false, docType: slot }
+  const collateral = COLLATERAL_SLOT.exec(slot)
+  if (collateral) return { slot, label: `Collateral ${Number(collateral[1]) + 1} proof`, required: false, docType: 'collateral' }
+  if (slot === PASSPORT_DOCUMENT.slot) {
+    const nrc = asProduct(product).documents.find((entry) => entry.slot === 'nrcCopy')
+    return { slot, label: PASSPORT_DOCUMENT.label, required: Boolean(nrc?.required), docType: PASSPORT_DOCUMENT.docType, description: PASSPORT_DOCUMENT.description }
+  }
+  const own = asProduct(product).documents.find((entry) => entry.slot === slot)
+  if (own) return { slot, label: own.label, required: Boolean(own.required), docType: own.docType, description: own.description || '' }
+  // A slot the product no longer lists (changed since the application was made): the catalogue still names it.
+  const known = Object.values(DOCUMENT_CATALOGUE).flat().find((entry) => entry.slot === slot)
+  return known ? { slot, label: known.label, required: false, docType: known.docType } : { slot, label: slot, required: false, docType: slot.startsWith('custom.') ? 'custom' : slot }
 }
 
 /**
  * Draft storage keys files by their path in the form ("personal.documents.payslips",
- * "business.documents.directorUploads.0.nrc"); applications key them by slot.
+ * "business.documents.directorUploads.0.nrc", "personal.documents.collateral.0");
+ * applications key them by slot. Custom documents keep their dot ("documents.custom.title-deed").
  */
 export const slotFromDraftPath = (path) => {
   const match = /^(?:personal|business)\.documents\.(.+)$/.exec(path)
@@ -158,21 +160,27 @@ export const slotFromDraftPath = (path) => {
   return director ? `director.${director[1]}.${director[2]}` : match[1]
 }
 
-/** Every slot an application of this shape must have, directors included. */
-export const requiredSlots = (loanType, data) => {
-  const base = (DOCUMENT_SLOTS[loanType] || []).filter((entry) => entry.required).map((entry) => entry.slot)
-  if (loanType !== 'business') return base
-  const directors = data?.directorInfo?.directors?.length || 0
-  const perDirector = Array.from({ length: directors }, (_, index) => [`director.${index}.nrc`, `director.${index}.passportPhoto`]).flat()
-  return [...base, ...perDirector]
+const directorSlots = (product, data) => {
+  const directors = asProduct(product).form === 'business' ? data?.directorInfo?.directors?.length || 0 : 0
+  return Array.from({ length: directors }, (_, index) => [`director.${index}.nrc`, `director.${index}.passportPhoto`]).flat()
 }
 
-/** Every slot an officer can ask the applicant to send again (or add on the case): optional ones and directors included. */
-export const requestableSlots = (loanType, data) => {
-  const base = (DOCUMENT_SLOTS[loanType] || []).map((entry) => entry.slot)
-  const directors = loanType === 'business' ? data?.directorInfo?.directors?.length || 0 : 0
-  const perDirector = Array.from({ length: directors }, (_, index) => [`director.${index}.nrc`, `director.${index}.passportPhoto`]).flat()
-  return [...base, ...perDirector].map((slot) => describeSlot(loanType, slot))
+/**
+ * Every slot an application of this shape must have: the product's required documents
+ * that apply to these answers (no payslips without a salary, applicantRules.js), and each director's.
+ */
+export const requiredSlots = (product, data) => {
+  const shown = presentDocuments(asProduct(product), data)
+  return [...shown.filter((entry) => entry.required && !entry.skipped).map((entry) => entry.slot), ...directorSlots(product, data)]
+}
+
+/** Every slot an officer can ask the applicant to send again (or add on the case): optional ones, directors and collateral proofs included. */
+export const requestableSlots = (product, data) => {
+  const pledged = Array.isArray(data?.collateral?.items) ? data.collateral.items.length : 0
+  const collateral = Array.from({ length: pledged }, (_, index) => `collateral.${index}`)
+  // A passport copy too, when the applicant gave one in place of their NRC.
+  const passport = presentDocuments(asProduct(product), data).some((entry) => entry.slot === PASSPORT_DOCUMENT.slot) ? [PASSPORT_DOCUMENT.slot] : []
+  return [...asProduct(product).documents.map((entry) => entry.slot), ...passport, ...directorSlots(product, data), ...collateral].map((slot) => describeSlot(product, slot))
 }
 
 // Uploads a newer copy can replace. Generated documents and signed copies keep every version.

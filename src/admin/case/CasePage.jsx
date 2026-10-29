@@ -172,7 +172,7 @@ export function CasePage() {
     )
   }
 
-  const { application, documents, events, prescreen, appraisals, consents, locations, crbReports, lmsConfigured, crbProvider, offersRequireSignature, signatures, stageDocuments, workflow } = state
+  const { application, documents, events, prescreen, appraisals, consents, locations, crbReports, lmsConfigured, crbProvider, offersRequireSignature, signatures, stageDocuments, workflow, product, collateralTypes } = state
   const eligibleOfficers = officers.filter((officer) => withinAssignmentRange(officer, application.amount))
   const canTake = withinAssignmentRange(user, application.amount)
   const lastRecommendation = appraisals.find((appraisal) => appraisal.kind === 'recommendation')
@@ -196,7 +196,7 @@ export function CasePage() {
             {workflow && workflow.state.label !== statusLabel(application.status) ? <span className="text-sm font-medium text-muted-foreground">{workflow.state.label}</span> : null}
           </div>
           <p className="mt-1.5 text-sm text-muted-foreground">
-            {application.reference}, {LOAN_TYPE_LABELS[application.loanType].toLowerCase()}
+            {application.reference}, {(product?.name || LOAN_TYPE_LABELS[application.loanType]).toLowerCase()}
             {application.companyName ? `, applicant ${application.applicantName}` : ''}, submitted {dateTime(application.submittedAt)}
             {hasPermission(user, 'audit.view') ? (
               <>
@@ -310,6 +310,7 @@ export function CasePage() {
         {tab === 'details' ? (
           <Details
             application={application}
+            collateralTypes={collateralTypes}
             cards={consents.length ? [<ConsentPanel key="consent" consents={consents} />] : []}
             wide={<LocationPanel points={locations} facts={prescreen?.facts} onLogVisit={may.note ? (position) => post('/visits', position, 'Visit logged') : null} />}
           />
@@ -318,7 +319,7 @@ export function CasePage() {
         {/* What they sent, and what we sent them to sign. */}
         {tab === 'documents' ? (
           <div className="space-y-4">
-            <Documents application={application} documents={documents} selectedId={documentId} onSelect={setDocumentId} onUpload={may.note ? (form) => uploadStaffDocument(id, form, setState, notify) : null} />
+            <Documents application={application} product={product} documents={documents} selectedId={documentId} onSelect={setDocumentId} onUpload={may.note ? (form) => uploadStaffDocument(id, form, setState, notify) : null} />
             <div className="grid items-start gap-4 lg:grid-cols-2">
               <StageDocumentsPanel
                 documents={stageDocuments}
@@ -360,6 +361,7 @@ export function CasePage() {
       </div>
 
       <CaseDialogs
+        product={product}
         dialog={dialog}
         onClose={() => setDialog(null)}
         application={application}
@@ -660,7 +662,7 @@ const decideVerdicts = (dialog) =>
       actionId: action.id,
     }))
 
-function CaseDialogs({ dialog, onClose, application, lastRecommendation, officers, user, act, post, requireSignature, verification }) {
+function CaseDialogs({ dialog, onClose, application, product, lastRecommendation, officers, user, act, post, requireSignature, verification }) {
   const open = (type) => dialog?.type === type
   const common = (type) => ({ open: open(type), onOpenChange: (value) => !value && onClose() })
 
@@ -697,7 +699,7 @@ function CaseDialogs({ dialog, onClose, application, lastRecommendation, officer
             label: 'Documents to send again (optional)',
             type: 'checkboxes',
             hint: 'Each one is checked by the AI when it arrives and replaces the earlier copy in the summary and the rules.',
-            options: requestableSlots(application.loanType, application.data).map((entry) => ({ value: entry.slot, label: entry.label })),
+            options: requestableSlots(product || application.loanType, application.data).map((entry) => ({ value: entry.slot, label: entry.label })),
           },
           { name: 'message', label: 'What do they need to send or explain?', type: 'textarea', rows: 4, hint: 'Optional when you pick documents above.' },
         ]}
@@ -872,8 +874,8 @@ function CaseDialogs({ dialog, onClose, application, lastRecommendation, officer
  * The applicant's answers, then `cards` (more half-width panels) and `wide` (one
  * full-width panel). Cards in a row share its height; an odd last card spans the row.
  */
-function Details({ application, cards = [], wide = null }) {
-  const sections = useMemo(() => sectionsFor(application).filter((section) => section.rows.some(([, value]) => value)), [application])
+function Details({ application, collateralTypes, cards = [], wide = null }) {
+  const sections = useMemo(() => sectionsFor(application, collateralTypes).filter((section) => section.rows.some(([, value]) => value)), [application, collateralTypes])
   const all = [
     ...sections.map((section) => (
       <Panel key={section.title} title={section.title}>
@@ -904,7 +906,7 @@ function Details({ application, cards = [], wide = null }) {
 }
 
 /** Document list beside a viewer, with the AI findings for the one on screen. */
-function Documents({ application, documents, selectedId, onSelect: setSelectedId, onUpload }) {
+function Documents({ application, product, documents, selectedId, onSelect: setSelectedId, onUpload }) {
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState('')
   // Which document the next upload is: a known one replaces the earlier copy and is checked by the AI.
@@ -967,7 +969,7 @@ function Documents({ application, documents, selectedId, onSelect: setSelectedId
           <>
             <Select value={slot} onChange={(event) => setSlot(event.target.value)} aria-label="What the document is" className="h-9 text-sm">
               <option value="">Something else</option>
-              {requestableSlots(application.loanType, application.data).map((entry) => (
+              {requestableSlots(product || application.loanType, application.data).map((entry) => (
                 <option key={entry.slot} value={entry.slot}>
                   New copy of: {entry.label}
                 </option>

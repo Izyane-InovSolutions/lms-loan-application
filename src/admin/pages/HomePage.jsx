@@ -241,7 +241,7 @@ function RecentApplications({ rows, choosesLoanType }) {
                   <span className="min-w-0">
                     <span className="block truncate text-sm font-medium text-foreground">{row.applicantName}</span>
                     <span className="block text-xs text-muted-foreground">
-                      {money(row.amount)} {LOAN_TYPE_LABELS[row.loanType].toLowerCase()}, {timeAgo(row.submittedAt)}
+                      {money(row.amount)} {(row.productName || LOAN_TYPE_LABELS[row.loanType]).toLowerCase()}, {timeAgo(row.submittedAt)}
                     </span>
                   </span>
                   <StatusBadge status={row.status} label={statusLabel(row.status)} />
