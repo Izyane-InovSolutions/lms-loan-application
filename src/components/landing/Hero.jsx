@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { DRAFT_RETENTION_DAYS, formatKwacha, priceLoan } from '@/config/loanProducts'
-import { useProduct } from '@/hooks/useProducts'
+import { useProduct, useProducts } from '@/hooks/useProducts'
 import heroImage from '@/assets/hero1.png'
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -19,6 +19,8 @@ const ASSURANCES = [
 export function Hero({ onApply, onCheckStatus }) {
   const personal = useProduct('personal')
   const business = useProduct('business')
+  // The first two products the workspace offers get a button each (the built-in ones, unless switched off).
+  const featured = useProducts().slice(0, 2)
   const example = personal.exampleAmount
   const examplePrice = priceLoan(example, personal.defaultTenure, personal)
 
@@ -59,13 +61,12 @@ export function Hero({ onApply, onCheckStatus }) {
           </p>
 
           <div className="mt-9 flex flex-col gap-3 sm:flex-row">
-            <Button size="lg" className="flex-1" onClick={() => onApply('personal')}>
-              Apply for a personal loan
-              <ArrowRight />
-            </Button>
-            <Button size="lg" variant="outline" className="flex-1" onClick={() => onApply('business')}>
-              Apply for a business loan
-            </Button>
+            {featured.map((product, index) => (
+              <Button key={product.id} size="lg" variant={index === 0 ? 'default' : 'outline'} className="flex-1" onClick={() => onApply(product.id)}>
+                Apply for a {product.name.toLowerCase()}
+                {index === 0 ? <ArrowRight /> : null}
+              </Button>
+            ))}
           </div>
 
           <form

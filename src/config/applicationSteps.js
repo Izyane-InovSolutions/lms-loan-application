@@ -1,7 +1,8 @@
 /**
  * Step identity for the application wizard.
  *
- * Steps are addressable by slug (`/apply/personal/documents`) rather than held in
+ * Steps are addressable by slug (`/apply/personal/documents`, or `/apply/<product>/…` for
+ * an added product, whose steps are its form's) rather than held in
  * component state, so the browser Back button steps backwards through the form
  * instead of leaving it, a refresh keeps the applicant where they were, and each
  * step can be linked to and measured independently.
@@ -38,8 +39,19 @@ export const stepIndex = (type, slug) => {
 
 export const isValidStepSlug = (type, slug) => slugsFor(type).includes(slug)
 
-/** Canonical URL for a given loan type and step index. */
-export const applyPath = (type, index = 0) => {
-  const safeType = isLoanType(type) ? type : 'personal'
-  return `/apply/${safeType}/${stepSlug(safeType, index)}`
+/**
+ * The URL's first segment names the loan product (`/apply/asset-finance/documents`); the
+ * steps are those of the product's form. The built-in products' ids are their forms, so
+ * `/apply/personal/…` and `/apply/business/…` read as before.
+ */
+export const isProductSlug = (value) => typeof value === 'string' && /^[a-z][a-z0-9-]{1,39}$/.test(value)
+
+/**
+ * Canonical URL for a product and step index. `form` defaults to the product id, which
+ * is right for the built-in products; added products pass their own form.
+ */
+export const applyPath = (productId, index = 0, form = productId) => {
+  const safeForm = isLoanType(form) ? form : 'personal'
+  const safeProduct = isProductSlug(productId) ? productId : safeForm
+  return `/apply/${safeProduct}/${stepSlug(safeForm, index)}`
 }

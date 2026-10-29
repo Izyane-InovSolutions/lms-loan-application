@@ -89,11 +89,33 @@ export const DOCUMENT_SPECS = {
     expected: "A passport-style photo of one person's face, looking at the camera, against a plain background.",
     fields: [],
   },
+  // Non-Zambian applicants send this in place of the NRC copy (src/config/applicantRules.js).
+  passport: {
+    label: 'passport',
+    expected: "The photo and details page of a passport.",
+    freshness: 'The passport must not be past its expiry date.',
+    fields: ['holderName', 'passportNumber', 'nationality', 'dateOfBirth', 'expiryDate'],
+  },
+  collateral: {
+    label: 'collateral proof',
+    expected:
+      'Proof of ownership or value of an asset pledged as collateral: for example a title deed, vehicle registration book (white book), valuation report, purchase invoice, or deposit certificate.',
+    fields: ['holderName', 'assetDescription', 'documentDate', 'amount'],
+  },
+  // A document a product asks for that the workspace defined itself (Settings → Loan products):
+  // what it should be comes from the product, passed in as `expected`.
+  custom: {
+    label: 'document',
+    expected: 'The document described below.',
+    fields: ['holderName', 'documentDate'],
+  },
 }
 
 const FIELD_DESCRIPTIONS = {
   holderName: 'Full name of the person or account holder the document belongs to.',
   nrcNumber: 'NRC number as printed, e.g. 123456/78/9.',
+  passportNumber: 'Passport number as printed.',
+  nationality: 'Nationality as printed.',
   dateOfBirth: 'Date of birth, YYYY-MM-DD.',
   employerName: 'Name of the employer issuing the payslip.',
   netPay: 'Net (take-home) pay on the most recent payslip. Digits and decimal point only.',
@@ -109,7 +131,8 @@ const FIELD_DESCRIPTIONS = {
   directorNames: 'Names of the directors listed, separated by semicolons.',
   counterpartyName: 'The other party on the order or invoice (the buyer or supplier).',
   turnover: 'Total turnover or revenue declared for the period. Digits and decimal point only.',
-  amount: 'Total amount of the order or invoice. Digits and decimal point only.',
+  amount: 'Total amount of the order or invoice, or the value of the asset. Digits and decimal point only.',
+  assetDescription: 'The asset the document is about, in a few words (e.g. "Toyota Hilux ABG 1234", "Plot 123, Lusaka").',
   payslipCount: 'Number of separate payslips in the file, counted by distinct pay period (not pages). Digits only.',
   documentDate: 'Date the document was issued, YYYY-MM-DD. For several payslips, the most recent one.',
   issueDate: 'Issue date, YYYY-MM-DD.',
@@ -181,8 +204,13 @@ Rules:
 
 const today = () => new Date().toISOString().slice(0, 10)
 
-export const analyzeDocument = async ({ docType, file }) => {
-  const spec = DOCUMENT_SPECS[docType]
+/**
+ * `expected` ({ label, description }) names what a custom document should be; the
+ * workspace's own words, from the product, never the applicant's.
+ */
+export const analyzeDocument = async ({ docType, file, expected = null }) => {
+  const base = DOCUMENT_SPECS[docType]
+  const spec = docType === 'custom' && expected?.label ? { ...base, label: expected.label, expected: `${expected.label}.${expected.description ? ` ${expected.description}` : ''}` } : base
   const text = [
     `Requested document: ${spec.label}. ${spec.expected}`,
     `Today's date: ${today()}.`,
@@ -235,12 +263,12 @@ export const analyzeDocument = async ({ docType, file }) => {
  * model can't read, the daily quota spent, or the call failed) — the document is then
  * "not checked", as before. `quotaKey` is whose daily allowance it counts against.
  */
-export const analyzeCaseUpload = async ({ docType, file, quotaKey, req }) => {
+export const analyzeCaseUpload = async ({ docType, file, quotaKey, req, expected = null }) => {
   if (!DOCUMENT_SPECS[docType] || !(await getAiProvider())) return null
   try {
     if (!(await canReadMimeType(file.contentType))) return null
     if (!(await consumeAiQuota(quotaKey, req))) return null
-    return await analyzeDocument({ docType, file: { mimeType: file.contentType, data: file.data } })
+    return await analyzeDocument({ docType, file: { mimeType: file.contentType, data: file.data }, expected })
   } catch (error) {
     if (!(error instanceof AiUnsupportedInputError)) console.warn('[ai] case upload analysis failed', { docType, error: String(error?.message || error) })
     return null

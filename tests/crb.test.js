@@ -491,8 +491,71 @@ describe('Product 109 failures', () => {
   it('names missing settings in System health and refuses to pull', async () => {
     configure({ CRB_CODE: '', CRB_MESSAGE_PASSWORD: '' })
     const health = await admin.get('/admin/health')
-    expect(health.body.checks.crb).toEqual({ ok: false, kind: 'product109', missing: ['CRB_MESSAGE_PASSWORD', 'CRB_CODE'] })
+    expect(health.body.checks.crb).toEqual({ ok: false, kind: 'product109', missing: ['CRB_MESSAGE_PASSWORD', 'CRB_CODE'], source: 'environment' })
     await pullFails('crb_not_configured', 503)
     expect(bureau.calls).toHaveLength(0)
+  })
+})
+
+describe('Settings → Credit bureau', () => {
+  const saved = () => ({
+    provider: 'product109',
+    wsdlUrl: `${baseUrl}/crb?wsdl`,
+    transportUsername: TRANSPORT.username,
+    transportPassword: TRANSPORT.password,
+    messageUsername: 'message-user',
+    messagePassword: 'message-secret',
+    code: 'SUB123',
+    infinityCode: 'INF456',
+    reportReason: 2,
+    reportSector: 2,
+    timeoutSeconds: 10,
+    testIdentity: '',
+  })
+
+  // Back to following the environment, as every other test here expects.
+  afterAll(() => admin.put('/settings/crb', { ...saved(), provider: 'environment' }))
+
+  it('uses the saved connection over the environment, and never sends its passwords back', async () => {
+    configure({ CRB_PROVIDER: 'none' })
+    expect((await officer.post(`/applications/${applicationId}/crb`)).body.code).toBe('crb_not_configured')
+
+    const put = await admin.put('/settings/crb', saved())
+    expect(put.status).toBe(200)
+    expect(put.body.crb).toMatchObject({ provider: 'product109', transportPassword: '', transportPasswordSet: true, messagePassword: '', messagePasswordSet: true })
+    const settings = await admin.get('/settings')
+    expect(settings.body.integrations.crb).toEqual({ ok: true, kind: 'product109', missing: [], source: 'settings' })
+    expect(JSON.stringify(settings.body)).not.toContain(TRANSPORT.password)
+
+    expect((await officer.post(`/applications/${applicationId}/crb`)).status).toBe(200)
+    expect(bureau.calls).toHaveLength(1)
+    expect(bureau.calls[0]).toMatchObject({ username: 'message-user', code: 'SUB123' })
+  })
+
+  it('tests the connection without an enquiry, and with the form’s values before saving', async () => {
+    const ok = await admin.post('/settings/crb/test', {})
+    expect(ok.body).toMatchObject({ ok: true })
+    // A blank password keeps the saved one for the same address; a wrong one is refused.
+    expect((await admin.post('/settings/crb/test', { ...saved(), transportPassword: '' })).body.ok).toBe(true)
+    const refused = await admin.post('/settings/crb/test', { ...saved(), transportPassword: 'wrong' })
+    expect(refused.body).toEqual({ ok: false, message: 'The credit bureau refused our credentials.' })
+    expect(bureau.calls).toHaveLength(0)
+    expect((await admin.post('/settings/crb/test', { ...saved(), provider: 'demo' })).body.ok).toBe(true)
+    // Only administrators.
+    expect((await officer.post('/settings/crb/test', {})).status).toBe(403)
+  })
+
+  it('validates the address and test identity, and names what a saved setup lacks', async () => {
+    expect((await admin.put('/settings/crb', { ...saved(), wsdlUrl: 'http://bureau.example.com/crb?wsdl' })).status).toBe(400)
+    expect((await admin.put('/settings/crb', { ...saved(), testIdentity: 'just-an-nrc' })).status).toBe(400)
+    await admin.put('/settings/crb', { ...saved(), code: '' })
+    const health = await admin.get('/admin/health')
+    expect(health.body.checks.crb).toEqual({ ok: false, kind: 'product109', missing: ['subscriber code'], source: 'settings' })
+  })
+
+  it('switches the bureau off from Settings', async () => {
+    await admin.put('/settings/crb', { ...saved(), provider: 'none' })
+    expect((await officer.post(`/applications/${applicationId}/crb`)).body.code).toBe('crb_not_configured')
+    expect((await officer.get(`/applications/${applicationId}`)).body.crbProvider).toBeNull()
   })
 })

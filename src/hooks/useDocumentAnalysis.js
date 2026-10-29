@@ -60,7 +60,7 @@ export function useDocumentAnalysis({ token, slots, onInvalidToken }) {
       })
     }
 
-    current.forEach(({ fieldKey, docType, file }) => {
+    current.forEach(({ fieldKey, docType, file, productId }) => {
       const signature = fileSignature(file)
       if (requestedRef.current.get(fieldKey) === signature) return
 
@@ -78,7 +78,7 @@ export function useDocumentAnalysis({ token, slots, onInvalidToken }) {
       }
 
       settle({ status: 'analyzing' })
-      analyzeDocument(token, docType, file, { fieldKey })
+      analyzeDocument(token, docType, file, { fieldKey, productId })
         .then((response) =>
           settle(response.status === 'analyzed' ? { status: 'done', analysis: response.analysis } : { status: 'skipped' })
         )

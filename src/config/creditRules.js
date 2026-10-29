@@ -36,6 +36,8 @@ export const FACTS = {
   location_distance_km: { label: 'Distance from stated address', unit: 'km', loanTypes: ['personal', 'business'] },
   address_found: { label: 'Home address found on the map', unit: 'boolean', loanTypes: ['personal', 'business'] },
   crb_score: { label: 'Credit bureau score', unit: 'score', loanTypes: ['personal', 'business'] },
+  collateral_value: { label: 'Collateral pledged (estimated value)', unit: 'kwacha', loanTypes: ['personal', 'business'] },
+  collateral_cover: { label: 'Collateral ÷ loan amount', unit: 'ratio', loanTypes: ['personal', 'business'] },
 }
 
 export const OPERATORS = {

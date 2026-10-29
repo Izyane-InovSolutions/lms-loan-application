@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 import { describeFee, describeInterest, formatKwacha } from '@/config/loanProducts'
+import { COLLATERAL_REQUIREMENTS } from '@/config/collateral'
 
 function Fact({ label, value }) {
   return (
@@ -22,7 +23,7 @@ export function LoanProductCard({ product, onApply, featured = false }) {
       <CardHeader>
         <div className="flex items-center justify-between gap-3">
           <CardTitle className="text-xl">{product.name}</CardTitle>
-          <Badge variant={featured ? 'default' : 'secondary'}>{product.tagline}</Badge>
+          {product.tagline ? <Badge variant={featured ? 'default' : 'secondary'}>{product.tagline}</Badge> : null}
         </div>
         <CardDescription className="mt-2">{product.description}</CardDescription>
       </CardHeader>
@@ -38,7 +39,10 @@ export function LoanProductCard({ product, onApply, featured = false }) {
           <Fact label="Interest" value={describeInterest(product)} />
           <Fact label="Facility fee" value={describeFee(product)} />
           <Fact label="Tenure" value={`${product.minTenure} to ${product.maxTenure} months`} />
-          <Fact label="Documents needed" value={`${product.documents.length}`} />
+          <Fact label="Documents needed" value={`${product.documents.filter((document) => document.required).length}`} />
+          {product.collateral?.requirement && product.collateral.requirement !== 'none' ? (
+            <Fact label="Collateral" value={COLLATERAL_REQUIREMENTS[product.collateral.requirement].label} />
+          ) : null}
         </dl>
 
         <ul className="mt-5 space-y-2">

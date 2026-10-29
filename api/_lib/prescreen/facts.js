@@ -1,4 +1,5 @@
 import { findFormMismatches } from '../../../src/utils/documentChecks.js'
+import { collateralItems, collateralValue } from '../../../src/config/collateral.js'
 
 /*
  * The numbers the credit rules test, computed here from the application and the server's
@@ -34,9 +35,10 @@ export const TPIN_SLOTS = ['taxClearance', 'latestTaxComplianceReturn']
 /** What each document should agree with on the form — the same pairs the wizard checks live. */
 export const expectedFor = (loanType, data, slot) => {
   if (loanType === 'personal') {
-    const { firstName, middleName, surname, nrc } = data?.personalInfo || {}
+    const { firstName, middleName, surname, nrc, passportNumber } = data?.personalInfo || {}
     const applicant = { name: [firstName, middleName, surname].filter(Boolean).join(' '), nrc }
     if (slot === 'payslips' || slot === 'nrcCopy') return applicant
+    if (slot === 'passportCopy') return { name: applicant.name, passport: passportNumber }
     if (slot === 'bankStatements' || slot === 'tpin') return { name: applicant.name }
     return {}
   }
@@ -97,6 +99,11 @@ export const computeFacts = (application, documents, extras = {}) => {
     facts.loan_to_order = ratio(application.amount, facts.order_value)
     facts.directors_count = data?.directorInfo?.directors?.length ?? null
   }
+
+  // What the applicant says the pledged collateral is worth (none pledged: unknown, not zero cover).
+  const pledged = collateralItems(data)
+  facts.collateral_value = pledged.length ? collateralValue(pledged) : null
+  facts.collateral_cover = ratio(facts.collateral_value, application.amount)
 
   const analysed = documents.filter((document) => document.aiAnalysis)
   facts.documents_wrong_type = analysed.filter((document) => document.aiAnalysis.matchesExpectedType === false).length

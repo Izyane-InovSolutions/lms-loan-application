@@ -84,6 +84,7 @@ export const MERGE_FIELDS = [
   { key: 'company_name', label: 'Business name (business loans)', sample: 'Kafue Agro Supplies Ltd' },
   { key: 'reference', label: 'Application reference', sample: 'LOS-2026-000123' },
   { key: 'product', label: 'Loan product', sample: 'Personal loan' },
+  { key: 'collateral', label: 'Collateral pledged', sample: 'Motor vehicle: Toyota Hilux ABC 1234 (K180,000)' },
   { key: 'amount', label: 'Approved amount', sample: 'K10,000.00' },
   { key: 'tenure', label: 'Tenure', sample: '6 months' },
   { key: 'interest', label: 'Interest rate', sample: '5% flat' },

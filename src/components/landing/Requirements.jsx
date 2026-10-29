@@ -22,18 +22,23 @@ export function Requirements() {
               <CardHeader>
                 <CardTitle>{product.name}</CardTitle>
                 <CardDescription>
-                  {product.documents.length} supporting documents, plus your application details.
+                  {product.documents.length
+                    ? `${product.documents.length} supporting ${product.documents.length === 1 ? 'document' : 'documents'}, plus your application details.`
+                    : 'Just your application details.'}
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 <ul className="grid gap-2.5 sm:grid-cols-2">
                   {product.documents.map((document) => (
                     <li
-                      key={document}
+                      key={document.slot}
                       className="flex items-center gap-2.5 rounded-md bg-secondary/60 px-3 py-2.5 text-sm text-foreground"
                     >
                       <FileText className="size-4 shrink-0 text-primary" aria-hidden="true" />
-                      <span>{document}</span>
+                      <span>
+                        {document.label}
+                        {document.required ? null : <span className="text-muted-foreground"> (optional)</span>}
+                      </span>
                     </li>
                   ))}
                 </ul>

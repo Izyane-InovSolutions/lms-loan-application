@@ -1,4 +1,5 @@
 import dayjs from 'dayjs'
+import { positionLabel } from '../config/applicantRules.js'
 
 const PERSONAL_DOCUMENT_LABELS = {
   payslips: 'Salary Slip',
@@ -47,6 +48,8 @@ export const buildPersonalPayload = (personalData, uploadedFiles, loanDetails) =
     phone: toInternationalPhone(personalInfo.phone),
     email: personalInfo.email,
     national_registration_card: personalInfo.nrc,
+    // Applicants who aren't Zambian give a passport instead of an NRC.
+    ...(personalInfo.passportNumber && !personalInfo.nrc ? { passport_number: personalInfo.passportNumber } : {}),
     birth_date: personalInfo.birthDate,
     residential_address: employmentInfo.residentialAddress,
     occupation: employmentInfo.occupation,
@@ -112,10 +115,11 @@ export const buildBusinessPayload = (businessData, uploadedFiles, directorUpload
     applicant_last_name: directorInfo.applicantLastName,
     applicant_phone: toInternationalPhone(directorInfo.applicantPhone),
     applicant_national_registration_card: directorInfo.applicantNrc,
+    ...(directorInfo.applicantPassportNumber && !directorInfo.applicantNrc ? { applicant_passport_number: directorInfo.applicantPassportNumber } : {}),
     applicant_email: directorInfo.applicantEmail,
     applicant_birth_date: directorInfo.applicantBirthDate,
     applicant_address: directorInfo.applicantAddress,
-    applicant_position: directorInfo.applicantPosition,
+    applicant_position: positionLabel(directorInfo),
     applicant_middle_name: directorInfo.applicantMiddleName,
   }
 }

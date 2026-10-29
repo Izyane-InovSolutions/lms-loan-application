@@ -1,16 +1,16 @@
 import { expect, test } from '@playwright/test'
-import { acceptTermsAndSubmit, attachAll, choose, emailedCode, fill, next, signInAs, typeDate } from './helpers.js'
+import { acceptTermsAndSubmit, attachAll, choose, fieldId, emailedCode, fill, next, signInAs, typeDate } from './helpers.js'
 
 /** Fills the two business steps; the documents step and after are left to the caller. */
 const fillBusiness = async (page, { email, company, selfService = false }) => {
   // On their own, applicants agree up front that staff may help them finish.
   if (selfService) await page.getByLabel(/help me finish it/).check()
   await fill(page, 'businessInfo.companyName', company)
-  await choose(page, 'businessInfo.businessType')
+  // A limited company: directors, Form 2 and a board resolution are asked for.
+  await page.locator(fieldId('businessInfo.businessType')).selectOption('Limited Liability Company (LLC)')
   await typeDate(page, '03012015')
   await fill(page, 'businessInfo.natureOfBusiness', 'Retail')
   await fill(page, 'businessInfo.registeredOffice', 'Cairo Road, Lusaka')
-  await fill(page, 'businessInfo.collateralPledged', 'Delivery vehicle')
   await fill(page, 'businessInfo.purposeOfLoan', 'Fund a supply order')
   await next(page)
 

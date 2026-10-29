@@ -6,11 +6,33 @@ test('an admin changes loan pricing and the public site shows it', async ({ page
   await page.goto('/admin/settings?tab=products')
   await page.locator('#personal-rate').fill('7')
   await page.getByRole('button', { name: 'Save' }).click()
-  await expect(page.getByText('Settings saved')).toBeVisible()
+  await expect(page.getByText('Product saved')).toBeVisible()
 
   const visitor = await browser.newPage()
   await visitor.goto('/#loans')
   await expect(visitor.getByText('7% flat').first()).toBeVisible()
+})
+
+test('an admin adds a loan product, which applicants can then choose', async ({ page, browser }) => {
+  await signInAs(page, 'Administrator')
+  await page.goto('/admin/settings?tab=products')
+  await page.getByRole('button', { name: 'Add a product' }).click()
+  await page.locator('#new-product-name').fill('Civil Servant Loan')
+  await expect(page.locator('#new-product-id')).toHaveValue('civil-servant-loan')
+  await page.getByRole('button', { name: 'Add product' }).click()
+  await expect(page.getByText('Product saved')).toBeVisible()
+
+  // Added switched off; turn it on with collateral required.
+  await page.getByRole('switch', { name: 'Offered' }).check({ force: true })
+  await page.getByText('Required', { exact: true }).last().click()
+  await page.getByRole('button', { name: 'Save' }).click()
+  await expect(page.getByText('Product saved').first()).toBeVisible()
+
+  const visitor = await browser.newPage()
+  await visitor.goto('/#loans')
+  await expect(visitor.getByText('Civil Servant Loan').first()).toBeVisible()
+  await visitor.goto('/apply/civil-servant-loan')
+  await expect(visitor.getByRole('heading', { name: /Civil Servant Loan/ })).toBeVisible()
 })
 
 test('an admin publishes new terms, which applicants then see', async ({ page, browser }) => {

@@ -14,13 +14,17 @@ import { SiteFooter } from '@/components/landing/SiteFooter'
 import { ResumeApplicationDialog } from '@/components/landing/ResumeApplicationDialog'
 import { StartApplicationDialog } from '@/components/landing/StartApplicationDialog'
 import { applyPath } from '@/config/applicationSteps'
+import { useProducts } from '@/hooks/useProducts'
 import { roleLabel } from '@/config/roles'
 import { fetchPrefill, fetchReferrer } from '@/services/applicationsApi'
 import { readReferral, rememberReferral } from '@/lib/referral'
 
 function LandingPage() {
   const [resumeOpen, setResumeOpen] = useState(false)
-  const [pendingLoanType, setPendingLoanType] = useState(null)
+  // The product being started (its id), while the email step is open.
+  const [pendingProductId, setPendingProductId] = useState(null)
+  const products = useProducts()
+  const pendingProduct = products.find((product) => product.id === pendingProductId) || null
   const [referrer, setReferrer] = useState(null)
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
@@ -40,29 +44,31 @@ function LandingPage() {
 
   // Every "apply" entry point asks for an email first so the draft can sync from
   // the very first field; the wizard prefills it and carries on.
-  const handleApply = useCallback((type) => setPendingLoanType(type), [])
+  const handleApply = useCallback((productId) => setPendingProductId(productId), [])
 
   const handleStart = useCallback(
     async (email) => {
-      const type = pendingLoanType || 'personal'
+      const product = pendingProduct || products[0]
+      const start = applyPath(product.id, 0, product.form)
       if (!email) {
-        setPendingLoanType(null)
-        navigate(applyPath(type, 0))
+        setPendingProductId(null)
+        navigate(start)
         return
       }
 
-      // A failed lookup just means starting blank, never a blocked start.
-      const formState = await fetchPrefill(email, type).catch(() => null)
+      // A failed lookup just means starting blank, never a blocked start. Earlier
+      // applications are looked up by form: the same questions, whatever the product.
+      const formState = await fetchPrefill(email, product.form).catch(() => null)
       if (!formState) {
-        setPendingLoanType(null)
-        navigate(applyPath(type, 0), { state: { startEmail: email } })
+        setPendingProductId(null)
+        navigate(start, { state: { startEmail: email } })
         return
       }
 
-      setPendingLoanType(null)
-      navigate(applyPath(type, 0), { state: { startEmail: email, prefilledApplication: formState } })
+      setPendingProductId(null)
+      navigate(start, { state: { startEmail: email, prefilledApplication: formState } })
     },
-    [navigate, pendingLoanType]
+    [navigate, pendingProduct, products]
   )
 
   const handleResume = useCallback(() => setResumeOpen(true), [])
@@ -71,7 +77,7 @@ function LandingPage() {
 
   const handleResumed = useCallback(
     (draft) => {
-      navigate(applyPath(draft.loanType, draft.currentStep || 0), { state: { resumedDraft: draft } })
+      navigate(applyPath(draft.loanData?.productId || draft.loanType, draft.currentStep || 0, draft.loanType), { state: { resumedDraft: draft } })
     },
     [navigate]
   )
@@ -103,11 +109,11 @@ function LandingPage() {
       <SiteFooter />
 
       <StartApplicationDialog
-        open={Boolean(pendingLoanType)}
+        open={Boolean(pendingProductId)}
         onOpenChange={(open) => {
-          if (!open) setPendingLoanType(null)
+          if (!open) setPendingProductId(null)
         }}
-        loanType={pendingLoanType}
+        productName={pendingProduct?.name}
         onStart={handleStart}
       />
 

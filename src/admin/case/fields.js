@@ -3,6 +3,10 @@
  * steps so an officer reads it in the order the applicant filled it in.
  */
 
+import { collateralItems, collateralValue, typeLabel } from '@/config/collateral'
+import { employerField, positionLabel } from '@/config/applicantRules'
+import { formatKwacha } from '@/config/loanProducts'
+
 const phone = (value) => (value ? `+260 ${value}` : '')
 
 export const personalSections = (data) => {
@@ -13,7 +17,7 @@ export const personalSections = (data) => {
       title: 'Personal',
       rows: [
         ['Full name', [info.firstName, info.middleName, info.surname].filter(Boolean).join(' ')],
-        ['NRC', info.nrc],
+        info.passportNumber && !info.nrc ? ['Passport number', info.passportNumber] : ['NRC', info.nrc],
         ['Date of birth', info.birthDate],
         ['Gender', info.gender],
         ['Marital status', info.maritalStatus],
@@ -27,7 +31,8 @@ export const personalSections = (data) => {
         ['Residential address', work.residentialAddress],
         ['Nationality', work.nationality],
         ['Occupation', work.occupation],
-        ['Employer', work.employerName],
+        // A business name for the self-employed; nothing for those without an employer.
+        [employerField(work.occupation)?.label || 'Employer', work.employerName],
         ['Purpose of the loan', work.principalObjectiveOfLoan],
       ],
     },
@@ -63,8 +68,8 @@ export const businessSections = (data) => {
       title: 'Applicant',
       rows: [
         ['Full name', [director.applicantFirstName, director.applicantMiddleName, director.applicantLastName].filter(Boolean).join(' ')],
-        ['Position', director.applicantPosition],
-        ['NRC', director.applicantNrc],
+        ['Position', positionLabel(director)],
+        director.applicantPassportNumber && !director.applicantNrc ? ['Passport number', director.applicantPassportNumber] : ['NRC', director.applicantNrc],
         ['Date of birth', director.applicantBirthDate],
         ['Phone', phone(director.applicantPhone)],
         ['Email', director.applicantEmail],
@@ -83,5 +88,23 @@ export const businessSections = (data) => {
   ]
 }
 
-export const sectionsFor = (application) =>
-  application.loanType === 'personal' ? personalSections(application.data) : businessSections(application.data)
+/** What was pledged, one row per item, then the total and how it compares with the loan. */
+export const collateralSection = (application, types) => {
+  const items = collateralItems(application.data)
+  if (!items.length) return []
+  const total = collateralValue(items)
+  return [
+    {
+      title: 'Collateral',
+      rows: [
+        ...items.map((item) => [typeLabel(item.type, types), `${String(item.description || '').trim()}${Number(item.value) > 0 ? `, est. ${formatKwacha(item.value)}` : ''}`]),
+        ['Total pledged', `${formatKwacha(total)}${application.amount ? ` (${Math.round((total / application.amount) * 100)}% of the loan)` : ''}`],
+      ],
+    },
+  ]
+}
+
+export const sectionsFor = (application, types) => [
+  ...(application.loanType === 'personal' ? personalSections(application.data) : businessSections(application.data)),
+  ...collateralSection(application, types),
+]

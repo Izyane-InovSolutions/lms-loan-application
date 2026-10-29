@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm'
 import { getDb, schema } from './db/client.js'
 import { decryptSecret, encryptSecret, isEncrypted } from './secrets.js'
 import { DEFAULT_PRICING } from '../../src/config/loanProducts.js'
+import { DEFAULT_COLLATERAL_TYPES } from '../../src/config/collateral.js'
 import { AI_FIELDS, AI_SECRET_FIELDS } from '../../src/config/aiProviders.js'
 import { DEFAULT_STAGES_CONFIG } from '../../src/config/stages.js'
 import { DEFAULT_BRAND_NAME } from '../../src/config/branding.js'
@@ -73,6 +74,27 @@ export const SETTING_DEFAULTS = {
     password: '',
     timeoutSeconds: 10,
   },
+  /*
+   * The credit bureau (Settings → Credit bureau, api/_lib/crb). "environment" keeps
+   * following CRB_PROVIDER and the CRB_* variables; none, demo (sample scores) and
+   * product109 use the values here. A CA bundle stays a server file (CRB_CA_FILE).
+   */
+  crb: {
+    provider: 'environment',
+    wsdlUrl: '',
+    transportUsername: '',
+    transportPassword: '',
+    messageUsername: '',
+    messagePassword: '',
+    code: '',
+    infinityCode: '',
+    // Defined by the bureau contract; the existing adapter sends 2 for both.
+    reportReason: 2,
+    reportSector: 2,
+    timeoutSeconds: 30,
+    // UAT only: "NRC|other names|surname" of the bureau's test person. Refused in production.
+    testIdentity: '',
+  },
   workflow: {
     // A second person must approve what an officer recommends (four-eyes).
     requireSecondApproval: true,
@@ -101,7 +123,14 @@ export const SETTING_DEFAULTS = {
   stages: DEFAULT_STAGES_CONFIG,
   // Automatic decline on a failed rule. Off: rules recommend, people decide.
   prescreen: { autoDecline: false },
+  /*
+   * Loan products by id (Settings → Loan products, src/config/loanProducts.js): the two
+   * built-in ones and any the workspace added, each with its pricing, documents and
+   * collateral rules. Only what differs from the defaults needs to be stored.
+   */
   products: DEFAULT_PRICING,
+  // The kinds of collateral the lender accepts (src/config/collateral.js); products choose from these.
+  collateral: { types: DEFAULT_COLLATERAL_TYPES },
   /*
    * How long closed applications are kept before they and their documents are deleted.
    * null keeps them indefinitely. Approved and paid-out loans are kept by default: they
@@ -160,6 +189,7 @@ export const SETTING_DEFAULTS = {
 const SECRET_FIELDS = {
   lmsConnection: ['apiSecret', 'password'],
   zra: ['apiKey', 'username', 'password'],
+  crb: ['transportPassword', 'messagePassword'],
   sms: ['apiKey'],
   ai: AI_SECRET_FIELDS,
 }

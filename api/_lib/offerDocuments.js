@@ -1,7 +1,8 @@
 import { and, desc, eq } from 'drizzle-orm'
 import { getDb, schema } from './db/client.js'
 import { putBlob, readBlob } from './blob.js'
-import { getProductConfig } from './products.js'
+import { getApplicationProduct, getCollateralTypes } from './products.js'
+import { describeCollateral } from '../../src/config/collateral.js'
 import { getPublishedTemplate } from './templates.js'
 import { fillUploadedPdf, renderTextTemplate, sha256 } from './pdf.js'
 import { addEvent } from './applications.js'
@@ -47,7 +48,7 @@ const approvalOf = async (db, applicationId) => {
 export const mergeValuesFor = async (application) => {
   const db = await getDb()
   const approval = await approvalOf(db, application.id)
-  const product = await getProductConfig(application.loanType)
+  const product = await getApplicationProduct(application)
   const amount = application.approvedAmount ?? application.amount
   const tenure = application.approvedTenure ?? application.tenure
   const price = product ? priceLoan(amount, tenure, product) : { interest: 0, fee: 0, total: application.totalRepayable, monthly: application.monthlyInstalment }
@@ -56,13 +57,15 @@ export const mergeValuesFor = async (application) => {
   const info = personal ? data.personalInfo || {} : data.directorInfo || {}
   return {
     customer_name: application.applicantName,
-    customer_nrc: (personal ? info.nrc : info.applicantNrc) || '',
+    // A passport number for applicants who aren't Zambian.
+    customer_nrc: (personal ? info.nrc || info.passportNumber : info.applicantNrc || info.applicantPassportNumber) || '',
     customer_email: application.applicantEmail,
     customer_phone: phoneLabel(application.applicantPhone),
     customer_address: (personal ? data.employmentInfo?.residentialAddress : info.applicantAddress || data.businessInfo?.registeredOffice) || '',
     company_name: application.companyName || '',
     reference: application.reference,
-    product: LOAN_TYPE_LABELS[application.loanType] || 'Loan',
+    product: product?.name || LOAN_TYPE_LABELS[application.loanType] || 'Loan',
+    collateral: describeCollateral(data, await getCollateralTypes()) || 'None',
     amount: kwacha(amount),
     tenure: `${tenure} ${tenure === 1 ? 'month' : 'months'}`,
     interest: product ? describeInterest(product) : '',

@@ -24,7 +24,7 @@ const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
  * rather than partway through. Skipping is allowed — local autosave still works,
  * it just cannot be picked up on another device.
  */
-export function StartApplicationDialog({ open, onOpenChange, loanType, onStart }) {
+export function StartApplicationDialog({ open, onOpenChange, productName, onStart }) {
   const [email, setEmail] = useState('')
   const [error, setError] = useState('')
   const [starting, setStarting] = useState(false)
@@ -58,7 +58,7 @@ export function StartApplicationDialog({ open, onOpenChange, loanType, onStart }
       .finally(() => setStarting(false))
   }
 
-  const label = loanType === 'business' ? 'business loan' : 'personal loan'
+  const label = productName ? productName.toLowerCase() : 'application'
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

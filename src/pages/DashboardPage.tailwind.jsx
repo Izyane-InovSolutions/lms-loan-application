@@ -25,8 +25,10 @@ import { submitApplication, fetchSession, requestConsentCode, extractApiError } 
 import { extractFiles } from '../utils/fileTree'
 import { readReferral } from '../lib/referral'
 import { isAssistedFlagSet, clearAssistedFlag } from '../lib/assisted'
-import { useProduct } from '../hooks/useProducts'
-import { describeInterest, priceLoan } from '../config/loanProducts'
+import { useProductCatalog } from '../hooks/useProducts'
+import { describeInterest, getProduct, priceLoan } from '../config/loanProducts'
+import { collateralErrors, MAX_COLLATERAL_ITEMS } from '../config/collateral'
+import { EMPLOYMENT_OPTIONS, businessPeople, employerField, isValidPassportNumber, isZambian, positionsFor, presentDocuments } from '../config/applicantRules'
 import { useApplicationDraft } from '../hooks/useApplicationDraft'
 import { useDocumentAnalysis } from '../hooks/useDocumentAnalysis'
 import {
@@ -38,6 +40,7 @@ import {
 } from '../services/aiApi'
 import { describeRequestError } from '../lib/requestError'
 import { documentNotes, findFormMismatches } from '../utils/documentChecks'
+import { acceptsPhotos, readDocument, removeCollateralProof, writeDocument } from '../utils/documentSlots'
 
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -49,6 +52,7 @@ import {
   STEP_TITLES,
   applyPath,
   isLoanType,
+  isProductSlug,
   isValidStepSlug,
   stepIndex,
 } from '@/config/applicationSteps'
@@ -90,37 +94,59 @@ function DashboardPage() {
   const navigate = useNavigate()
   const { type: typeParam, step: stepParam } = useParams()
 
-  // The URL owns which loan type and which step we are on. Everything else stays
+  // The URL owns which loan product and which step we are on. Everything else stays
   // component state, so a refresh or a Back press lands on the right screen while
-  // the draft layer restores the answers.
-  const selectedLoanType = isLoanType(typeParam)
-    ? typeParam
-    : location.state?.type === 'business'
-      ? 'business'
-      : 'personal'
-  const stepTitles = STEP_TITLES[selectedLoanType]
+  // the draft layer restores the answers. The product's form (personal or business)
+  // decides the steps, the questions and the checks; the product its name, pricing,
+  // documents and collateral.
+  const { products, collateralTypes, loaded: productsLoaded } = useProductCatalog()
+  const routeProduct = products.find((entry) => entry.id === typeParam)
+  const fallbackForm = typeParam === 'business' || location.state?.type === 'business' ? 'business' : 'personal'
+  const product =
+    routeProduct ||
+    products.find((entry) => entry.id === fallbackForm) ||
+    products.find((entry) => entry.form === fallbackForm) ||
+    products[0] ||
+    getProduct(fallbackForm)
+  // An added product is only known once the workspace's products have loaded; until
+  // then its URL is left alone rather than "corrected" to a built-in product.
+  const awaitingProduct = !routeProduct && !productsLoaded && isProductSlug(typeParam) && !isLoanType(typeParam)
+  const selectedProductId = product.id
+  const selectedLoanType = product.form
+  // Collateral is pledged on the loan terms step, so its name says so when the product asks for it.
+  const stepTitles = STEP_TITLES[selectedLoanType].map((title) =>
+    title === 'Loan Terms' && product.collateral?.requirement && product.collateral.requirement !== 'none' ? 'Loan & Collateral' : title
+  )
   const currentStep = stepIndex(selectedLoanType, stepParam)
 
   // Mirrors of the derived values, updated eagerly by the setters below so that
-  // two setter calls in the same tick (draft hydration sets type *and* step)
-  // compose instead of the second one reading a stale type.
-  const loanTypeRef = useRef(selectedLoanType)
+  // two setter calls in the same tick (draft hydration sets product *and* step)
+  // compose instead of the second one reading a stale product.
+  const productRef = useRef(product)
   const stepRef = useRef(currentStep)
-  loanTypeRef.current = selectedLoanType
+  productRef.current = product
   stepRef.current = currentStep
+  const productsRef = useRef(products)
+  productsRef.current = products
 
   const navigateToStep = useCallback(
-    (type, index, { replace = false } = {}) => {
-      navigate(applyPath(type, index), { replace })
+    (target, index, { replace = false } = {}) => {
+      navigate(applyPath(target.id, index, target.form), { replace })
     },
     [navigate]
   )
 
-  // Passed to useApplicationDraft: resuming a draft should not push history.
+  /**
+   * Passed to useApplicationDraft: resuming a draft should not push history. A draft
+   * names its form and (since products) its product, in loanData.productId; a product
+   * since switched off or changed to the other form falls back to the form's built-in one.
+   */
   const setSelectedLoanType = useCallback(
-    (type) => {
-      const next = isLoanType(type) ? type : 'personal'
-      loanTypeRef.current = next
+    (type, productId) => {
+      const form = isLoanType(type) ? type : 'personal'
+      const known = productsRef.current
+      const next = known.find((entry) => entry.id === productId && entry.form === form) || known.find((entry) => entry.id === form) || getProduct(form)
+      productRef.current = next
       navigateToStep(next, stepRef.current, { replace: true })
     },
     [navigateToStep]
@@ -129,22 +155,26 @@ function DashboardPage() {
   const setCurrentStep = useCallback(
     (index) => {
       stepRef.current = index
-      navigateToStep(loanTypeRef.current, index, { replace: true })
+      navigateToStep(productRef.current, index, { replace: true })
     },
     [navigateToStep]
   )
 
-  // Normalise bare or unknown URLs (/apply, /apply/personal, bad slug) onto the
-  // canonical path, carrying router state through so a resumed draft survives.
+  // Normalise bare or unknown URLs (/apply, /apply/personal, a switched-off product, a
+  // bad slug) onto the canonical path, carrying router state through so a resumed draft survives.
   useEffect(() => {
-    if (!isLoanType(typeParam) || !isValidStepSlug(typeParam, stepParam)) {
-      navigate(applyPath(selectedLoanType, 0), { replace: true, state: location.state })
+    if (awaitingProduct) return
+    if (typeParam !== selectedProductId || !isValidStepSlug(selectedLoanType, stepParam)) {
+      navigate(applyPath(selectedProductId, isValidStepSlug(selectedLoanType, stepParam) ? currentStep : 0, selectedLoanType), { replace: true, state: location.state })
     }
-  }, [typeParam, stepParam, selectedLoanType, navigate, location.state])
+  }, [awaitingProduct, typeParam, stepParam, selectedProductId, selectedLoanType, currentStep, navigate, location.state])
 
   const [personalData, setPersonalData] = useState(personalInitial)
   const [businessData, setBusinessData] = useState(businessInitial)
   const [loanData, setLoanData] = useState(initialLoanState)
+  // The product applied for travels in loanData (drafted, synced and submitted with it),
+  // so a resumed draft returns to its product. It always follows the URL's product.
+  const loanDataWithProduct = useMemo(() => ({ ...loanData, productId: selectedProductId }), [loanData, selectedProductId])
   const [previewAttachment, setPreviewAttachment] = useState(null)
   const [showTerms, setShowTerms] = useState(false)
   const [showSuccess, setShowSuccess] = useState(false)
@@ -200,7 +230,7 @@ function DashboardPage() {
     currentStep,
     personalData,
     businessData,
-    loanData,
+    loanData: loanDataWithProduct,
     setSelectedLoanType,
     setCurrentStep,
     setPersonalData,
@@ -263,8 +293,7 @@ function DashboardPage() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }, [currentStep])
 
-  // Limits and pricing come from the workspace's product settings (useProducts).
-  const product = useProduct(selectedLoanType)
+  // Limits and pricing come from the workspace's product settings (useProductCatalog).
   const { minAmount, maxAmount, minTenure, maxTenure } = product
   const price = useMemo(() => priceLoan(loanData.amount, loanData.tenure, product), [loanData.amount, loanData.tenure, product])
   const totalRepayable = price.total
@@ -340,8 +369,6 @@ function DashboardPage() {
     return ''
   }
 
-  const isPassportPhotoField = (field) => field === 'passportPhoto'
-
   const setValidationError = (key, message) => {
     setValidationErrors((prev) => {
       const next = { ...prev }
@@ -400,37 +427,60 @@ function DashboardPage() {
 
   const getUploadStatus = (field) => uploadStatuses[field] || 'idle'
 
-  // Every upload slot the AI checks, with what its document should agree with on the
-  // form. `slot` is the label staff see in the prescreen; fieldKey matches the keys the
-  // upload fields already use for status.
-  const analysisSlots = (() => {
-    if (selectedLoanType === 'personal') {
-      const { firstName, middleName, surname, nrc } = personalData.personalInfo
-      const applicant = { name: [firstName, middleName, surname].filter(Boolean).join(' '), nrc }
-      const docs = personalData.documents
-      return [
-        { fieldKey: 'payslips', docType: 'payslips', slot: 'Latest three payslips', required: true, file: docs.payslips, expected: applicant },
-        { fieldKey: 'bankStatements', docType: 'bankStatements', slot: 'Bank statements', required: true, file: docs.bankStatements, expected: { name: applicant.name } },
-        { fieldKey: 'nrcCopy', docType: 'nrcCopy', slot: 'NRC copy', required: true, file: docs.nrcCopy, expected: applicant },
-        { fieldKey: 'tpin', docType: 'tpin', slot: 'TPIN certificate', required: true, file: docs.tpin, expected: { name: applicant.name } },
-        { fieldKey: 'passportPhoto', docType: 'passportPhoto', slot: 'Passport photo', required: true, file: docs.passportPhoto, expected: {} },
-      ]
-    }
+  // The form's answers and documents for the product's form.
+  const activeData = selectedLoanType === 'personal' ? personalData : businessData
+  const setActiveData = selectedLoanType === 'personal' ? setPersonalData : setBusinessData
+  const collateralAsked = Boolean(product.collateral?.requirement) && product.collateral.requirement !== 'none'
+  const collateralRows = collateralAsked ? activeData.collateral?.items || [] : []
 
+  // What each built-in document should agree with on the form (the server checks the same
+  // pairs, api/_lib/prescreen/facts.js expectedFor). A product's own documents and
+  // collateral proofs are only checked for being what was asked for.
+  const expectedForSlot = (slot) => {
+    if (selectedLoanType === 'personal') {
+      const { firstName, middleName, surname, nrc, passportNumber } = personalData.personalInfo
+      const applicant = { name: [firstName, middleName, surname].filter(Boolean).join(' '), nrc }
+      if (slot === 'payslips' || slot === 'nrcCopy') return applicant
+      if (slot === 'passportCopy') return { name: applicant.name, passport: passportNumber }
+      if (slot === 'bankStatements' || slot === 'tpin') return { name: applicant.name }
+      return {}
+    }
     const company = { companyName: businessData.businessInfo.companyName, holderIsCompany: true }
     // ZRA documents also print the company's TPIN, checked against the one entered.
-    const taxed = { ...company, tpin: businessData.businessInfo.tpin }
-    const docs = businessData.documents
+    if (slot === 'taxClearance' || slot === 'latestTaxComplianceReturn') return { ...company, tpin: businessData.businessInfo.tpin }
+    if (['pacraCertificate', 'form2', 'bankStatements', 'boardResolution'].includes(slot)) return company
+    return {}
+  }
+
+  // Every upload slot the AI checks, with what its document should agree with on the
+  // form. `slot` is the label staff see in the prescreen; fieldKey is the slot itself,
+  // which the upload fields use for status and the server matches the analysis by.
+  const analysisSlots = (() => {
+    const docs = activeData.documents
+    const productSlots = presentDocuments(product, activeData).filter((document) => !document.skipped).map((document) => ({
+      fieldKey: document.slot,
+      docType: document.docType,
+      slot: document.label,
+      required: document.required,
+      file: readDocument(docs, document.slot),
+      expected: expectedForSlot(document.slot),
+      // A product's own document is checked against what the product says it is.
+      ...(document.docType === 'custom' ? { productId: selectedProductId } : {}),
+    }))
+    const collateralSlots = collateralRows.map((_, index) => ({
+      fieldKey: `collateral.${index}`,
+      docType: 'collateral',
+      slot: `Collateral ${index + 1} proof`,
+      required: false,
+      file: readDocument(docs, `collateral.${index}`),
+      expected: {},
+    }))
+    if (selectedLoanType === 'personal') return [...productSlots, ...collateralSlots]
+
     const directors = businessData.directorInfo.directors || []
     return [
-      { fieldKey: 'pacraCertificate', docType: 'pacraCertificate', slot: 'PACRA certificate', required: true, file: docs.pacraCertificate, expected: company },
-      { fieldKey: 'form2', docType: 'form2', slot: 'Form 2', required: true, file: docs.form2, expected: company },
-      { fieldKey: 'taxClearance', docType: 'taxClearance', slot: 'Tax clearance certificate / TPIN', required: true, file: docs.taxClearance, expected: taxed },
-      { fieldKey: 'latestTaxComplianceReturn', docType: 'latestTaxComplianceReturn', slot: 'Latest tax compliance return', required: true, file: docs.latestTaxComplianceReturn, expected: taxed },
-      { fieldKey: 'orderOrInvoice', docType: 'orderOrInvoice', slot: 'Order / Invoice', required: false, file: docs.orderOrInvoice, expected: {} },
-      { fieldKey: 'bankStatements', docType: 'bankStatements', slot: 'Bank statements', required: true, file: docs.bankStatements, expected: company },
-      { fieldKey: 'boardResolution', docType: 'boardResolution', slot: 'Board resolution', required: true, file: docs.boardResolution, expected: company },
-      { fieldKey: 'passportPhoto', docType: 'passportPhoto', slot: 'Applicant passport photo', required: true, file: docs.passportPhoto, expected: {} },
+      ...productSlots,
+      ...collateralSlots,
       ...(docs.directorUploads || []).flatMap((upload, index) => [
         {
           fieldKey: `director.${index}.nrc`,
@@ -537,13 +587,13 @@ function DashboardPage() {
     updateDirectorDocumentField(index, field, file, event.target)
   }
 
+  // `field` is the document's slot: payslips, custom.title-deed, collateral.0 (utils/documentSlots.js).
   const updateDocumentField = (field, file, inputElement = null) => {
-    const setter = selectedLoanType === 'personal' ? setPersonalData : setBusinessData
     const errorKey = `documents.${field}`
     let validationMessage = ''
 
     if (file) {
-      validationMessage = isPassportPhotoField(field) ? validatePassportFile(file) : validatePdfFile(file)
+      validationMessage = acceptsPhotos(field) ? validatePassportFile(file) : validatePdfFile(file)
       if (validationMessage) {
         setValidationError(errorKey, validationMessage)
         setUploadStatus(field, 'error')
@@ -555,27 +605,65 @@ function DashboardPage() {
     }
 
     setValidationError(errorKey, '')
+    setActiveData((prev) => ({ ...prev, documents: writeDocument(prev.documents, field, file) }))
     if (file) {
-      setter((prev) => ({
-        ...prev,
-        documents: {
-          ...prev.documents,
-          [field]: file,
-        },
-      }))
       setTimeout(() => {
         setUploadStatus(field, 'success')
       }, 600)
     } else {
       setUploadStatus(field, 'idle')
-      setter((prev) => ({
-        ...prev,
-        documents: {
-          ...prev.documents,
-          [field]: file,
-        },
-      }))
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Collateral (Loan terms step), when the product asks for it: the items pledged at
+  // <form>Data.collateral.items, each with an optional proof at documents.collateral[i].
+  // ---------------------------------------------------------------------------
+
+  const addCollateralItem = () => {
+    setActiveData((prev) => {
+      const items = prev.collateral?.items || []
+      if (items.length >= MAX_COLLATERAL_ITEMS) return prev
+      return { ...prev, collateral: { ...(prev.collateral || {}), items: [...items, { type: '', description: '', value: '' }] } }
+    })
+  }
+
+  const updateCollateralItem = (index, field, value) => {
+    const next = field === 'value' ? value.replace(/[^0-9]/g, '') : value
+    setActiveData((prev) => ({
+      ...prev,
+      collateral: {
+        ...(prev.collateral || {}),
+        items: (prev.collateral?.items || []).map((item, itemIndex) => (itemIndex === index ? { ...item, [field]: next } : item)),
+      },
+    }))
+    setValidationError(`collateral.items.${index}.${field}`, '')
+    setValidationError('collateral', '')
+  }
+
+  // Removes the item and its proof; later items (and their proofs, statuses and errors) move up one.
+  const removeCollateralItem = (index) => {
+    setActiveData((prev) => ({
+      ...prev,
+      collateral: { ...(prev.collateral || {}), items: (prev.collateral?.items || []).filter((_, itemIndex) => itemIndex !== index) },
+      documents: removeCollateralProof(prev.documents, index),
+    }))
+    const shift = (record) => {
+      const next = {}
+      Object.entries(record).forEach(([key, value]) => {
+        const match = /^(documents\.)?collateral(\.items)?\.(\d+)(.*)$/.exec(key)
+        if (!match) {
+          next[key] = value
+          return
+        }
+        const position = Number(match[3])
+        if (position === index) return
+        next[`${match[1] || ''}collateral${match[2] || ''}.${position > index ? position - 1 : position}${match[4]}`] = value
+      })
+      return next
+    }
+    setUploadStatuses((prev) => shift(prev))
+    setValidationErrors((prev) => shift(prev))
   }
 
   const updateDirectorDocumentField = (index, field, file, inputElement = null) => {
@@ -628,7 +716,7 @@ function DashboardPage() {
       ...prev,
       documents: {
         ...prev.documents,
-        directorUploads: (prev.documents.directorUploads || []).length < 3
+        directorUploads: (prev.documents.directorUploads || []).length < businessPeople(prev.businessInfo.businessType).max
           ? [...(prev.documents.directorUploads || []), { nrc: null, passportPhoto: null }]
           : prev.documents.directorUploads || [{ nrc: null, passportPhoto: null }],
       },
@@ -674,7 +762,7 @@ function DashboardPage() {
       ...prev,
       directorInfo: {
         ...prev.directorInfo,
-        directors: prev.directorInfo.directors.length < 3
+        directors: prev.directorInfo.directors.length < businessPeople(prev.businessInfo.businessType).max
           ? [...prev.directorInfo.directors, { name: '', phone: '', email: '', nrc: '' }]
           : prev.directorInfo.directors,
       },
@@ -717,13 +805,36 @@ function DashboardPage() {
       }
     }
 
+    // The documents the product asks for, in the slots they live in (utils/documentSlots.js).
+    const validateProductDocuments = () => {
+      // Only those that apply to the answers given (no payslips without a salary, applicantRules.js).
+      presentDocuments(product, activeData).filter((document) => !document.skipped).forEach((document) => {
+        const key = `documents.${document.slot}`
+        const file = readDocument(activeData.documents, document.slot)
+        if (document.required && !file) recordError(key, `${document.label} is required.`)
+        if (file) recordError(key, acceptsPhotos(document.slot) ? validatePassportFile(file) : validatePdfFile(file))
+      })
+    }
+
+    // Loan terms: the collateral the product asks for, and each proof attached.
+    if (currentStep === 3 && collateralAsked) {
+      Object.entries(collateralErrors(product, activeData, loanData.amount, collateralTypes)).forEach(([key, message]) => recordError(key, message))
+      collateralRows.forEach((_, index) => {
+        const file = readDocument(activeData.documents, `collateral.${index}`)
+        if (file) recordError(`documents.collateral.${index}`, validatePassportFile(file))
+      })
+    }
+
     if (selectedLoanType === 'personal') {
       if (currentStep === 0) {
         requiredField(personalData.personalInfo.firstName, 'personalInfo.firstName', 'First name is required.')
         requiredField(personalData.personalInfo.surname, 'personalInfo.surname', 'Surname is required.')
         requiredField(personalData.personalInfo.phone, 'personalInfo.phone', 'Phone is required.')
         requiredField(personalData.personalInfo.email, 'personalInfo.email', 'Email is required.')
-        requiredField(personalData.personalInfo.nrc, 'personalInfo.nrc', 'NRC is required.')
+        // Nationality decides the ID asked for: an NRC for Zambians, a passport number for anyone else.
+        requiredField(personalData.employmentInfo.nationality, 'employmentInfo.nationality', 'Nationality is required.')
+        if (isZambian(personalData.employmentInfo.nationality)) requiredField(personalData.personalInfo.nrc, 'personalInfo.nrc', 'NRC is required.')
+        else if (!isValidPassportNumber(personalData.personalInfo.passportNumber)) recordError('personalInfo.passportNumber', 'Enter your passport number: 6 to 12 letters and numbers.')
         requiredField(personalData.personalInfo.gender, 'personalInfo.gender', 'Gender is required.')
         requiredField(personalData.personalInfo.maritalStatus, 'personalInfo.maritalStatus', 'Marital status is required.')
         requiredField(personalData.personalInfo.birthDate, 'personalInfo.birthDate', 'Birth date is required.')
@@ -736,16 +847,17 @@ function DashboardPage() {
         if (personalData.personalInfo.email && !isValidEmail(personalData.personalInfo.email)) {
           recordError('personalInfo.email', 'Email must end with a .com domain.')
         }
-        if (personalData.personalInfo.nrc && !isValidNRC(personalData.personalInfo.nrc)) {
+        if (isZambian(personalData.employmentInfo.nationality) && personalData.personalInfo.nrc && !isValidNRC(personalData.personalInfo.nrc)) {
           recordError('personalInfo.nrc', 'NRC must be 6 digits, slash, 2 digits, slash, then 1–2 digits.')
         }
       }
 
       if (currentStep === 1) {
         requiredField(personalData.employmentInfo.residentialAddress, 'employmentInfo.residentialAddress', 'Residential address is required.')
-        requiredField(personalData.employmentInfo.occupation, 'employmentInfo.occupation', 'Occupation is required.')
-        requiredField(personalData.employmentInfo.employerName, 'employmentInfo.employerName', 'Employer name is required.')
-        requiredField(personalData.employmentInfo.nationality, 'employmentInfo.nationality', 'Nationality is required.')
+        // Earlier drafts typed it freely; it is now one of the listed choices.
+        if (!EMPLOYMENT_OPTIONS.some((option) => option.value === personalData.employmentInfo.occupation)) recordError('employmentInfo.occupation', 'Choose your occupation.')
+        const employer = employerField(personalData.employmentInfo.occupation)
+        if (employer) requiredField(personalData.employmentInfo.employerName, 'employmentInfo.employerName', `${employer.label} is required.`)
         requiredField(personalData.employmentInfo.principalObjectiveOfLoan, 'employmentInfo.principalObjectiveOfLoan', 'Principal objective of loan is required.')
         requiredField(personalData.employmentInfo.nextOfKinName, 'employmentInfo.nextOfKinName', 'Next of kin name is required.')
         requiredField(personalData.employmentInfo.nextOfKinPhone, 'employmentInfo.nextOfKinPhone', 'Next of kin phone is required.')
@@ -759,35 +871,7 @@ function DashboardPage() {
         }
       }
 
-      if (currentStep === 2) {
-        requiredField(personalData.documents.payslips, 'documents.payslips', 'Latest three payslips are required.')
-        requiredField(personalData.documents.bankStatements, 'documents.bankStatements', 'Bank statements are required.')
-        requiredField(personalData.documents.nrcCopy, 'documents.nrcCopy', 'NRC copy is required.')
-        requiredField(personalData.documents.passportPhoto, 'documents.passportPhoto', 'Passport photo is required.')
-        requiredField(personalData.documents.tpin, 'documents.tpin', 'TPIN certificate is required.')
-        const pdfFields = [
-          { value: personalData.documents.payslips, key: 'documents.payslips' },
-          { value: personalData.documents.bankStatements, key: 'documents.bankStatements' },
-          { value: personalData.documents.nrcCopy, key: 'documents.nrcCopy' },
-          { value: personalData.documents.tpin, key: 'documents.tpin' },
-        ]
-
-        pdfFields.forEach(({ value, key }) => {
-          if (value) {
-            const validationMessage = validatePdfFile(value)
-            if (validationMessage) {
-              recordError(key, validationMessage)
-            }
-          }
-        })
-
-        if (personalData.documents.passportPhoto) {
-          const validationMessage = validatePassportFile(personalData.documents.passportPhoto)
-          if (validationMessage) {
-            recordError('documents.passportPhoto', validationMessage)
-          }
-        }
-      }
+      if (currentStep === 2) validateProductDocuments()
     }
 
     if (selectedLoanType === 'business') {
@@ -799,17 +883,19 @@ function DashboardPage() {
         requiredField(businessData.businessInfo.establishedDate, 'businessInfo.establishedDate', 'Established date is required.')
         requiredField(businessData.businessInfo.natureOfBusiness, 'businessInfo.natureOfBusiness', 'Nature of business is required.')
         requiredField(businessData.businessInfo.registeredOffice, 'businessInfo.registeredOffice', 'Registered office is required.')
-        requiredField(businessData.businessInfo.collateralPledged, 'businessInfo.collateralPledged', 'Collateral pledged is required.')
         requiredField(businessData.businessInfo.purposeOfLoan, 'businessInfo.purposeOfLoan', 'Purpose of loan is required.')
       }
 
       if (currentStep === 1) {
         const directors = businessData.directorInfo.directors || []
+        // Directors, partners or the owner, as the business type has them.
+        const people = businessPeople(businessData.businessInfo.businessType)
+        if (directors.length > people.max) recordError(`directorInfo.directors[${people.max}].name`, `A ${businessData.businessInfo.businessType.toLowerCase()} has one ${people.one.toLowerCase()}. Remove the others.`)
         directors.forEach((director, index) => {
-          requiredField(director.name, `directorInfo.directors[${index}].name`, `Director ${index + 1} name is required.`)
-          requiredField(director.phone, `directorInfo.directors[${index}].phone`, `Director ${index + 1} phone is required.`)
-          requiredField(director.email, `directorInfo.directors[${index}].email`, `Director ${index + 1} email is required.`)
-          requiredField(director.nrc, `directorInfo.directors[${index}].nrc`, `Director ${index + 1} NRC is required.`)
+          requiredField(director.name, `directorInfo.directors[${index}].name`, `${people.one} ${index + 1} name is required.`)
+          requiredField(director.phone, `directorInfo.directors[${index}].phone`, `${people.one} ${index + 1} phone is required.`)
+          requiredField(director.email, `directorInfo.directors[${index}].email`, `${people.one} ${index + 1} email is required.`)
+          requiredField(director.nrc, `directorInfo.directors[${index}].nrc`, `${people.one} ${index + 1} NRC is required.`)
           if (director.phone && !isValidPhone(director.phone)) {
             recordError(`directorInfo.directors[${index}].phone`, 'Enter 9 digits.')
           }
@@ -824,7 +910,8 @@ function DashboardPage() {
         requiredField(businessData.directorInfo.applicantLastName, 'directorInfo.applicantLastName', 'Applicant last name is required.')
         requiredField(businessData.directorInfo.applicantPhone, 'directorInfo.applicantPhone', 'Applicant phone is required.')
         requiredField(businessData.directorInfo.applicantEmail, 'directorInfo.applicantEmail', 'Applicant email is required.')
-        requiredField(businessData.directorInfo.applicantNrc, 'directorInfo.applicantNrc', 'Applicant NRC is required.')
+        if (isZambian(businessData.directorInfo.applicantNationality)) requiredField(businessData.directorInfo.applicantNrc, 'directorInfo.applicantNrc', 'Applicant NRC is required.')
+        else if (!isValidPassportNumber(businessData.directorInfo.applicantPassportNumber)) recordError('directorInfo.applicantPassportNumber', 'Enter the applicant’s passport number: 6 to 12 letters and numbers.')
         requiredField(businessData.directorInfo.applicantGender, 'directorInfo.applicantGender', 'Applicant gender is required.')
         requiredField(businessData.directorInfo.applicantMaritalStatus, 'directorInfo.applicantMaritalStatus', 'Applicant marital status is required.')
         requiredField(businessData.directorInfo.applicantBirthDate, 'directorInfo.applicantBirthDate', 'Applicant birth date is required.')
@@ -832,7 +919,9 @@ function DashboardPage() {
           recordError('directorInfo.applicantBirthDate', 'Age must be between 18 and 65.')
         }
         requiredField(businessData.directorInfo.applicantAddress, 'directorInfo.applicantAddress', 'Applicant address is required.')
-        requiredField(businessData.directorInfo.applicantPosition, 'directorInfo.applicantPosition', 'Applicant position is required.')
+        // One of the positions the business's legal form has (free text from earlier drafts is asked again).
+        if (!positionsFor(businessData.businessInfo.businessType).includes(businessData.directorInfo.applicantPosition)) recordError('directorInfo.applicantPosition', 'Choose the applicant’s position.')
+        else if (businessData.directorInfo.applicantPosition === 'Other') requiredField(businessData.directorInfo.applicantPositionOther, 'directorInfo.applicantPositionOther', 'Say what the applicant’s position is.')
         requiredField(businessData.directorInfo.applicantNationality, 'directorInfo.applicantNationality', 'Applicant nationality is required.')
         if (businessData.directorInfo.applicantPhone && !isValidPhone(businessData.directorInfo.applicantPhone)) {
           recordError('directorInfo.applicantPhone', 'Enter 9 digits.')
@@ -840,45 +929,13 @@ function DashboardPage() {
         if (businessData.directorInfo.applicantEmail && !isValidEmail(businessData.directorInfo.applicantEmail)) {
           recordError('directorInfo.applicantEmail', 'Email must end with a .com domain.')
         }
-        if (businessData.directorInfo.applicantNrc && !isValidNRC(businessData.directorInfo.applicantNrc)) {
+        if (isZambian(businessData.directorInfo.applicantNationality) && businessData.directorInfo.applicantNrc && !isValidNRC(businessData.directorInfo.applicantNrc)) {
           recordError('directorInfo.applicantNrc', 'NRC must be 6 digits, slash, 2 digits, slash, then 1–2 digits.')
         }
       }
 
       if (currentStep === 2) {
-        requiredField(businessData.documents.pacraCertificate, 'documents.pacraCertificate', 'PACRA certificate is required.')
-        requiredField(businessData.documents.form2, 'documents.form2', 'Form 2 is required.')
-        requiredField(businessData.documents.latestTaxComplianceReturn, 'documents.latestTaxComplianceReturn', 'Latest tax compliance return is required.')
-        requiredField(businessData.documents.taxClearance, 'documents.taxClearance', 'Tax clearance certificate is required.')
-        requiredField(businessData.documents.bankStatements, 'documents.bankStatements', 'Bank statements are required.')
-        requiredField(businessData.documents.passportPhoto, 'documents.passportPhoto', 'Passport photo is required.')
-        requiredField(businessData.documents.boardResolution, 'documents.boardResolution', 'Board resolution is required.')
-
-        const pdfFields = [
-          { value: businessData.documents.pacraCertificate, key: 'documents.pacraCertificate' },
-          { value: businessData.documents.form2, key: 'documents.form2' },
-          { value: businessData.documents.latestTaxComplianceReturn, key: 'documents.latestTaxComplianceReturn' },
-          { value: businessData.documents.taxClearance, key: 'documents.taxClearance' },
-          { value: businessData.documents.bankStatements, key: 'documents.bankStatements' },
-          { value: businessData.documents.boardResolution, key: 'documents.boardResolution' },
-          { value: businessData.documents.orderOrInvoice, key: 'documents.orderOrInvoice' },
-        ]
-
-        pdfFields.forEach(({ value, key }) => {
-          if (value) {
-            const validationMessage = validatePdfFile(value)
-            if (validationMessage) {
-              recordError(key, validationMessage)
-            }
-          }
-        })
-
-        if (businessData.documents.passportPhoto) {
-          const validationMessage = validatePassportFile(businessData.documents.passportPhoto)
-          if (validationMessage) {
-            recordError('documents.passportPhoto', validationMessage)
-          }
-        }
+        validateProductDocuments()
 
         const directorUploads = businessData.documents.directorUploads || []
         directorUploads.forEach((upload, index) => {
@@ -931,20 +988,20 @@ function DashboardPage() {
       flushRemoteDraft()
       // Pushed, not replaced, so browser Back returns to the previous step
       // rather than abandoning the application.
-      navigateToStep(selectedLoanType, currentStep + 1)
+      navigateToStep(product, currentStep + 1)
     }
   }
 
   const handleBack = () => {
     if (currentStep > 0) {
-      navigateToStep(selectedLoanType, currentStep - 1)
+      navigateToStep(product, currentStep - 1)
     } else {
       navigate('/')
     }
   }
 
   const goToStep = (index) => {
-    navigateToStep(selectedLoanType, index)
+    navigateToStep(product, index)
   }
 
   const [exiting, setExiting] = useState(false)
@@ -999,16 +1056,20 @@ function DashboardPage() {
   // exact fields again rather than trusting this list.
   const buildPrescreenRequest = () => ({
     loanType: selectedLoanType,
-    applicant:
-      selectedLoanType === 'personal'
+    applicant: {
+      ...(selectedLoanType === 'personal'
         ? { employmentInfo: personalData.employmentInfo }
         : {
             businessInfo: businessData.businessInfo,
             directorInfo: {
               applicantPosition: businessData.directorInfo.applicantPosition,
+              applicantPositionOther: businessData.directorInfo.applicantPositionOther,
               directors: (businessData.directorInfo.directors || []).map(() => ({})),
             },
-          },
+          }),
+      // Pledged kinds and values; the server drops the descriptions before the model sees them.
+      ...(collateralAsked ? { collateral: activeData.collateral } : {}),
+    },
     loan: { ...loanData, monthlyInstalment: price.monthly, totalRepayable: price.total },
     documents: analysisSlots.map(({ fieldKey, docType, slot, required, file, expected }) => {
       const entry = documentAnalyses[fieldKey]
@@ -1129,12 +1190,11 @@ function DashboardPage() {
       await ensureDocumentsUploaded(token)
 
       const scope = selectedLoanType === 'personal' ? 'personal' : 'business'
-      const activeData = selectedLoanType === 'personal' ? personalData : businessData
       const result = await submitApplication(token, {
         submissionKey: submissionKeyRef.current,
         loanType: selectedLoanType,
         data: extractFiles(activeData, scope).sanitized,
-        loanData,
+        loanData: loanDataWithProduct,
         referralCode: assistedBy ? null : readReferral(),
         consents: { dataProcessing: true, location: true, crb: CRB_ENABLED && allowCrb },
         location,
@@ -1155,6 +1215,15 @@ function DashboardPage() {
   }
 
 
+  // An added product's own URL, before the workspace's products have loaded.
+  if (awaitingProduct) {
+    return (
+      <div className="grid min-h-screen place-items-center bg-secondary/30">
+        <Loader2 className="size-8 animate-spin text-primary" aria-label="Loading" />
+      </div>
+    )
+  }
+
   return (
     <div className="flex min-h-screen flex-col bg-secondary/30">
       <main className="container flex-1 py-8">
@@ -1163,9 +1232,7 @@ function DashboardPage() {
               and it flushes the draft before leaving so the label is accurate. */}
           <div className="flex flex-wrap items-center justify-between gap-3 print:hidden">
             <div className="flex flex-wrap items-center gap-3">
-              <Badge variant="accent">
-                {selectedLoanType === 'personal' ? 'Personal loan' : 'Business loan'}
-              </Badge>
+              <Badge variant="accent">{product.name}</Badge>
               <span className="text-sm text-muted-foreground">
                 Step {currentStep + 1} of {stepTitles.length}
               </span>
@@ -1181,7 +1248,7 @@ function DashboardPage() {
           </div>
 
           <h1 className="mt-3 text-3xl font-bold tracking-tight text-foreground sm:text-4xl print:hidden">
-            Apply for {selectedLoanType === 'personal' ? 'Personal' : 'Business'} Loan
+            Apply for {product.name}
           </h1>
           <p className="mt-2 max-w-2xl text-muted-foreground print:hidden">
             {stepTitles[currentStep]} — fields marked with an asterisk are required. Your progress is saved as you go.
@@ -1251,7 +1318,7 @@ function DashboardPage() {
           {localDraftSummary ? (
             <div className="mt-6 flex flex-col gap-3 rounded-lg border border-primary/25 bg-accent/60 p-4 sm:flex-row sm:items-center sm:justify-between">
               <p className="text-sm text-accent-foreground">
-                We found an application in progress ({localDraftSummary.loanType === 'personal' ? 'Personal' : 'Business'} loan,
+                We found an application in progress ({products.find((entry) => entry.id === localDraftSummary.loanData?.productId)?.name || (localDraftSummary.loanType === 'personal' ? 'Personal loan' : 'Business loan')},
                 step {localDraftSummary.currentStep + 1}, saved {new Date(localDraftSummary.savedAt).toLocaleString()}). Resume it, or start a new application?
               </p>
               <div className="flex shrink-0 gap-2">
@@ -1294,8 +1361,10 @@ function DashboardPage() {
               {currentStep === 0 && !assistedBy && customerOptions.helpWithFinishing ? <DraftContactConsent /> : null}
 
               <WizardStep
+                addCollateralItem={addCollateralItem}
                 addDirector={addDirector}
                 addDirectorUpload={addDirectorUpload}
+                collateralTypes={collateralTypes}
                 allowCrb={allowCrb}
                 analysisFor={analysisFor}
                 applicantEmail={applicantEmail}
@@ -1320,6 +1389,8 @@ function DashboardPage() {
                 prescreen={prescreen}
                 prescreenView={prescreenView}
                 price={price}
+                product={product}
+                removeCollateralItem={removeCollateralItem}
                 removeDirector={removeDirector}
                 removeDirectorUpload={removeDirectorUpload}
                 retryPrescreen={retryPrescreen}
@@ -1331,6 +1402,7 @@ function DashboardPage() {
                 setPreviewAttachment={setPreviewAttachment}
                 setShowCameraCapture={setShowCameraCapture}
                 totalRepayable={totalRepayable}
+                updateCollateralItem={updateCollateralItem}
                 updateDirectorField={updateDirectorField}
                 updateSectionField={updateSectionField}
                 validationErrors={validationErrors}
@@ -1411,6 +1483,7 @@ function DashboardPage() {
           }
         }}
         loanType={selectedLoanType}
+        productName={product.name}
         amount={loanData.amount}
         tenure={loanData.tenure}
         monthlyRepayment={monthlyRepayment}

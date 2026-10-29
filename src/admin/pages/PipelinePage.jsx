@@ -248,7 +248,7 @@ export function PipelinePage() {
           row.reference || '',
           row.applicantName || row.email || '',
           row.companyName || '',
-          LOAN_TYPE_LABELS[row.loanType],
+          row.productName || LOAN_TYPE_LABELS[row.loanType],
           row.amount ?? '',
           column.key === 'draft' ? 'Draft' : statusLabel(row.status),
           row.prescreenOutcome || '',
@@ -548,7 +548,7 @@ function CaseCard({ row, slaDays, viewerId }) {
         <p className="shrink-0 text-sm font-semibold tabular-nums text-foreground">{money(row.amount)}</p>
       </div>
       <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
-        <span className="font-mono">{row.reference}</span> · {LOAN_TYPE_LABELS[row.loanType]}
+        <span className="font-mono">{row.reference}</span> · {row.productName || LOAN_TYPE_LABELS[row.loanType]}
       </p>
       <div className="mt-2.5 flex items-center justify-between gap-2">
         <OutcomeMark outcome={row.prescreenOutcome} className="rounded-full bg-muted/60 px-2 py-0.5" />
@@ -594,7 +594,7 @@ function DraftCard({ row, viewerId, onOpen }) {
         <p className="min-w-0 truncate text-sm font-medium text-foreground">{row.companyName || row.applicantName || row.email}</p>
         {row.amount ? <p className="shrink-0 text-sm font-semibold tabular-nums text-foreground">{money(row.amount)}</p> : null}
       </div>
-      <p className="mt-0.5 text-[11px] text-muted-foreground">{LOAN_TYPE_LABELS[row.loanType]}</p>
+      <p className="mt-0.5 text-[11px] text-muted-foreground">{row.productName || LOAN_TYPE_LABELS[row.loanType]}</p>
       <div className="mt-2.5 flex items-center gap-2">
         <span className="h-1.5 flex-1 rounded-full bg-muted" aria-hidden="true">
           <span className="block h-full rounded-full bg-primary/60" style={{ width: `${((row.currentStep + 1) / row.stepCount) * 100}%` }} />

@@ -43,7 +43,7 @@ export const companiesMatch = (a, b) => {
 
 /**
  * @param analysis  result from /api/ai/analyze-document
- * @param expected  { name?, nrc?, tpin?, companyName? } from the current form
+ * @param expected  { name?, nrc?, passport?, tpin?, companyName? } from the current form
  * @returns applicant-facing messages; empty when everything that can be compared agrees
  */
 export const findFormMismatches = (analysis, expected = {}) => {
@@ -54,6 +54,11 @@ export const findFormMismatches = (analysis, expected = {}) => {
     mismatches.push(
       `The NRC number on this document (${extracted.nrcNumber}) doesn't match the one you entered (${expected.nrc}).`
     )
+  }
+
+  const compact = (value) => String(value || '').replace(/[^a-z0-9]/gi, '').toUpperCase()
+  if (expected.passport && extracted.passportNumber && compact(expected.passport) !== compact(extracted.passportNumber)) {
+    mismatches.push(`The passport number on this document (${extracted.passportNumber}) doesn't match the one you entered (${expected.passport}).`)
   }
 
   if (expected.tpin && extracted.tpinNumber && digits(expected.tpin) !== digits(extracted.tpinNumber)) {

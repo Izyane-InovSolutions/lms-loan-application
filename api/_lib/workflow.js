@@ -12,7 +12,7 @@ import { checkOtp } from './otp.js'
 import { signatureFor } from './signing.js'
 import { outstandingDocuments } from './stageDocuments.js'
 import { listDocumentKinds } from './templates.js'
-import { priceLoan } from '../../src/config/loanProducts.js'
+import { priceLoan, productFor } from '../../src/config/loanProducts.js'
 import { getProducts } from './products.js'
 
 const { applications, appraisals, users } = schema
@@ -58,7 +58,7 @@ const reason = (input, message = 'Add a short explanation.') => {
 
 /** Approved amount and tenure, defaulting to what was asked for and held to the product limits. */
 const terms = (application, input, settings) => {
-  const product = settings.products.find((entry) => entry.id === application.loanType)
+  const product = productFor(application, settings.products)
   const amount = input.amount === undefined || input.amount === '' || input.amount === null ? application.amount : Number(input.amount)
   const tenure = input.tenure === undefined || input.tenure === '' || input.tenure === null ? application.tenure : Number(input.tenure)
   if (!Number.isFinite(amount) || amount < product.minAmount || amount > product.maxAmount) {
@@ -395,7 +395,7 @@ const decision = async (tx, viewer, application, action, input, rationale, setti
   Object.assign(changes, { decidedAt: new Date(), approvedAmount: approved.amount, approvedTenure: approved.tenure })
   if (singleStep) changes.assignedOfficer = application.assignedOfficer || viewer.id
   if (approved.amount !== application.amount || approved.tenure !== application.tenure) {
-    const price = priceLoan(approved.amount, approved.tenure, settings.products.find((entry) => entry.id === application.loanType))
+    const price = priceLoan(approved.amount, approved.tenure, productFor(application, settings.products))
     Object.assign(changes, { totalRepayable: price.total, monthlyInstalment: price.monthly })
   }
   const toOffer = actionTarget(flow.definition, action, application.loanType)?.type === 'offer'
@@ -450,7 +450,7 @@ const UTILITY = {
     if (!ctx.state.askApplicant || application.status === 'info_requested') fail(409, 'Information can only be requested while a case is being reviewed.', 'invalid_state')
     // Documents named here are uploaded against their slot, checked by the AI, and replace the earlier copy.
     const wanted = new Set(Array.isArray(input.documents) ? input.documents.map(String) : [])
-    const documents = requestableSlots(application.loanType, application.data)
+    const documents = requestableSlots(productFor(application, ctx.settings?.products), application.data)
       .filter((entry) => wanted.has(entry.slot))
       .map(({ slot, label }) => ({ slot, label }))
     const message = documents.length && !text(input.message, 2000) ? `Please send a new copy of: ${documents.map((entry) => entry.label).join(', ')}.` : reason(input.message, 'Say what the applicant needs to send or explain.')

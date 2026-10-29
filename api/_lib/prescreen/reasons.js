@@ -7,6 +7,8 @@
  * Each reason says what is missing and, where there is one, what to do about it.
  */
 
+import { isSalaried } from '../../../src/config/applicantRules.js'
+
 const ENTER = 'Enter it under “Figures from documents” on this case.'
 
 // Facts read from a document: which upload, which field, and how to name them.
@@ -26,8 +28,9 @@ const RATIOS = {
 }
 
 /** Why a figure read from a document is missing. */
-const documentReason = (spec, documents, { aiOn, submittedAt }) => {
+const documentReason = (spec, documents, { aiOn, submittedAt, application }) => {
   const uploads = documents.filter((document) => document.docType === spec.docType)
+  if (!uploads.length && spec.docType === 'payslips' && !isSalaried(application.data)) return `The applicant isn’t paid a salary (${application.data?.employmentInfo?.occupation?.toLowerCase() || 'not employed'}), so there are no payslips. Use the bank statements, or ${ENTER.charAt(0).toLowerCase()}${ENTER.slice(1)}`
   if (!uploads.length) return spec.optional ? `No ${spec.document} was uploaded (it’s optional).` : `No ${spec.document} was uploaded.`
   const read = uploads.find((document) => document.aiAnalysis)
   if (!read) {
@@ -55,7 +58,7 @@ export const factReasons = (application, documents, facts, context = {}) => {
   const unknown = (fact) => facts[fact] === null || facts[fact] === undefined || Number.isNaN(facts[fact])
 
   for (const [fact, spec] of Object.entries(FROM_DOCUMENT)) {
-    if (unknown(fact)) reasons[fact] = documentReason(spec, documents, { ...context, submittedAt: application.submittedAt })
+    if (unknown(fact)) reasons[fact] = documentReason(spec, documents, { ...context, submittedAt: application.submittedAt, application })
   }
   for (const [fact, spec] of Object.entries(RATIOS)) {
     if (unknown(fact)) reasons[fact] = unknown(spec.needs) ? `${spec.what}: ${lowerFirst(reasons[spec.needs] || 'that figure is unknown.')}` : `${spec.what}.`
@@ -69,6 +72,8 @@ export const factReasons = (application, documents, facts, context = {}) => {
   if (unknown('location_distance_km')) reasons.location_distance_km = context.distance?.reason || 'The distance couldn’t be worked out.'
   if (unknown('address_found')) reasons.address_found = context.distance?.reason || 'The home address wasn’t looked up on the map.'
   if (unknown('crb_score')) reasons.crb_score = context.crbProvider ? 'No credit bureau report has been pulled yet. Run a credit check on this case.' : 'No credit bureau is connected, so there is no score.'
+  if (unknown('collateral_value')) reasons.collateral_value = 'The applicant didn’t pledge any collateral.'
+  if (unknown('collateral_cover')) reasons.collateral_cover = 'The applicant didn’t pledge any collateral, so there is nothing to compare with the loan.'
   return reasons
 }
 

@@ -23,9 +23,10 @@ import { queueCondition, workflowView } from '../_lib/workflow.js'
 import { resolveState } from '../../src/config/workflow.js'
 import { runPrescreen } from '../_lib/prescreen/run.js'
 import { verifyApplicationWithZra } from '../_lib/zra/verifyApplication.js'
-import { priceLoan } from '../../src/config/loanProducts.js'
-import { getProductConfig, getProducts } from '../_lib/products.js'
-import { APPLICATION_STATUSES, APPROVED_STATUSES, OPEN_STATUSES, WITHDRAWABLE_STATUSES, describeSlot, requiredSlots, slotFromDraftPath, supersededDocuments } from '../../src/config/applications.js'
+import { BUILT_IN_PRODUCT_IDS, priceLoan, productFor } from '../../src/config/loanProducts.js'
+import { getApplicationProduct, getCollateralTypes, getProductConfig, getProducts } from '../_lib/products.js'
+import { APPLICATION_STATUSES, APPROVED_STATUSES, OPEN_STATUSES, WITHDRAWABLE_STATUSES, describeSlot, requestableSlots, requiredSlots, slotFromDraftPath, supersededDocuments } from '../../src/config/applications.js'
+import { collateralErrors } from '../../src/config/collateral.js'
 import { isStaffRole } from '../../src/config/roles.js'
 import { CONSENT_NOTICES } from '../../src/config/consent.js'
 import { checkOtp, consumeOtp } from '../_lib/otp.js'
@@ -93,7 +94,7 @@ const deleteDraft = async (email, draft, token) => {
  *
  * Authorised by the draft token of the draft holding the files. The body is the wizard's
  * state with attachments as draft markers:
- *   { submissionKey, loanType, data, loanData: { amount, tenure }, referralCode?,
+ *   { submissionKey, loanType, data, loanData: { amount, tenure, productId }, referralCode?,
  *     consents: { dataProcessing, location, crb }, location?: { latitude, longitude, accuracy },
  *     assisted?, consentCode? }
  *
@@ -129,8 +130,9 @@ const submitApplication = async (req) => {
   const [existing] = await db.select().from(applications).where(eq(applications.submissionKey, submissionKey)).limit(1)
   if (existing) return { id: existing.id, reference: existing.reference, duplicate: true }
 
-  const product = await getProductConfig(loanType)
-  if (!product?.enabled) fail(400, 'This loan product isn’t available at the moment.', 'product_unavailable')
+  // The product applied for; older clients send only the form, meaning its built-in product.
+  const product = await getProductConfig(text(body.loanData?.productId, 40) || loanType)
+  if (!product?.enabled || product.form !== loanType) fail(400, 'This loan product isn’t available at the moment.', 'product_unavailable')
   if (!Number.isFinite(amount) || amount < product.minAmount || amount > product.maxAmount) {
     fail(400, `Choose an amount between K${product.minAmount.toLocaleString()} and K${product.maxAmount.toLocaleString()}.`, 'invalid_amount')
   }
@@ -155,14 +157,22 @@ const submitApplication = async (req) => {
     const slot = slotFromDraftPath(path)
     if (slot && attached.has(path)) slotRefs[slot] = ref
   })
-  const missing = requiredSlots(loanType, data).filter((slot) => !slotRefs[slot])
+  const missing = requiredSlots(product, data).filter((slot) => !slotRefs[slot])
   if (missing.length) {
     fail(
       400,
-      `These documents haven’t finished uploading: ${missing.map((slot) => describeSlot(loanType, slot).label).join(', ')}. Wait a moment and submit again.`,
+      `These documents haven’t finished uploading: ${missing.map((slot) => describeSlot(product, slot).label).join(', ')}. Wait a moment and submit again.`,
       'missing_documents'
     )
   }
+  // Collateral the product asks for: enough of it, of the kinds it accepts (src/config/collateral.js).
+  const collateralProblems = Object.values(collateralErrors(product, data, amount, await getCollateralTypes()))
+  if (collateralProblems.length) fail(400, collateralProblems[0], 'invalid_collateral')
+  // Only the documents this product asks for (and its directors' and collateral proofs) are filed.
+  const asked = new Set(requestableSlots(product, data).map((entry) => entry.slot))
+  Object.keys(slotRefs).forEach((slot) => {
+    if (!asked.has(slot)) delete slotRefs[slot]
+  })
 
   const wanted = body.consents || {}
   if (!wanted.dataProcessing) fail(400, 'Please accept the terms before submitting.', 'consent_required')
@@ -192,7 +202,7 @@ const submitApplication = async (req) => {
   const id = crypto.randomUUID()
   const documentRows = []
   for (const [slot, ref] of Object.entries(slotRefs)) {
-    const described = describeSlot(loanType, slot)
+    const described = describeSlot(product, slot)
     const copied = await copyBlob(ref, `applications/${id}/${slot}-${ref.filename}`)
     const kept = await kv.get(`aiAnalysis:${draftEmail}:${slot}`)
     documentRows.push({
@@ -234,6 +244,7 @@ const submitApplication = async (req) => {
         reference,
         submissionKey,
         loanType,
+        productId: product.id,
         customerId: customer?.id ?? null,
         applicantEmail: applicant.email,
         applicantName: applicant.name,
@@ -342,6 +353,9 @@ const listFilters = async (viewer, query) => {
   else if (status && APPLICATION_STATUSES[status]) filters.push(eq(applications.status, status))
   const loanType = query.get('loanType')
   if (loanType === 'personal' || loanType === 'business') filters.push(eq(applications.loanType, loanType))
+  // One product; a built-in one also matches applications from before products (no product id, its form).
+  const product = text(query.get('product'), 40)
+  if (product) filters.push(BUILT_IN_PRODUCT_IDS.includes(product) ? or(eq(applications.productId, product), and(isNull(applications.productId), eq(applications.loanType, product))) : eq(applications.productId, product))
   const channel = query.get('channel')
   // "self", or the role of whoever brought it in.
   if (channel && /^[a-z0-9_]{2,40}$/.test(channel)) filters.push(eq(applications.channel, channel))
@@ -409,11 +423,14 @@ const listApplications = async (req, res, { query }) => {
     getSetting('workflow'),
   ])
 
+  const products = await getProducts()
   return {
     applications: rows.map(({ application, sourcedByName, assignedOfficerName, outcome }) => {
       const { data, submissionKey, ...rest } = application
-      return { ...rest, sourcedByName, assignedOfficerName, prescreenOutcome: outcome ?? null }
+      return { ...rest, productName: productFor(application, products).name, sourcedByName, assignedOfficerName, prescreenOutcome: outcome ?? null }
     }),
+    // Every product, switched off ones included, for the product filter.
+    products: products.map(({ id, name, enabled }) => ({ id, name, enabled })),
     total,
     page,
     pageSize,
@@ -495,6 +512,9 @@ export const loadCase = async (applicationId, viewer) => {
     // Where the case is in its workflow and what this viewer can do next (workflow.js).
     workflow: viewer ? await workflowView(viewer, row.application, { recommendation: appraisalRows.find((appraisal) => appraisal.kind === 'recommendation') || null }) : null,
     crbProvider: getCrb()?.name || null,
+    // The product it was made under, for its document list and collateral rules; and the collateral types, to name its pledges.
+    product: await getApplicationProduct(row.application),
+    collateralTypes: await getCollateralTypes(),
   }
 }
 
@@ -605,12 +625,13 @@ const reconcileLms = async (req, res, { params }) => {
 // Customer views
 // ---------------------------------------------------------------------------
 
-const customerSummary = (application) => {
+const customerSummary = (application, products) => {
   const status = APPLICATION_STATUSES[application.status] || {}
   return {
     id: application.id,
     reference: application.reference,
     loanType: application.loanType,
+    productName: productFor(application, products).name,
     amount: application.amount,
     tenure: application.tenure,
     totalRepayable: application.totalRepayable,
@@ -663,7 +684,8 @@ const myApplications = async (req) => {
   const db = await getDb()
   const rows = await db.select().from(applications).where(scopeApplications(viewer)).orderBy(desc(applications.submittedAt))
   const known = new Set(rows.map((row) => row.lmsReference).filter(Boolean))
-  return { applications: rows.map(customerSummary), earlier: await legacyLmsApplications(viewer.email, known) }
+  const products = await getProducts()
+  return { applications: rows.map((row) => customerSummary(row, products)), earlier: await legacyLmsApplications(viewer.email, known) }
 }
 
 /**
@@ -704,7 +726,7 @@ const myApplication = async (req, res, { params }) => {
     .where(and(eq(appraisals.applicationId, application.id), eq(appraisals.verdict, 'approve')))
     .orderBy(desc(appraisals.createdAt))
     .limit(1)
-  const summary = customerSummary(application)
+  const summary = customerSummary(application, await getProducts())
   if (summary.offer) {
     summary.offer.conditions = decision?.conditions || null
     summary.offer.requireSignature = (await getSetting('offers')).requireSignature
@@ -775,7 +797,11 @@ const draftFile = async (req, res, { query }) => {
 }
 
 /** Public: the products applicants can choose, with current pricing. */
-const listProducts = async () => ({ products: (await getProducts()).filter((product) => product.enabled) })
+// Public: what applicants can apply for, and the collateral kinds they can pledge (active ones).
+const listProducts = async () => ({
+  products: (await getProducts()).filter((product) => product.enabled),
+  collateralTypes: (await getCollateralTypes()).filter((type) => !type.retired),
+})
 
 export const applicationRoutes = [
   ['GET', '/products', listProducts],

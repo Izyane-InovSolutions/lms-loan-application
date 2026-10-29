@@ -1,8 +1,9 @@
 /**
- * Loan products: what each is (marketing copy, steps, documents) and how it is priced.
+ * Loan products: what each is (marketing copy, the form it uses, the documents and
+ * collateral it asks for) and how it is priced.
  *
- * Pricing here is the *default*. Administrators change it in Settings → Loan products;
- * the stored values are merged over these (api/_lib/products.js on the server,
+ * Everything here is the *default*. Administrators change it, and add products, in
+ * Settings → Loan products; the stored values are merged over these (api/_lib/products.js on the server,
  * src/hooks/useProducts.js in the browser), so every screen and the server price a
  * loan with the same numbers through priceLoan().
  */
@@ -76,43 +77,136 @@ export const describeFee = (pricing) =>
 export const totalRepayable = (amount, tenure = DEFAULT_PRICING.personal.defaultTenure, pricing) => priceLoan(amount, tenure, pricing).total
 export const monthlyInstalment = (amount, tenure, pricing) => priceLoan(amount, tenure, pricing).monthly
 
-const DESCRIPTIONS = [
-  {
+/**
+ * The two application forms a product can use. A product is a name, pricing, documents
+ * and collateral rules on top of one of these: the form decides the questions asked, the
+ * credit rules that apply (creditRules.js loanTypes) and how the LMS receives it. An
+ * application's `loanType` is its product's form; `productId` is the product itself.
+ */
+export const APPLICANT_FORMS = {
+  personal: { label: 'Individual', hint: 'A person: personal details, employment, payslips.', steps: ['Personal information', 'Residence & Employment', 'Documents', 'Loan Terms', 'Overview'] },
+  business: { label: 'Company', hint: 'A registered company: business details, directors.', steps: ['Business information', 'Directors & Applicant', 'Documents', 'Loan Terms', 'Overview'] },
+}
+
+/**
+ * The documents each form knows how to check: the AI reads each by its docType
+ * (api/_lib/ai/documents.js) and the credit rules take figures from some of them. A
+ * product picks from these, marks each required or optional, and can add its own
+ * (slot custom.*, checked against the description the admin gives).
+ */
+export const DOCUMENT_CATALOGUE = {
+  personal: [
+    { slot: 'payslips', label: 'Latest three payslips', docType: 'payslips', description: 'Net pay is read from these for affordability.' },
+    { slot: 'bankStatements', label: 'Bank statements (3 months)', docType: 'bankStatements', description: 'Money paid in is read from these.' },
+    { slot: 'nrcCopy', label: 'NRC copy', docType: 'nrcCopy' },
+    { slot: 'tpin', label: 'TPIN certificate', docType: 'tpin' },
+    { slot: 'passportPhoto', label: 'Passport-sized photo', docType: 'passportPhoto', photo: true },
+  ],
+  business: [
+    { slot: 'pacraCertificate', label: 'PACRA certificate', docType: 'pacraCertificate' },
+    { slot: 'form2', label: 'Form 2', docType: 'form2' },
+    { slot: 'taxClearance', label: 'Tax clearance certificate / TPIN', docType: 'taxClearance' },
+    { slot: 'latestTaxComplianceReturn', label: 'Latest tax compliance return', docType: 'latestTaxComplianceReturn', description: 'Turnover is read from this.' },
+    { slot: 'orderOrInvoice', label: 'Order / invoice', docType: 'orderOrInvoice', description: 'If applying for order financing or invoice discounting.' },
+    { slot: 'bankStatements', label: 'Bank statements (6 months)', docType: 'bankStatements', description: 'Money paid in is read from these.' },
+    { slot: 'boardResolution', label: 'Board resolution', docType: 'boardResolution' },
+    { slot: 'passportPhoto', label: 'Applicant passport-sized photo', docType: 'passportPhoto', photo: true },
+  ],
+}
+
+const OPTIONAL_BY_DEFAULT = ['orderOrInvoice']
+
+/** A form's catalogue as a product's document list, each required unless it is usually optional. */
+export const defaultDocuments = (form) =>
+  (DOCUMENT_CATALOGUE[form] || []).map(({ slot, label, docType, description }) => ({ slot, label, docType, description: description || '', required: !OPTIONAL_BY_DEFAULT.includes(slot) }))
+
+/**
+ * Collateral a product takes:
+ *   requirement   'none' (not asked), 'optional', or 'required' (at least one item)
+ *   types         collateral type keys accepted (empty: every active type, collateral.js)
+ *   minCoverage   pledged value ÷ loan amount the items must reach (1.2 is 120%), or null
+ */
+export const DEFAULT_COLLATERAL_RULES = { requirement: 'none', types: [], minCoverage: null }
+
+const BUILT_IN_PRODUCTS = {
+  personal: {
     id: 'personal',
+    form: 'personal',
     name: 'Personal Loan',
     tagline: 'For salaried applicants',
-    description:
-      'Borrow against your salary for school fees, medical costs, home improvements or any personal need. Repay over a tenure you choose.',
-    steps: ['Personal information', 'Residence & Employment', 'Documents', 'Loan Terms', 'Overview'],
-    documents: ['Salary Slip', 'Bank Statement', 'NRC Copy', 'Passport Photo', 'TPIN Certificate'],
+    description: 'Borrow against your salary for school fees, medical costs, home improvements or any personal need. Repay over a tenure you choose.',
+    documents: defaultDocuments('personal'),
+    collateral: DEFAULT_COLLATERAL_RULES,
   },
-  {
+  business: {
     id: 'business',
+    form: 'business',
     name: 'Business Loan',
     tagline: 'For registered companies',
-    description:
-      'Working capital for registered Zambian businesses — fund an order, bridge a payment gap, or invest in equipment and stock.',
-    steps: ['Business information', 'Directors & Applicant', 'Documents', 'Loan Terms', 'Overview'],
-    documents: [
-      'PACRA Certificate',
-      'Form 2',
-      'Latest Tax Compliance Return',
-      'Order/Invoice',
-      'Tax Clearance Certificate',
-      'Bank Statements',
-      'Passport Photo',
-      'Board Resolution',
-    ],
+    description: 'Working capital for registered Zambian businesses — fund an order, bridge a payment gap, or invest in equipment and stock.',
+    documents: defaultDocuments('business'),
+    // The business form always asked what was pledged; it stays asked, now itemised.
+    collateral: { ...DEFAULT_COLLATERAL_RULES, requirement: 'optional' },
   },
-]
+}
 
-/** Products with the given pricing (defaults when none is passed). */
-export const buildProducts = (pricing = DEFAULT_PRICING) =>
-  DESCRIPTIONS.map((product) => ({ ...product, ...DEFAULT_PRICING[product.id], ...(pricing[product.id] || {}) }))
+export const BUILT_IN_PRODUCT_IDS = Object.keys(BUILT_IN_PRODUCTS)
+
+/** A product id an admin can give a new product: lower-case letters, digits and dashes. */
+export const PRODUCT_ID_PATTERN = /^[a-z][a-z0-9-]{1,39}$/
+
+/** What a new product of this form starts as, before the admin's values are laid over it. */
+export const productDefaults = (form) => ({
+  ...BUILT_IN_PRODUCTS[form],
+  ...DEFAULT_PRICING[form],
+  id: '',
+  name: '',
+  tagline: '',
+  description: '',
+  documents: defaultDocuments(form),
+  collateral: DEFAULT_COLLATERAL_RULES,
+})
+
+/** The derived fields every screen reads: the form's steps, and the documents' names for marketing copy. */
+const finish = (product) => {
+  // The AI check type always comes from the catalogue (custom.* documents: "custom"), never from what was stored.
+  const catalogue = DOCUMENT_CATALOGUE[product.form]
+  const documents = (product.documents || []).map((document) => ({
+    description: '',
+    ...document,
+    required: Boolean(document.required),
+    docType: catalogue.find((entry) => entry.slot === document.slot)?.docType || 'custom',
+  }))
+  return {
+    ...product,
+    documents,
+    steps: APPLICANT_FORMS[product.form].steps,
+    requiredDocuments: documents.filter((document) => document.required).map((document) => document.label),
+  }
+}
+
+/**
+ * Products from the stored setting (Settings → Loan products), keyed by id: the two
+ * built-in ones always exist (they can be switched off, not removed), each over its own
+ * defaults; added ones over the defaults of the form they use. Built-ins first, then
+ * added ones in the order they were created.
+ */
+export const buildProducts = (stored = {}) => {
+  const builtIn = BUILT_IN_PRODUCT_IDS.map((id) => finish({ ...BUILT_IN_PRODUCTS[id], ...DEFAULT_PRICING[id], ...(stored[id] || {}), id, form: id }))
+  const added = Object.entries(stored)
+    .filter(([id, value]) => !BUILT_IN_PRODUCTS[id] && value && APPLICANT_FORMS[value.form])
+    .sort(([, a], [, b]) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')))
+    .map(([id, value]) => finish({ ...productDefaults(value.form), ...value, id }))
+  return [...builtIn, ...added].map((product) => ({ ...product, collateral: { ...DEFAULT_COLLATERAL_RULES, ...(product.collateral || {}) } }))
+}
 
 export const LOAN_PRODUCTS = buildProducts()
 
 export const getProduct = (id, products = LOAN_PRODUCTS) => products.find((product) => product.id === id)
+
+/** An application's product: its own, else (applications from before products) the built-in one for its form. */
+export const productFor = (application, products = LOAN_PRODUCTS) =>
+  getProduct(application?.productId, products) || getProduct(application?.loanType, products) || LOAN_PRODUCTS[0]
 
 /** The four stages an applicant moves through, independent of loan type. */
 export const APPLICATION_JOURNEY = [

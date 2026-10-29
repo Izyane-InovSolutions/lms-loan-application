@@ -10,14 +10,15 @@ const OPERATION = 'getProduct109'
 const DEFAULT_TIMEOUT_SECONDS = 30
 const WSDL_ATTEMPTS = 3
 
+// Each required setting: its environment variable, and its name in Settings → Credit bureau.
 const REQUIRED = {
-  CRB_WSDL_URL: 'WSDL address',
-  CRB_TRANSPORT_USERNAME: 'transport username',
-  CRB_TRANSPORT_PASSWORD: 'transport password',
-  CRB_MESSAGE_USERNAME: 'message username',
-  CRB_MESSAGE_PASSWORD: 'message password',
-  CRB_CODE: 'subscriber code',
-  CRB_INFINITY_CODE: 'infinity code',
+  wsdlUrl: { env: 'CRB_WSDL_URL', label: 'WSDL address' },
+  transportUsername: { env: 'CRB_TRANSPORT_USERNAME', label: 'transport username' },
+  transportPassword: { env: 'CRB_TRANSPORT_PASSWORD', label: 'transport password' },
+  messageUsername: { env: 'CRB_MESSAGE_USERNAME', label: 'message username' },
+  messagePassword: { env: 'CRB_MESSAGE_PASSWORD', label: 'message password' },
+  code: { env: 'CRB_CODE', label: 'subscriber code' },
+  infinityCode: { env: 'CRB_INFINITY_CODE', label: 'infinity code' },
 }
 
 export class CrbError extends Error {
@@ -35,6 +36,7 @@ export class CrbError extends Error {
 
 const env = (name) => (process.env[name] || '').trim()
 
+/** The connection from the CRB_* environment variables (Settings → Credit bureau set to "environment"). */
 export const readConfig = () => ({
   wsdlUrl: env('CRB_WSDL_URL'),
   transportUsername: env('CRB_TRANSPORT_USERNAME'),
@@ -49,10 +51,18 @@ export const readConfig = () => ({
   reportSector: Number(env('CRB_REPORT_SECTOR') || 2),
   timeoutMs: Math.max(5, Number(env('CRB_TIMEOUT_SECONDS')) || DEFAULT_TIMEOUT_SECONDS) * 1000,
   caFile: env('CRB_CA_FILE'),
+  testIdentity: env('CRB_TEST_IDENTITY'),
+  source: 'environment',
 })
 
-/** Names of the variables still unset — for System health, never their values. */
-export const missingConfig = () => Object.keys(REQUIRED).filter((name) => !(name.includes('PASSWORD') ? process.env[name] : env(name)))
+/**
+ * What a config still lacks — for System health and Settings, never the values. Named by
+ * environment variable when that is where it comes from, else as Settings labels it.
+ */
+export const missingConfig = (config = readConfig()) =>
+  Object.entries(REQUIRED)
+    .filter(([key]) => !config[key])
+    .map(([, field]) => (config.source === 'environment' ? field.env : field.label))
 
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]'])
 
@@ -167,9 +177,9 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
  */
 let cached = null
 
-const loadClient = (config) => {
+const loadClient = (config, { fresh = false } = {}) => {
   const key = `${config.wsdlUrl}|${config.transportUsername}|${config.caFile}|${config.timeoutMs}`
-  if (cached?.key === key) return cached.promise
+  if (!fresh && cached?.key === key) return cached.promise
   const http = createHttp(config)
   const security = new soap.BasicAuthSecurity(config.transportUsername, config.transportPassword)
   const promise = (async () => {
@@ -178,6 +188,8 @@ const loadClient = (config) => {
       try {
         const client = await soap.createClientAsync(config.wsdlUrl, {
           request: http,
+          // node-soap keeps parsed WSDLs by address; a test must fetch it with its own credentials.
+          ...(fresh ? { disableCache: true } : {}),
           wsdl_headers: (() => {
             const headers = {}
             security.addHeaders(headers)
@@ -195,6 +207,8 @@ const loadClient = (config) => {
     }
     throw lastError
   })()
+  // A connection test loads its own copy, so a wrong password can't hide behind a cached client.
+  if (fresh) return promise
   cached = { key, promise }
   promise.catch(() => {
     if (cached?.promise === promise) cached = null
@@ -203,20 +217,22 @@ const loadClient = (config) => {
 }
 
 /**
- * UAT only: CRB_TEST_IDENTITY="NRC|other names|surname" sends the bureau's test person
+ * UAT only: a test identity "NRC|other names|surname" (CRB_TEST_IDENTITY, or the test
+ * identity in Settings → Credit bureau) sends the bureau's test person
  * instead of the applicant, since a test account only knows its own test identities.
  * Every report pulled this way is marked as the test person's, and the setting is
  * refused in production, where it would attach one person's record to every applicant.
  */
-export const testIdentity = () => {
-  const value = env('CRB_TEST_IDENTITY')
+export const testIdentity = (config = readConfig()) => {
+  const value = (config.testIdentity || '').trim()
   if (!value) return null
+  const name = config.source === 'environment' ? 'CRB_TEST_IDENTITY' : 'The bureau test identity'
   if (process.env.NODE_ENV === 'production' || process.env.VERCEL_ENV === 'production') {
-    throw new CrbError('CRB_TEST_IDENTITY is set on a production deployment. Remove it.', { code: 'crb_not_configured' })
+    throw new CrbError(`${name} is set on a production deployment. Remove it.`, { code: 'crb_not_configured' })
   }
   const [nrc, otherNames, surname] = value.split('|').map((part) => part.trim())
   if (!nrc || !otherNames || !surname) {
-    throw new CrbError('CRB_TEST_IDENTITY must be "NRC|other names|surname".', { code: 'crb_not_configured' })
+    throw new CrbError(`${name} must be "NRC|other names|surname".`, { code: 'crb_not_configured' })
   }
   return { nrc, otherNames, surname }
 }
@@ -224,10 +240,12 @@ export const testIdentity = () => {
 /** JAX-WS style services wrap the answer in `return`; others give it directly. */
 const unwrap = (result) => (result && typeof result === 'object' && 'return' in result ? result.return : result)
 
-export const product109Provider = {
+/** The Product 109 provider over one resolved config (readConfig(), or Settings → Credit bureau). */
+export const createProduct109Provider = (config = readConfig()) => ({
   name: 'product109',
   label: 'Credit bureau (Product 109)',
   sample: false,
+  config,
 
   /**
    * One Product 109 enquiry. Not retried: every call is an enquiry the bureau records
@@ -237,10 +255,9 @@ export const product109Provider = {
    * @returns { score, report } as crb_reports stores them
    */
   async fetchReport(identity) {
-    const missing = missingConfig()
+    const missing = missingConfig(config)
     if (missing.length) throw new CrbError(`The credit bureau is not fully set up (missing ${missing.join(', ')}).`, { code: 'crb_not_configured' })
-    const config = readConfig()
-    const test = testIdentity()
+    const test = testIdentity(config)
     const sent = test || identity
     const client = await loadClient(config)
     const args = buildArguments(client, config, sent)
@@ -260,7 +277,22 @@ export const product109Provider = {
     if (test) stored.report.testIdentity = { nrc: test.nrc, applicantNrc: identity.nrc }
     return stored
   },
-}
+
+  /**
+   * Proves the connection without an enquiry (each one is recorded and billed): loads
+   * the WSDL with the transport credentials and checks it offers Product 109 with the
+   * arguments we send. The message credentials are only checked by a real enquiry.
+   */
+  async testConnection() {
+    const missing = missingConfig(config)
+    if (missing.length) throw new CrbError(`The credit bureau is not fully set up (missing ${missing.join(', ')}).`, { code: 'crb_not_configured' })
+    testIdentity(config)
+    const startedAt = Date.now()
+    const client = await loadClient(config, { fresh: true })
+    buildArguments(client, config, { nrc: '000000/00/0', otherNames: 'Test', surname: 'Test' })
+    return { milliseconds: Date.now() - startedAt }
+  },
+})
 
 /** For tests: drop the cached client so a changed WSDL or stand-in is picked up. */
 export const resetProduct109Client = () => {

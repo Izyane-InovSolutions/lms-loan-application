@@ -34,6 +34,8 @@ const acceptHint = (accept) =>
  * { status: 'analyzing' | 'done' | 'skipped' | 'error', notes: string[], message?, onRetry? }.
  * `message` says why a check failed; `onRetry` is set when trying again could help. It is advisory —
  * shown as a warning, never as a validation error, so it cannot stop the applicant.
+ *
+ * `description` is an optional line under the label saying what the document should be.
  */
 export function FileUploadField({
   name,
@@ -47,6 +49,7 @@ export function FileUploadField({
   cameraFirst = false,
   onUseCamera,
   analysis,
+  description,
   className,
 }) {
   const id = fieldId(name)
@@ -74,7 +77,9 @@ export function FileUploadField({
           </span>
         ) : null}
         {required ? <span className="sr-only">(required)</span> : null}
+        {!required ? <span className="text-xs font-normal text-muted-foreground">(optional)</span> : null}
       </Label>
+      {description ? <p className="-mt-1 text-xs text-muted-foreground">{description}</p> : null}
 
       <div
         className={cn(

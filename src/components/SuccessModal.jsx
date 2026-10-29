@@ -4,7 +4,7 @@ import { CheckCircle2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 /** Confirmation after submit, carrying the reference the applicant quotes from now on. */
-function SuccessModal({ open, onClose, loanType, amount, tenure, monthlyRepayment, totalRepayable, reference, assisted }) {
+function SuccessModal({ open, onClose, loanType, productName, amount, tenure, monthlyRepayment, totalRepayable, reference, assisted }) {
   if (!open) return null
 
   return (
@@ -29,7 +29,7 @@ function SuccessModal({ open, onClose, loanType, amount, tenure, monthlyRepaymen
 
         <dl className="mt-6 divide-y rounded-xl border bg-muted/30 px-4 text-sm">
           {[
-            ['Loan', loanType === 'personal' ? 'Personal loan' : 'Business loan'],
+            ['Loan', productName || (loanType === 'personal' ? 'Personal loan' : 'Business loan')],
             ['Amount', `K${amount.toLocaleString()}`],
             ['Tenure', `${tenure} months`],
             ['Estimated monthly repayment', `K${monthlyRepayment.toFixed(2)}`],

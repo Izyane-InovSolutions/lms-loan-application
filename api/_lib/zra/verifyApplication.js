@@ -11,14 +11,17 @@ const { applications, applicationDocuments } = schema
 const digits = (value) => String(value || '').replace(/\D/g, '')
 
 /**
- * What is sent to ZRA for an application: a personal loan by the applicant's NRC, a
+ * What is sent to ZRA for an application: a personal loan by the applicant's NRC (or passport), a
  * business loan by the company's TPIN. Nothing else is ever looked up.
  */
 export const zraIdentifierFor = (application) => {
   const data = application.data || {}
   if (application.loanType === 'personal') {
     const nrc = data.personalInfo?.nrc?.trim()
-    return nrc ? { lookupType: 'NRC', lookupValue: nrc } : null
+    if (nrc) return { lookupType: 'NRC', lookupValue: nrc }
+    // Applicants who aren't Zambian give a passport, which ZRA can look up too.
+    const passport = data.personalInfo?.passportNumber?.trim()
+    return passport ? { lookupType: 'PASSPORT', lookupValue: passport } : null
   }
   const tpin = digits(data.businessInfo?.tpin)
   return tpin ? { lookupType: 'TPIN', lookupValue: tpin } : null

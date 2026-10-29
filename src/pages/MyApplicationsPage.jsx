@@ -229,7 +229,7 @@ function Applications({ user, onSignOut }) {
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <p className="text-lg font-semibold">
-                        {formatKwacha(application.amount)} {LOAN_TYPE_LABELS[application.loanType].toLowerCase()}
+                        {formatKwacha(application.amount)} {(application.productName || LOAN_TYPE_LABELS[application.loanType]).toLowerCase()}
                       </p>
                       <p className="text-sm text-muted-foreground">
                         {application.reference}, submitted {dateLabel(application.submittedAt)}
@@ -337,7 +337,7 @@ function ApplicationDetail({ id, email, onBack }) {
           <div className="mt-4 flex flex-wrap items-start justify-between gap-3">
             <div>
               <h1 className="text-3xl font-semibold tracking-tight">
-                {formatKwacha(state.application.amount)} {LOAN_TYPE_LABELS[state.application.loanType].toLowerCase()}
+                {formatKwacha(state.application.amount)} {(state.application.productName || LOAN_TYPE_LABELS[state.application.loanType]).toLowerCase()}
               </h1>
               <p className="mt-1 text-muted-foreground">
                 {state.application.reference}, {state.application.tenure} months, about {formatKwacha(Math.round(state.application.monthlyInstalment))} a month

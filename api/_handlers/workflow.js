@@ -17,7 +17,7 @@ import { computeFacts } from '../_lib/prescreen/facts.js'
 import { MANUAL_FIGURES } from '../_lib/prescreen/reasons.js'
 import { getDraftRuleset, getPublishedRuleset, listRulesetHistory, publishDraftRuleset, saveDraftRuleset } from '../_lib/prescreen/rulesets.js'
 import { getSetting } from '../_lib/settings.js'
-import { CrbError, getCrb } from '../_lib/crb/index.js'
+import { CrbError, getCrb, refreshCrb } from '../_lib/crb/index.js'
 import { identityFor } from '../_lib/crb/identity.js'
 import kv from '../_lib/kv.js'
 import { reportError } from '../_lib/errors.js'
@@ -27,6 +27,7 @@ import { creditStaffIds, followerIds, notifyUsers } from '../_lib/notify.js'
 import { textCustomer } from '../_lib/sms.js'
 import { WITHDRAWABLE_STATUSES, requestableSlots } from '../../src/config/applications.js'
 import { analyzeCaseUpload } from '../_lib/ai/documents.js'
+import { getApplicationProduct } from '../_lib/products.js'
 import { ensureOfferDocuments } from '../_lib/offerDocuments.js'
 import { issueStageDocuments } from '../_lib/stageDocuments.js'
 import { FACTS, evaluateRules, flattenPolicies, rulesToPolicies, validatePolicies } from '../../src/config/creditRules.js'
@@ -148,19 +149,22 @@ const listOfficers = async (req) => {
  * A known slot named by an upload (`fields.slot`): its label and AI doc type, or null for
  * "something else". `allowed` limits it (a customer may only send what was asked for).
  */
-const uploadSlot = (application, slot, allowed = null) => {
+const uploadSlot = async (application, slot, allowed = null) => {
   if (!slot || (allowed && !allowed.includes(slot))) return null
-  return requestableSlots(application.loanType, application.data).find((entry) => entry.slot === slot) || null
+  return requestableSlots(await getApplicationProduct(application), application.data).find((entry) => entry.slot === slot) || null
 }
+
+// What a product's own (custom) document should be, for the AI check: the admin's words.
+const expectedOf = (slot) => (slot?.docType === 'custom' ? { label: slot.label, description: slot.description } : null)
 
 /** Staff add a document to a case (collected in person, or a better copy). Naming its slot replaces the earlier copy. */
 const addStaffDocument = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'applications.note' })
   const application = await findVisibleApplication(viewer, params.id)
   const { fields, file } = await readSingleUpload(req)
-  const slot = uploadSlot(application, text(fields.slot, 60))
+  const slot = await uploadSlot(application, text(fields.slot, 60))
   const label = slot?.label || text(fields.label, 120) || file.filename
-  const aiAnalysis = slot ? await analyzeCaseUpload({ docType: slot.docType, file, quotaKey: `staff:${viewer.id}`, req }) : null
+  const aiAnalysis = slot ? await analyzeCaseUpload({ docType: slot.docType, file, quotaKey: `staff:${viewer.id}`, req, expected: expectedOf(slot) }) : null
   const db = await getDb()
   const stored = await putBlob(`applications/${application.id}/extra-${file.filename}`, file.data, { contentType: file.contentType })
   await db.insert(applicationDocuments).values({
@@ -284,6 +288,7 @@ const crbEventMessage = (crb, score, report, unchanged) => {
 const runCreditCheck = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'cases.work' })
   const application = await findVisibleApplication(viewer, params.id)
+  await refreshCrb({ force: true })
   const crb = getCrb()
   if (!crb) fail(400, 'No credit bureau is connected.', 'crb_not_configured')
   const db = await getDb()
@@ -360,9 +365,9 @@ const addCustomerDocument = async (req, res, { params }) => {
   assertAwaitingCustomer(application)
   const { fields, file } = await readSingleUpload(req)
   const requested = (application.infoRequest?.documents || []).map((entry) => entry.slot)
-  const slot = uploadSlot(application, text(fields.slot, 60), requested)
+  const slot = await uploadSlot(application, text(fields.slot, 60), requested)
   const label = slot?.label || text(fields.label, 120) || file.filename
-  const aiAnalysis = slot ? await analyzeCaseUpload({ docType: slot.docType, file, quotaKey: application.applicantEmail, req }) : null
+  const aiAnalysis = slot ? await analyzeCaseUpload({ docType: slot.docType, file, quotaKey: application.applicantEmail, req, expected: expectedOf(slot) }) : null
   const db = await getDb()
   const stored = await putBlob(`applications/${application.id}/response-${file.filename}`, file.data, { contentType: file.contentType })
   const [document] = await db

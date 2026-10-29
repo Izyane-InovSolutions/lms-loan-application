@@ -19,12 +19,6 @@ import { cn } from "@/lib/utils";
 import { SimpleText } from "@/lib/simpleText";
 import { registeredRoles, roleLabel } from "@/config/roles";
 import {
-  describeFee,
-  describeInterest,
-  formatKwacha,
-  priceLoan,
-} from "@/config/loanProducts";
-import {
   AI_CONNECTIONS,
   AI_FIELDS,
   AI_MODEL_PROVIDERS,
@@ -43,12 +37,16 @@ import {
 } from "../components";
 import { DocumentTemplatesTab } from "./DocumentTemplatesTab";
 import { BrandingTab } from "./BrandingTab";
+import { CrbTab } from "./CrbTab";
+import { ProductsTab } from "./ProductsTab";
+import { DangerZoneTab } from "./DangerZoneTab";
 
 const TABS = [
   { id: "workflow", label: "Credit workflow" },
   { id: "products", label: "Loan products" },
   { id: "lms", label: "LMS connection" },
   { id: "zra", label: "ZRA Web Services" },
+  { id: "crb", label: "Credit bureau" },
   { id: "notifications", label: "Notifications and SMS" },
   { id: "ai", label: "AI document checks" },
   { id: "retention", label: "Data retention" },
@@ -57,6 +55,7 @@ const TABS = [
   { id: "documents", label: "Offer documents" },
   { id: "legal", label: "Terms and privacy" },
   { id: "demo", label: "Sample data", demoOnly: true },
+  { id: "danger", label: "Danger zone", adminOnly: true },
 ];
 
 function Toggle({ id, label, description, checked, onChange, disabled }) {
@@ -95,7 +94,7 @@ function Toggle({ id, label, description, checked, onChange, disabled }) {
   );
 }
 
-function SaveBar({ dirty, saving, onSave, children }) {
+export function SaveBar({ dirty, saving, onSave, children }) {
   return (
     <div className="mt-5 flex flex-wrap items-center justify-end gap-2 border-t pt-4">
       {children}
@@ -108,7 +107,7 @@ function SaveBar({ dirty, saving, onSave, children }) {
 }
 
 /** One settings key: edited locally, saved whole, with the server's validation message on failure. */
-function useSettingGroup(key, initial, notify) {
+export function useSettingGroup(key, initial, notify) {
   const [value, setValue] = useState(initial);
   const [saved, setSaved] = useState(initial);
   const [saving, setSaving] = useState(false);
@@ -148,7 +147,7 @@ function useSettingGroup(key, initial, notify) {
 
 export function SettingsPage() {
   const notify = useToast();
-  const { demoEnabled } = useAuth();
+  const { demoEnabled, user } = useAuth();
   const [params, setParams] = useSearchParams();
   const [state, setState] = useState({ status: "loading" });
   const tab = params.get("tab") || "workflow";
@@ -163,7 +162,11 @@ export function SettingsPage() {
     load();
   }, [load]);
 
-  const tabs = TABS.filter((entry) => !entry.demoOnly || demoEnabled);
+  const tabs = TABS.filter(
+    (entry) =>
+      (!entry.demoOnly || demoEnabled) &&
+      (!entry.adminOnly || user?.role === "admin"),
+  );
 
   return (
     <div className="space-y-6">
@@ -215,7 +218,7 @@ export function SettingsPage() {
             <WorkflowTab settings={state.settings} notify={notify} />
           ) : null}
           {tab === "products" ? (
-            <ProductsTab initial={state.settings.products} notify={notify} />
+            <ProductsTab settings={state.settings} notify={notify} />
           ) : null}
           {tab === "lms" ? (
             <LmsTab
@@ -227,6 +230,14 @@ export function SettingsPage() {
           ) : null}
           {tab === "zra" ? (
             <ZraTab
+              settings={state.settings}
+              integrations={state.integrations}
+              notify={notify}
+              onSaved={load}
+            />
+          ) : null}
+          {tab === "crb" ? (
+            <CrbTab
               settings={state.settings}
               integrations={state.integrations}
               notify={notify}
@@ -266,6 +277,9 @@ export function SettingsPage() {
           {tab === "demo" && demoEnabled ? (
             <SampleData notify={notify} />
           ) : null}
+          {tab === "danger" && user?.role === "admin" ? (
+            <DangerZoneTab notify={notify} />
+          ) : null}
         </>
       )}
     </div>
@@ -273,8 +287,6 @@ export function SettingsPage() {
 }
 
 // ---------------------------------------------------------------------------
-
-const PRODUCT_NAMES = { personal: "Personal loan", business: "Business loan" };
 
 /** Where a setting went: the Workflow editor, which owns the flow now. */
 function WorkflowPointer({ children }) {
@@ -405,177 +417,6 @@ function WorkflowTab({ settings, notify }) {
         />
       </Panel>
     </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-
-function ProductsTab({ initial, notify }) {
-  const group = useSettingGroup("products", initial, notify);
-  const update = (id, changes) =>
-    group.set({ [id]: { ...group.value[id], ...changes } });
-  return (
-    <div>
-      <div className="grid gap-6 xl:grid-cols-2">
-        {["personal", "business"].map((id) => (
-          <ProductForm
-            key={id}
-            id={id}
-            pricing={group.value[id]}
-            onChange={(changes) => update(id, changes)}
-          />
-        ))}
-      </div>
-      <FormError message={group.error} />
-      <SaveBar
-        dirty={group.dirty}
-        saving={group.saving}
-        onSave={() => group.save()}
-      >
-        <p className="mr-auto text-sm text-muted-foreground">
-          Changes apply to new applications straight away. Submitted ones keep
-          the price they were given.
-        </p>
-      </SaveBar>
-    </div>
-  );
-}
-
-function ProductForm({ id, pricing, onChange }) {
-  const example = useMemo(
-    () =>
-      priceLoan(Number(pricing.exampleAmount), Number(pricing.defaultTenure), {
-        ...pricing,
-        interestRate: Number(pricing.interestRate),
-        facilityFee: Number(pricing.facilityFee),
-      }),
-    [pricing],
-  );
-  const numberField = (key, label, props = {}) => (
-    <Field id={`${id}-${key}`} label={label} hint={props.hint}>
-      <Input
-        id={`${id}-${key}`}
-        type="number"
-        step="any"
-        value={pricing[key]}
-        onChange={(event) => onChange({ [key]: event.target.value })}
-      />
-    </Field>
-  );
-  return (
-    <Panel
-      title={PRODUCT_NAMES[id]}
-      action={
-        <Toggle
-          id={`${id}-enabled`}
-          label="Offered"
-          checked={pricing.enabled}
-          onChange={(enabled) => onChange({ enabled })}
-        />
-      }
-    >
-      <div className={cn("space-y-5", !pricing.enabled && "opacity-60")}>
-        <div className="grid gap-4 sm:grid-cols-3">
-          {numberField("minAmount", "Smallest loan (K)")}
-          {numberField("maxAmount", "Largest loan (K)")}
-          {numberField("exampleAmount", "Example amount (K)", {
-            hint: "Used on the website",
-          })}
-        </div>
-        <div className="grid gap-4 sm:grid-cols-3">
-          {numberField("minTenure", "Shortest (months)")}
-          {numberField("maxTenure", "Longest (months)")}
-          {numberField("defaultTenure", "Starting tenure")}
-        </div>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field id={`${id}-rate`} label="Interest rate (%)">
-            <Input
-              id={`${id}-rate`}
-              type="number"
-              step="any"
-              value={Number((Number(pricing.interestRate) * 100).toFixed(4))}
-              onChange={(event) =>
-                onChange({ interestRate: Number(event.target.value) / 100 })
-              }
-            />
-          </Field>
-          <Field id={`${id}-basis`} label="Charged">
-            <Select
-              id={`${id}-basis`}
-              value={pricing.interestBasis}
-              onChange={(event) =>
-                onChange({ interestBasis: event.target.value })
-              }
-            >
-              <option value="loan">Once, on the amount borrowed (flat)</option>
-              <option value="month">Every month of the tenure</option>
-            </Select>
-          </Field>
-        </div>
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field
-            id={`${id}-fee`}
-            label={
-              pricing.facilityFeeType === "percent"
-                ? "Facility fee (%)"
-                : "Facility fee (K)"
-            }
-          >
-            <Input
-              id={`${id}-fee`}
-              type="number"
-              step="any"
-              value={
-                pricing.facilityFeeType === "percent"
-                  ? Number((Number(pricing.facilityFee) * 100).toFixed(4))
-                  : pricing.facilityFee
-              }
-              onChange={(event) =>
-                onChange({
-                  facilityFee:
-                    pricing.facilityFeeType === "percent"
-                      ? Number(event.target.value) / 100
-                      : event.target.value,
-                })
-              }
-            />
-          </Field>
-          <Field id={`${id}-fee-type`} label="Fee type">
-            <Select
-              id={`${id}-fee-type`}
-              value={pricing.facilityFeeType}
-              onChange={(event) =>
-                onChange({
-                  facilityFeeType: event.target.value,
-                  facilityFee: 0,
-                })
-              }
-            >
-              <option value="fixed">A fixed amount</option>
-              <option value="percent">A percentage of the amount</option>
-            </Select>
-          </Field>
-        </div>
-        <div className="rounded-lg bg-muted/50 p-4 text-sm">
-          <p className="font-medium text-foreground">
-            {formatKwacha(pricing.exampleAmount)} over {pricing.defaultTenure}{" "}
-            months: {formatKwacha(Math.round(example.monthly))} a month
-          </p>
-          <p className="mt-0.5 text-muted-foreground">
-            {describeInterest({
-              ...pricing,
-              interestRate: Number(pricing.interestRate),
-            })}{" "}
-            interest ({formatKwacha(example.interest)}), fee{" "}
-            {describeFee({
-              ...pricing,
-              facilityFee: Number(pricing.facilityFee),
-            })}{" "}
-            ({formatKwacha(example.fee)}), total {formatKwacha(example.total)}.
-          </p>
-        </div>
-      </div>
-    </Panel>
   );
 }
 
@@ -1006,7 +847,7 @@ function ZraTab({ settings, integrations, notify, onSaved }) {
 }
 
 /** A credential input: never shows the stored value; blank keeps it. */
-function SecretField({
+export function SecretField({
   id,
   label,
   isSet,
