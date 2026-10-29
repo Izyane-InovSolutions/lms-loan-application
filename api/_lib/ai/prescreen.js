@@ -125,6 +125,11 @@ const SCHEMA = {
       description: 'proceed: no material concerns. review: an underwriter should look closely. decline_likely: serious affordability or document problems.',
     },
     riskLevel: { type: 'string', enum: ['low', 'medium', 'high'] },
+    score: {
+      type: 'integer',
+      description:
+        'Overall strength of the application from 0 to 100, weighing affordability, documents, consistency and the policy checks. 80-100: strong, no material concerns. 60-79: fair, minor points to check. 40-59: weak, real concerns. 0-39: poor, serious problems. Must agree with recommendation and riskLevel.',
+    },
     summary: { type: 'string', description: 'Two to four sentences for the underwriter.' },
     flags: {
       type: 'array',
@@ -155,7 +160,7 @@ const SCHEMA = {
       items: { type: 'string' },
     },
   },
-  required: ['recommendation', 'riskLevel', 'summary', 'flags', 'missingInformation', 'applicantGuidance'],
+  required: ['recommendation', 'riskLevel', 'score', 'summary', 'flags', 'missingInformation', 'applicantGuidance'],
   additionalProperties: false,
 }
 
@@ -170,6 +175,7 @@ Base the assessment only on:
 - Whether the stated loan purpose fits the product.
 When a figure is missing, say so in missingInformation and do not assume a value.
 For each flag, list in documents the refs of the documents it is based on.
+score rests on the same basis: a fired decline rule or a serious authenticity concern keeps it below 40.
 
 Fairness: personal characteristics (gender, marital status, nationality, age, ethnicity, religion and the like) are deliberately withheld. Do not infer them or let proxies for them affect the assessment.
 
@@ -208,6 +214,8 @@ export const prescreenApplication = async ({ loanType, applicant, loan, document
   return {
     recommendation: result.recommendation,
     riskLevel: result.riskLevel,
+    // Advisory, like the rest of the review: the rules and the officer decide.
+    score: Number.isFinite(Number(result.score)) ? Math.min(100, Math.max(0, Math.round(Number(result.score)))) : null,
     summary: String(result.summary || ''),
     // Only refs that name a document sent, so a flag never points at one that isn't there.
     flags: (Array.isArray(result.flags) ? result.flags : []).map((flag) => ({

@@ -25,7 +25,8 @@ import { loadCase } from './applications.js'
 import { checkOtp, consumeOtp } from '../_lib/otp.js'
 import { creditStaffIds, followerIds, notifyUsers } from '../_lib/notify.js'
 import { textCustomer } from '../_lib/sms.js'
-import { WITHDRAWABLE_STATUSES } from '../../src/config/applications.js'
+import { WITHDRAWABLE_STATUSES, requestableSlots } from '../../src/config/applications.js'
+import { analyzeCaseUpload } from '../_lib/ai/documents.js'
 import { ensureOfferDocuments } from '../_lib/offerDocuments.js'
 import { issueStageDocuments } from '../_lib/stageDocuments.js'
 import { FACTS, evaluateRules, flattenPolicies, rulesToPolicies, validatePolicies } from '../../src/config/creditRules.js'
@@ -143,18 +144,29 @@ const listOfficers = async (req) => {
   return { officers }
 }
 
-/** Staff add a document to a case (collected in person, or a better copy). */
+/**
+ * A known slot named by an upload (`fields.slot`): its label and AI doc type, or null for
+ * "something else". `allowed` limits it (a customer may only send what was asked for).
+ */
+const uploadSlot = (application, slot, allowed = null) => {
+  if (!slot || (allowed && !allowed.includes(slot))) return null
+  return requestableSlots(application.loanType, application.data).find((entry) => entry.slot === slot) || null
+}
+
+/** Staff add a document to a case (collected in person, or a better copy). Naming its slot replaces the earlier copy. */
 const addStaffDocument = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'applications.note' })
   const application = await findVisibleApplication(viewer, params.id)
   const { fields, file } = await readSingleUpload(req)
-  const label = text(fields.label, 120) || file.filename
+  const slot = uploadSlot(application, text(fields.slot, 60))
+  const label = slot?.label || text(fields.label, 120) || file.filename
+  const aiAnalysis = slot ? await analyzeCaseUpload({ docType: slot.docType, file, quotaKey: `staff:${viewer.id}`, req }) : null
   const db = await getDb()
   const stored = await putBlob(`applications/${application.id}/extra-${file.filename}`, file.data, { contentType: file.contentType })
   await db.insert(applicationDocuments).values({
     applicationId: application.id,
-    slot: `extra.${Date.now()}`,
-    docType: 'other',
+    slot: slot?.slot || `extra.${Date.now()}`,
+    docType: slot?.docType || 'other',
     label,
     pathname: stored.pathname,
     url: stored.url,
@@ -162,10 +174,13 @@ const addStaffDocument = async (req, res, { params }) => {
     contentType: file.contentType,
     size: file.size,
     source: 'staff',
+    aiAnalysis,
     uploadedBy: viewer.id,
   })
-  await addEvent(db, { applicationId: application.id, actor: viewer, type: 'document', message: `Added a document: ${label}` })
-  await recordAudit({ req, actor: viewer, action: 'application.document_added', entityType: 'application', entityId: application.id, detail: { label } })
+  await addEvent(db, { applicationId: application.id, actor: viewer, type: 'document', message: slot ? `Added a new copy of the ${label.toLowerCase()}, replacing the earlier one` : `Added a document: ${label}` })
+  await recordAudit({ req, actor: viewer, action: 'application.document_added', entityType: 'application', entityId: application.id, detail: { label, ...(slot ? { slot: slot.slot } : {}) } })
+  // The new copy's figures and findings replace the old one's in the rules and the summary.
+  if (slot) await runPrescreen(application.id, { actor: viewer })
   return loadCase(application.id, viewer)
 }
 
@@ -334,20 +349,28 @@ const assertAwaitingCustomer = (application) => {
   if (application.status !== 'info_requested') fail(409, 'We are not waiting for anything from you on this application.', 'invalid_state')
 }
 
+/**
+ * One file in reply to a request. Sent for a document the officer named (`fields.slot`),
+ * it is checked by the AI like the original upload and replaces it; the applicant sees
+ * any problems they can fix straight away. Anything else is kept as "other".
+ */
 const addCustomerDocument = async (req, res, { params }) => {
   const viewer = await requireUser(req, { roles: ['customer'] })
   const application = await findVisibleApplication(viewer, params.id)
   assertAwaitingCustomer(application)
   const { fields, file } = await readSingleUpload(req)
-  const label = text(fields.label, 120) || file.filename
+  const requested = (application.infoRequest?.documents || []).map((entry) => entry.slot)
+  const slot = uploadSlot(application, text(fields.slot, 60), requested)
+  const label = slot?.label || text(fields.label, 120) || file.filename
+  const aiAnalysis = slot ? await analyzeCaseUpload({ docType: slot.docType, file, quotaKey: application.applicantEmail, req }) : null
   const db = await getDb()
   const stored = await putBlob(`applications/${application.id}/response-${file.filename}`, file.data, { contentType: file.contentType })
   const [document] = await db
     .insert(applicationDocuments)
     .values({
       applicationId: application.id,
-      slot: `response.${Date.now()}`,
-      docType: 'other',
+      slot: slot?.slot || `response.${Date.now()}`,
+      docType: slot?.docType || 'other',
       label,
       pathname: stored.pathname,
       url: stored.url,
@@ -355,10 +378,13 @@ const addCustomerDocument = async (req, res, { params }) => {
       contentType: file.contentType,
       size: file.size,
       source: 'info_response',
+      aiAnalysis,
       uploadedBy: viewer.id,
     })
-    .returning({ id: applicationDocuments.id, label: applicationDocuments.label, filename: applicationDocuments.filename })
-  return { document }
+    .returning({ id: applicationDocuments.id, slot: applicationDocuments.slot, label: applicationDocuments.label, filename: applicationDocuments.filename })
+  // Only what the applicant can act on: never the authenticity concerns, which are for staff.
+  const check = aiAnalysis ? { checked: true, matchesExpectedType: aiAnalysis.matchesExpectedType, detectedType: aiAnalysis.detectedType, issues: aiAnalysis.issues.map((issue) => issue.message) } : { checked: false }
+  return { document: { ...document, check } }
 }
 
 const respondToRequest = async (req, res, { params }) => {

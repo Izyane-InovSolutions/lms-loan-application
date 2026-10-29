@@ -1,6 +1,6 @@
 import crypto from 'node:crypto'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
-import { createMemoryKv, client, draftPreparer, emailCode } from './helpers.js'
+import { PDF, createMemoryKv, client, draftPreparer, emailCode } from './helpers.js'
 
 const kv = createMemoryKv()
 vi.mock('../api/_lib/kv.js', () => ({ default: kv }))
@@ -203,7 +203,7 @@ describe('application lifecycle', () => {
       return response
     }
     await act({ action: 'start_review' })
-    await act({ action: 'request_info', message: 'Please send a clearer NRC copy.' })
+    await act({ action: 'request_info', message: 'Please send a clearer NRC copy.', documents: ['nrcCopy', 'not-a-slot'] })
 
     const customer = client(handler)
     await emailCode(kv, 'login', 'bo@example.com', '111222')
@@ -214,10 +214,32 @@ describe('application lifecycle', () => {
     // Someone else's application is invisible to this customer.
     expect((await customer.get(`/me/applications/${applicationId}`)).status).toBe(404)
 
+    expect(mine.body.applications[0].infoRequest.documents).toEqual([{ slot: 'nrcCopy', label: 'NRC copy' }])
+
+    // A requested document is filed against its slot; anything else stays "other".
+    const pdf = { filename: 'nrc-new.pdf', contentType: 'application/pdf', data: PDF }
+    const nrc = await customer.upload(`/me/applications/${submitted.id}/documents`, { ...pdf, fields: { slot: 'nrcCopy' } })
+    expect(nrc.body.document).toMatchObject({ slot: 'nrcCopy', label: 'NRC copy', check: { checked: false } })
+    const unasked = await customer.upload(`/me/applications/${submitted.id}/documents`, { ...pdf, filename: 'payslip.pdf', fields: { slot: 'payslips' } })
+    expect(unasked.body.document.slot).toMatch(/^response\./)
+
     const reply = await customer.post(`/me/applications/${submitted.id}/respond`, { message: 'Attached a new scan.' })
     expect(reply.status).toBe(200)
-    const after = (await officer.get(`/applications/${submitted.id}`)).body.application
+    const replied = (await officer.get(`/applications/${submitted.id}`)).body
+    const after = replied.application
     expect(after.status).toBe('in_review')
+    // The new NRC replaces the original; the stray payslip replaces nothing.
+    const nrcCopies = replied.documents.filter((document) => document.slot === 'nrcCopy')
+    expect(nrcCopies).toHaveLength(2)
+    expect(nrcCopies[0].supersededBy).toBe(nrcCopies[1].id)
+    expect(nrcCopies[1].supersededBy).toBeNull()
+    expect(replied.documents.find((document) => document.slot === 'payslips').supersededBy).toBeNull()
+
+    // Staff can replace a document too: the rules then read the new copy (unread here, with AI off).
+    expect(replied.prescreen?.facts?.net_monthly_pay ?? (await waitFor(async () => (await officer.get(`/applications/${submitted.id}`)).body.prescreen)).facts.net_monthly_pay).toBe(10000)
+    const replaced = await officer.upload(`/applications/${submitted.id}/documents`, { ...pdf, filename: 'payslips-new.pdf', fields: { slot: 'payslips' } })
+    expect(replaced.body.documents.filter((document) => document.slot === 'payslips' && !document.supersededBy)).toHaveLength(1)
+    expect(replaced.body.prescreen.facts.net_monthly_pay).toBeNull()
 
     version = after.version
     await act({ action: 'recommend', verdict: 'decline', rationale: 'Internal: suspected fake payslip' })
@@ -309,5 +331,20 @@ describe('application lifecycle', () => {
   it('records the case reference in the audit log', async () => {
     const { body } = await admin.get('/audit?action=application.')
     expect(body.entries.some((entry) => entry.detail?.reference === reference)).toBe(true)
+  })
+})
+
+describe('replaced documents', () => {
+  it('keeps each slot’s newest upload and leaves generated documents alone', async () => {
+    const { currentDocuments, supersededDocuments } = await import('../src/config/applications.js')
+    const documents = [
+      { id: 'a', slot: 'payslips', source: 'applicant', createdAt: '2026-01-01T10:00:00Z' },
+      { id: 'b', slot: 'payslips', source: 'info_response', createdAt: '2026-01-03T10:00:00Z' },
+      { id: 'c', slot: 'nrcCopy', source: 'applicant', createdAt: '2026-01-01T10:00:00Z' },
+      { id: 'd', slot: 'offer.letter', source: 'system', createdAt: '2026-01-02T10:00:00Z' },
+      { id: 'e', slot: 'offer.letter', source: 'system', createdAt: '2026-01-04T10:00:00Z' },
+    ]
+    expect(supersededDocuments(documents)).toEqual({ a: 'b' })
+    expect(currentDocuments(documents).map((document) => document.id)).toEqual(['b', 'c', 'd', 'e'])
   })
 })

@@ -167,6 +167,40 @@ export const requiredSlots = (loanType, data) => {
   return [...base, ...perDirector]
 }
 
+/** Every slot an officer can ask the applicant to send again (or add on the case): optional ones and directors included. */
+export const requestableSlots = (loanType, data) => {
+  const base = (DOCUMENT_SLOTS[loanType] || []).map((entry) => entry.slot)
+  const directors = loanType === 'business' ? data?.directorInfo?.directors?.length || 0 : 0
+  const perDirector = Array.from({ length: directors }, (_, index) => [`director.${index}.nrc`, `director.${index}.passportPhoto`]).flat()
+  return [...base, ...perDirector].map((slot) => describeSlot(loanType, slot))
+}
+
+// Uploads a newer copy can replace. Generated documents and signed copies keep every version.
+const REPLACEABLE_SOURCES = ['applicant', 'info_response', 'staff']
+
+/**
+ * Which document replaced which: a newer upload to the same slot (sent after a request, or
+ * added by staff) supersedes the older one, so the rules, the AI review and the summary
+ * read the newest copy. Returns { [olderId]: newerId }.
+ */
+export const supersededDocuments = (documents) => {
+  const newest = new Map()
+  for (const document of documents) {
+    if (!REPLACEABLE_SOURCES.includes(document.source || 'applicant')) continue
+    const seen = newest.get(document.slot)
+    if (!seen || new Date(document.createdAt) >= new Date(seen.createdAt)) newest.set(document.slot, document)
+  }
+  return Object.fromEntries(
+    documents.filter((document) => newest.has(document.slot) && newest.get(document.slot) !== document && REPLACEABLE_SOURCES.includes(document.source || 'applicant')).map((document) => [document.id, newest.get(document.slot).id])
+  )
+}
+
+/** The documents in force: each slot's newest upload (see supersededDocuments). */
+export const currentDocuments = (documents) => {
+  const replaced = supersededDocuments(documents)
+  return documents.filter((document) => !replaced[document.id])
+}
+
 /**
  * The verification checklist an officer works through. `requiredToApprove` checks must
  * be ticked (with a note saying what was seen) before recommending approval.

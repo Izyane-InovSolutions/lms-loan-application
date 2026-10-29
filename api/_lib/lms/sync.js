@@ -7,6 +7,7 @@ import { getSetting } from '../settings.js'
 import { getLms, LmsError } from './index.js'
 import { creditStaffIds, notifyUsers } from '../notify.js'
 import { buildPersonalPayload, buildBusinessPayload } from '../../../src/utils/loanPayloadMapper.js'
+import { currentDocuments } from '../../../src/config/applications.js'
 
 const { applications, applicationDocuments, prescreens } = schema
 
@@ -76,7 +77,8 @@ export const syncApplicationToLms = async (applicationId, { actor = null } = {})
       }
     }
 
-    const documents = await db.select().from(applicationDocuments).where(eq(applicationDocuments.applicationId, applicationId))
+    // The newest copy of each document: one sent after a request replaces the original.
+    const documents = currentDocuments(await db.select().from(applicationDocuments).where(eq(applicationDocuments.applicationId, applicationId)))
     const fileUrls = {}
     for (const document of documents) {
       if (!document.lmsFileUrl) {

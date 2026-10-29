@@ -6,6 +6,7 @@ import { getSetting } from '../settings.js'
 import { getAiProvider } from '../ai/index.js'
 import { prescreenApplication } from '../ai/prescreen.js'
 import { findFormMismatches } from '../../../src/utils/documentChecks.js'
+import { currentDocuments } from '../../../src/config/applications.js'
 import { evaluateRules } from '../../../src/config/creditRules.js'
 import { computeFacts, expectedFor } from './facts.js'
 import { getPublishedRuleset, rulesetFlatRules } from './rulesets.js'
@@ -15,7 +16,7 @@ import { getCrb } from '../crb/index.js'
 
 const { applications, applicationDocuments, prescreens, locations, crbReports } = schema
 
-/** The inputs to computeFacts for one application, read fresh. */
+/** The inputs to computeFacts for one application, read fresh. Replaced documents are left out: the newest copy counts. */
 export const loadFactInputs = async (applicationId) => {
   const db = await getDb()
   const [[application], documents, points, [crb]] = await Promise.all([
@@ -24,7 +25,7 @@ export const loadFactInputs = async (applicationId) => {
     db.select().from(locations).where(eq(locations.applicationId, applicationId)),
     db.select().from(crbReports).where(eq(crbReports.applicationId, applicationId)).orderBy(desc(crbReports.createdAt)).limit(1),
   ])
-  return { application, documents, points, crb }
+  return { application, documents: currentDocuments(documents), points, crb }
 }
 
 /**

@@ -6,7 +6,7 @@ import { listRoles, roleHas } from './roles.js'
 import { addEvent } from './applications.js'
 import { getSetting } from './settings.js'
 import { getPublishedWorkflow, getWorkflowVersion } from './workflowVersions.js'
-import { OPEN_STATUSES, WITHDRAWABLE_STATUSES } from '../../src/config/applications.js'
+import { OPEN_STATUSES, WITHDRAWABLE_STATUSES, requestableSlots } from '../../src/config/applications.js'
 import { ACTION_KINDS, PHASES, actionPermission, SYSTEM_FINAL_IDS, actionTarget, appliesTo, awaitsDocuments, forwardEdges, resolveState, stateById } from '../../src/config/workflow.js'
 import { checkOtp } from './otp.js'
 import { signatureFor } from './signing.js'
@@ -448,9 +448,14 @@ const UTILITY = {
   async request_info(tx, viewer, application, input, ctx) {
     requireCase(viewer, 'cases.work')
     if (!ctx.state.askApplicant || application.status === 'info_requested') fail(409, 'Information can only be requested while a case is being reviewed.', 'invalid_state')
-    const message = reason(input.message, 'Say what the applicant needs to send or explain.')
+    // Documents named here are uploaded against their slot, checked by the AI, and replace the earlier copy.
+    const wanted = new Set(Array.isArray(input.documents) ? input.documents.map(String) : [])
+    const documents = requestableSlots(application.loanType, application.data)
+      .filter((entry) => wanted.has(entry.slot))
+      .map(({ slot, label }) => ({ slot, label }))
+    const message = documents.length && !text(input.message, 2000) ? `Please send a new copy of: ${documents.map((entry) => entry.label).join(', ')}.` : reason(input.message, 'Say what the applicant needs to send or explain.')
     return {
-      changes: { status: 'info_requested', infoRequest: { message, requestedBy: viewer.name, requestedAt: new Date().toISOString() } },
+      changes: { status: 'info_requested', infoRequest: { message, documents, requestedBy: viewer.name, requestedAt: new Date().toISOString() } },
       event: { type: 'info_request', message, visibleToCustomer: true },
       notify: { headline: 'We need something from you', body: `Please send us the following so we can continue with your application: ${message}` },
     }

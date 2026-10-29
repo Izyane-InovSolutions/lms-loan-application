@@ -20,7 +20,8 @@ const textareaClass =
 
 /**
  * A dialog for one workflow action, built from a field list:
- *   { name, label, type: 'textarea' | 'number' | 'select' | 'choice', options?, hint?, showIf?(values) }
+ *   { name, label, type: 'textarea' | 'number' | 'select' | 'choice' | 'checkboxes', options?, hint?, showIf?(values) }
+ * `checkboxes` keeps the picked options' values as an array.
  * `choice` renders large radio cards; with `buttons: true`, plain buttons instead (approve /
  * decline / send back), filled in each option's `tone` ('primary' or 'destructive').
  * `before(values)` renders beside the fields, in a wider dialog (above them on a phone);
@@ -112,6 +113,28 @@ export function ActionDialog({ open, onOpenChange, title, description, fields, i
                               </label>
                             )
                           })}
+                        </div>
+                      </fieldset>
+                    )
+                  }
+                  if (field.type === 'checkboxes') {
+                    const picked = values[field.name] || []
+                    return (
+                      <fieldset key={field.name} className="space-y-2">
+                        <legend className="text-sm font-medium text-foreground">{field.label}</legend>
+                        {field.hint ? <p className="text-xs text-muted-foreground">{field.hint}</p> : null}
+                        <div className="grid gap-1.5 sm:grid-cols-2">
+                          {field.options.map((option) => (
+                            <label key={option.value} className="flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm hover:bg-muted/40 focus-within:ring-2 focus-within:ring-ring">
+                              <input
+                                type="checkbox"
+                                checked={picked.includes(option.value)}
+                                onChange={(event) => set(field.name, event.target.checked ? [...picked, option.value] : picked.filter((value) => value !== option.value))}
+                                className="size-4 accent-primary"
+                              />
+                              {option.label}
+                            </label>
+                          ))}
                         </div>
                       </fieldset>
                     )
