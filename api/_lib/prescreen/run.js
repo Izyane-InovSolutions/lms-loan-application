@@ -11,7 +11,7 @@ import { evaluateRules } from '../../../src/config/creditRules.js'
 import { computeFacts, expectedFor } from './facts.js'
 import { getPublishedRuleset, rulesetFlatRules } from './rulesets.js'
 import { addressDistance } from '../geo.js'
-import { factReasons, factSources } from './reasons.js'
+import { factReasonDetails, factSources, reasonText } from './reasons.js'
 import { getCrb } from '../crb/index.js'
 
 const { applications, applicationDocuments, prescreens, locations, crbReports } = schema
@@ -48,11 +48,13 @@ export const runPrescreen = async (applicationId, { actor = null } = {}) => {
   const { outcome, results: evaluated } = evaluateRules(rulesetFlatRules(ruleset), facts, application.loanType)
   // Each unknown fact says why, in words an officer can act on; each document figure says
   // where it came from (read by the AI, or entered by an officer).
-  const reasons = factReasons(application, documents, facts, { aiOn: Boolean(await getAiProvider()), distance, crbProvider: Boolean(getCrb()) })
+  const details = factReasonDetails(application, documents, facts, { aiOn: Boolean(await getAiProvider()), distance, crbProvider: Boolean(getCrb()) })
+  const reasons = Object.fromEntries(Object.entries(details).map(([fact, detail]) => [fact, reasonText(detail)]))
   const sources = factSources(application, facts)
   const results = evaluated.map((result) => ({
     ...result,
-    ...(reasons[result.fact] && (result.state === 'not_evaluated' || result.operator === 'missing') ? { reason: reasons[result.fact] } : {}),
+    // The sentence, and its parts (why, fix, action) for the case page's list of rules it couldn't check.
+    ...(reasons[result.fact] && (result.state === 'not_evaluated' || result.operator === 'missing') ? { reason: reasons[result.fact], reasonDetail: details[result.fact] } : {}),
     ...(sources[result.fact] ? { source: sources[result.fact] } : {}),
   }))
 

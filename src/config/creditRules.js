@@ -32,12 +32,14 @@ export const FACTS = {
   documents_unchecked: { label: 'Documents the AI could not check', unit: 'count', loanTypes: ['personal', 'business'] },
   identity_mismatches: { label: 'Name or NRC mismatches with documents', unit: 'count', loanTypes: ['personal', 'business'] },
   authenticity_concerns: { label: 'Possible tampering flagged', unit: 'count', loanTypes: ['personal', 'business'] },
-  location_provided: { label: 'Location shared at submission', unit: 'boolean', loanTypes: ['personal', 'business'] },
+  location_provided: { label: 'Location shared at submission', unit: 'boolean', yes: 'Location was shared at submission', no: 'Location wasn’t shared at submission', loanTypes: ['personal', 'business'] },
   location_distance_km: { label: 'Distance from stated address', unit: 'km', loanTypes: ['personal', 'business'] },
-  address_found: { label: 'Home address found on the map', unit: 'boolean', loanTypes: ['personal', 'business'] },
+  address_found: { label: 'Home address found on the map', unit: 'boolean', yes: 'Home address was found on the map', no: 'Home address wasn’t found on the map', loanTypes: ['personal', 'business'] },
   crb_score: { label: 'Credit bureau score', unit: 'score', loanTypes: ['personal', 'business'] },
   collateral_value: { label: 'Collateral pledged (estimated value)', unit: 'kwacha', loanTypes: ['personal', 'business'] },
   collateral_cover: { label: 'Collateral ÷ loan amount', unit: 'ratio', loanTypes: ['personal', 'business'] },
+  collateral_lending_value: { label: 'Collateral lending value (after haircut and LTV)', unit: 'kwacha', loanTypes: ['personal', 'business'] },
+  collateral_lending_cover: { label: 'Collateral lending value ÷ loan amount', unit: 'ratio', loanTypes: ['personal', 'business'] },
 }
 
 export const OPERATORS = {
@@ -190,6 +192,8 @@ export const describeCondition = (entry) => {
   const operator = OPERATORS[entry.operator]
   if (!fact || !operator) return 'Incomplete rule'
   if (operator.noValue) return `${fact.label} ${operator.label}`
+  // Yes/no figures read as a sentence: "Home address wasn’t found on the map", not "… is no".
+  if (fact.unit === 'boolean' && fact.yes && ['eq', 'neq'].includes(entry.operator)) return (entry.operator === 'eq') === Boolean(entry.value) ? fact.yes : fact.no
   return `${fact.label} ${operator.label} ${formatNumber(entry.value, fact.unit)}`
 }
 

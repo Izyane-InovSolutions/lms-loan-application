@@ -12,9 +12,10 @@ import { api } from '../api'
 import { useAuth } from '../auth'
 import { EmptyState, ErrorState, OutcomeMark, PageHeader, SkeletonRows, daysSince, downloadCsv, money, timeAgo } from '../components'
 import { DraftDialog } from '../DraftDialog'
+import { DRAFT_STAGE, endStages, retiredStages, workStages } from '../stages'
 
-// Unfinished applications come first: the stage before "submitted".
-const DRAFT_COLUMN = { key: 'draft', label: 'Draft', accent: 'bg-muted-foreground/30' }
+// Unfinished applications come first: the stage before the workflow's first.
+const DRAFT_COLUMN = { ...DRAFT_STAGE, accent: 'bg-muted-foreground/30' }
 
 // Column colours by where a state sits in the journey (its reporting category).
 const ACCENTS = {
@@ -34,33 +35,24 @@ const ACCENTS = {
 const END_KEYS = ['paid_out', 'declined', 'closed']
 
 /**
- * The board's columns from the workflow (Workflow editor): one per state in the order a
- * case moves, with "Waiting on applicant" after the review states, then the ends. Cases on
- * an older version, in a state the current one no longer has, get a column of their own.
+ * The board's columns from the workflow (Workflow editor, src/admin/stages.js): one per
+ * state in the order a case moves, then the ends. A case waiting on the applicant stays in
+ * its stage, marked as waiting. Columns for a state turned off, or one only an earlier
+ * version has, show only while cases are in them.
  */
 const workflowColumns = (workflow, applications) => {
-  const current = workflow.current
-  const byId = Object.fromEntries(current.states.map((state) => [state.id, state]))
-  const work = current.order.filter((id) => byId[id] && byId[id].type !== 'final')
-  // A state turned off gets no new cases; its column shows only while older cases are in it.
-  const columns = work.map((id) => ({ key: id, label: byId[id].label, accent: ACCENTS[current.categories[id]], hideEmpty: Boolean(byId[id].disabled), match: (row) => row.state === id && row.status !== 'info_requested' }))
-  const afterReview = columns.findIndex((column) => !['submitted', 'in_review'].includes(current.categories[column.key]))
-  columns.splice(afterReview === -1 ? columns.length : afterReview, 0, { key: 'info_requested', label: 'Waiting on applicant', accent: ACCENTS.info_requested, match: (row) => row.status === 'info_requested' })
-
-  const known = new Set(current.states.map((state) => state.id))
-  const retired = new Map()
-  for (const version of workflow.versions) {
-    for (const state of version.states) {
-      if (!known.has(state.id) && state.type !== 'final' && !retired.has(state.id)) retired.set(state.id, { key: `retired:${state.id}`, label: `${state.label} (earlier workflow)`, accent: ACCENTS[version.categories[state.id]], match: (row) => row.state === state.id && row.status !== 'info_requested' })
-    }
-  }
-  const name = (id, fallback) => byId[id]?.label || fallback
+  const categories = workflow.current.categories
+  const inState = (id) => (row) => row.state === id
+  const columns = [
+    ...workStages(workflow).map((stage) => ({ key: stage.id, label: stage.label, accent: ACCENTS[categories[stage.id]], hideEmpty: stage.disabled, match: inState(stage.id) })),
+    ...retiredStages(workflow).map((stage) => ({ key: `retired:${stage.id}`, label: stage.label, accent: ACCENTS[stage.category], hideEmpty: true, match: inState(stage.id) })),
+  ]
+  const name = (id, fallback) => endStages(workflow).find((stage) => stage.id === id)?.label || fallback
   return [
     ...columns,
-    ...retired.values(),
     { key: 'paid_out', label: name('paid_out', 'Paid out'), accent: ACCENTS.disbursed, match: (row) => row.status === 'disbursed' },
     { key: 'declined', label: name('declined', 'Declined'), accent: ACCENTS.declined, match: (row) => row.status === 'declined' },
-    { key: 'closed', label: 'Withdrawn or lapsed', accent: ACCENTS.withdrawn, match: (row) => ['withdrawn', 'expired'].includes(row.status) },
+    { key: 'closed', label: `${name('withdrawn', 'Withdrawn')} or ${name('expired', 'lapsed').toLowerCase()}`, accent: ACCENTS.withdrawn, match: (row) => ['withdrawn', 'expired'].includes(row.status) },
   ]
     .map((column) => ({ ...column, cards: applications.filter(column.match) }))
     .filter((column) => !column.hideEmpty || column.cards.length)
@@ -72,8 +64,8 @@ const PAGE_SIZE = 200
 // Used until the server says otherwise (Settings → Workflow).
 const DEFAULT_SLA_DAYS = 3
 
-// The status the applications list filters by for a column, for its "view all" link.
-const COLUMN_STATUS = { info_requested: 'info_requested', paid_out: 'disbursed', declined: 'declined', closed: 'withdrawn' }
+// The Applications tab a column's "view all" link opens: its stage (an end: its state).
+const columnStage = (key) => (key === 'closed' ? 'withdrawn' : key.replace(/^retired:/, ''))
 
 // By what the viewer's role lets them see.
 const DESCRIPTIONS = {
@@ -82,7 +74,7 @@ const DESCRIPTIONS = {
   all: 'The whole pipeline, by stage.',
 }
 
-const NO_FILTERS = { q: '', officer: 'all', loanType: 'all', mine: false, overdue: false }
+const NO_FILTERS = { q: '', officer: 'all', loanType: 'all', mine: false, overdue: false, waiting: false }
 
 // Card order within a column. "Waiting longest" puts the case that needs a push first.
 const SORTS = {
@@ -145,7 +137,7 @@ export function PipelinePage() {
   const load = useCallback(() => {
     setState((prev) => (prev.status === 'ready' ? { ...prev, refreshing: true } : { status: 'loading' }))
     Promise.all([api(`/applications?status=&pageSize=${PAGE_SIZE}&sort=updated`), showDrafts ? api('/drafts') : Promise.resolve({ drafts: [] })])
-      .then(([data, { drafts }]) => setState({ status: 'ready', ...data, drafts }))
+      .then(([data, { drafts, privateCount = 0 }]) => setState({ status: 'ready', ...data, drafts, privateDrafts: privateCount }))
       .catch((error) => setState({ status: 'error', message: error.message }))
   }, [showDrafts])
 
@@ -180,7 +172,7 @@ export function PipelinePage() {
     return [...byId].sort((a, b) => a[1].localeCompare(b[1]))
   }, [state])
 
-  const hasFilters = Boolean(filters.q.trim()) || filters.officer !== 'all' || filters.loanType !== 'all' || filters.mine || filters.overdue
+  const hasFilters = Boolean(filters.q.trim()) || filters.officer !== 'all' || filters.loanType !== 'all' || filters.mine || filters.overdue || filters.waiting
 
   // Every column with the search and filters applied, before "overdue only" and sorting.
   const board = useMemo(() => {
@@ -216,22 +208,22 @@ export function PipelinePage() {
       openValue: sum(open),
       overdue: open.filter((row) => daysSince(row.submittedAt) >= slaDays).length,
       averageDays: open.length ? Math.round(open.reduce((total, row) => total + daysSince(row.submittedAt), 0) / open.length) : 0,
-      waiting: board.find((column) => column.key === 'info_requested')?.cards.length || 0,
+      waiting: open.filter((row) => row.status === 'info_requested').length,
       drafts: board.find((column) => column.key === 'draft')?.cards.length || 0,
       paidOut: paidOut.length,
       paidOutValue: sum(paidOut),
     }
   }, [board, slaDays])
 
-  // What the board shows: "overdue only" applied, cards sorted, value totals worked out.
+  // What the board shows: "overdue only" and "waiting only" applied, cards sorted, value totals worked out.
   const columns = useMemo(() => {
-    const overdueOnly = (row) => !filters.overdue || ageing(row, slaDays)?.tone === 'overdue'
+    const shown = (row) => (!filters.overdue || ageing(row, slaDays)?.tone === 'overdue') && (!filters.waiting || row.status === 'info_requested')
     return board.map((column) => {
       const sort = SORTS[prefs.sorts[column.key]] ? prefs.sorts[column.key] : 'waiting'
-      const cards = (filters.overdue && column.key === 'draft' ? [] : column.cards.filter(overdueOnly)).slice().sort(SORTS[sort].compare)
+      const cards = ((filters.overdue || filters.waiting) && column.key === 'draft' ? [] : column.cards.filter(shown)).slice().sort(SORTS[sort].compare)
       return { ...column, cards, sort, value: cards.reduce((sum, row) => sum + (row.amount || 0), 0) }
     })
-  }, [board, filters.overdue, prefs.sorts, slaDays])
+  }, [board, filters.overdue, filters.waiting, prefs.sorts, slaDays])
 
   const working = columns.filter((column) => !END_KEYS.includes(column.key))
   const ended = columns.filter((column) => END_KEYS.includes(column.key))
@@ -272,6 +264,7 @@ export function PipelinePage() {
       slaDays={slaDays}
       viewerId={user.id}
       onOpenDraft={setOpenDraft}
+      privateDrafts={column.key === 'draft' ? state.privateDrafts : 0}
     />
   )
 
@@ -301,7 +294,14 @@ export function PipelinePage() {
             onClick={summary.overdue || filters.overdue ? () => setFilter('overdue', !filters.overdue) : undefined}
           />
           <SummaryTile icon={Clock} label="Average days open" value={summary.averageDays} detail="Open cases, since submitted" />
-          <SummaryTile icon={MessageCircleQuestion} label="Waiting on applicant" value={summary.waiting} detail="Go to the column" onClick={() => jumpTo('info_requested')} />
+          <SummaryTile
+            icon={MessageCircleQuestion}
+            label="Waiting on applicant"
+            value={summary.waiting}
+            detail={filters.waiting ? 'Showing only these' : summary.waiting ? 'Show only these' : 'None waiting'}
+            pressed={filters.waiting}
+            onClick={summary.waiting || filters.waiting ? () => setFilter('waiting', !filters.waiting) : undefined}
+          />
           {showDrafts ? (
             <SummaryTile icon={FilePen} label="Drafts in progress" value={summary.drafts} detail="Go to the column" onClick={() => jumpTo('draft')} />
           ) : (
@@ -433,9 +433,9 @@ function SummaryTile({ icon: Icon, label, value, detail, tone, pressed, onClick 
 }
 
 /** One stage: header with count, value and order, then its cards. */
-function BoardColumn({ column, collapsed, onToggle, onSort, valueShare, slaDays, viewerId, onOpenDraft }) {
+function BoardColumn({ column, collapsed, onToggle, onSort, valueShare, slaDays, viewerId, onOpenDraft, privateDrafts = 0 }) {
   const id = `col-${column.key}`
-  const status = column.key === 'draft' ? null : COLUMN_STATUS[column.key] || column.cards[0]?.status || (column.key.startsWith('retired:') ? null : column.key)
+  const stage = columnStage(column.key)
   return (
     // A surface of its own against the page: a border, a light wash of the accent, and the
     // stage's colour along the top, so columns read as lanes whatever the theme.
@@ -485,8 +485,8 @@ function BoardColumn({ column, collapsed, onToggle, onSort, valueShare, slaDays,
                     </option>
                   ))}
                 </select>
-                {status ? (
-                  <Link to={`/admin/applications?status=${status}`} className="rounded text-xs font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                {stage ? (
+                  <Link to={`/admin/applications?stage=${stage}`} className="rounded text-xs font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                     View all<span className="sr-only"> {column.label} applications</span>
                   </Link>
                 ) : null}
@@ -502,6 +502,11 @@ function BoardColumn({ column, collapsed, onToggle, onSort, valueShare, slaDays,
       </header>
       <ol id={`${id}-cards`} hidden={collapsed} className="flex max-h-[calc(100vh-24rem)] min-h-[12rem] flex-col gap-2 overflow-y-auto px-2 pb-2 pt-2">
         {column.cards.length === 0 ? <li className="rounded-lg border border-dashed border-muted-foreground/30 bg-card/60 px-2 py-6 text-center text-xs text-muted-foreground">Nothing here</li> : null}
+        {privateDrafts ? (
+          <li className="order-last px-1 text-[11px] text-muted-foreground">
+            +{privateDrafts} started by customers on their own, kept private
+          </li>
+        ) : null}
         {column.cards.map((row) => (
           <li key={row.id}>{column.key === 'draft' ? <DraftCard row={row} viewerId={viewerId} onOpen={() => onOpenDraft(row.id)} /> : <CaseCard row={row} slaDays={slaDays} viewerId={viewerId} />}</li>
         ))}
@@ -551,7 +556,11 @@ function CaseCard({ row, slaDays, viewerId }) {
         <span className="font-mono">{row.reference}</span> · {row.productName || LOAN_TYPE_LABELS[row.loanType]}
       </p>
       <div className="mt-2.5 flex items-center justify-between gap-2">
-        <OutcomeMark outcome={row.prescreenOutcome} className="rounded-full bg-muted/60 px-2 py-0.5" />
+        {row.status === 'info_requested' ? (
+          <span className="rounded-full bg-warning/15 px-2 py-0.5 text-[11px] font-medium text-warning">Waiting on applicant</span>
+        ) : (
+          <OutcomeMark outcome={row.prescreenOutcome} className="rounded-full bg-muted/60 px-2 py-0.5" />
+        )}
         <span className="flex items-center gap-1.5">
           {/* Only when it has moved on since submission; otherwise it repeats the age. */}
           {!age || inStage !== age.age ? (

@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react'
 import { LOAN_PRODUCTS } from '../config/loanProducts'
-import { DEFAULT_COLLATERAL_TYPES } from '../config/collateral'
+import { DEFAULT_COLLATERAL_CATALOG, activeCatalog } from '../config/collateral'
 
 /*
  * Loan products as configured in the workspace (Settings → Loan products), and the
- * collateral types applicants can pledge.
+ * collateral applicants can pledge (active types and items, src/config/collateral.js).
  *
  * Starts from the built-in defaults so the page renders at once, then swaps in the
  * configured values. Fetched once per page load and shared by every component.
@@ -12,7 +12,7 @@ import { DEFAULT_COLLATERAL_TYPES } from '../config/collateral'
 
 const DEFAULT_CATALOG = {
   products: LOAN_PRODUCTS,
-  collateralTypes: DEFAULT_COLLATERAL_TYPES.filter((type) => !type.retired),
+  collateralCatalog: activeCatalog(DEFAULT_COLLATERAL_CATALOG),
   loaded: false,
 }
 
@@ -24,8 +24,8 @@ const load = () => {
   if (!pending) {
     pending = fetch('/api/v1/products')
       .then((response) => (response.ok ? response.json() : Promise.reject(new Error(String(response.status)))))
-      .then(({ products, collateralTypes }) => {
-        cached = { products, collateralTypes: collateralTypes || DEFAULT_CATALOG.collateralTypes, loaded: true }
+      .then(({ products, collateralCatalog }) => {
+        cached = { products, collateralCatalog: collateralCatalog || DEFAULT_CATALOG.collateralCatalog, loaded: true }
         listeners.forEach((listener) => listener(cached))
         return cached
       })
@@ -41,7 +41,7 @@ const load = () => {
   return pending
 }
 
-/** { products, collateralTypes, loaded }: `loaded` turns true once the workspace's own answer (or a failure) is in. */
+/** { products, collateralCatalog, loaded }: `loaded` turns true once the workspace's own answer (or a failure) is in. */
 export function useProductCatalog() {
   const [catalog, setCatalog] = useState(cached || DEFAULT_CATALOG)
 
@@ -60,9 +60,9 @@ export function useProducts() {
   return useProductCatalog().products
 }
 
-/** The collateral types applicants can pledge. */
-export function useCollateralTypes() {
-  return useProductCatalog().collateralTypes
+/** The collateral applicants can pledge: { types, items }. */
+export function useCollateralCatalog() {
+  return useProductCatalog().collateralCatalog
 }
 
 /** One product by id, falling back to the built-in definition if it is switched off or unknown. */

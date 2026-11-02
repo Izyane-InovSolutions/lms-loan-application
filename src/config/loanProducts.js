@@ -122,11 +122,21 @@ export const defaultDocuments = (form) =>
 
 /**
  * Collateral a product takes:
- *   requirement   'none' (not asked), 'optional', or 'required' (at least one item)
+ *   requirement   'none' (not asked), 'optional', 'required' (at least one item), or
+ *                 'amount' (required from requiredFrom up, not asked below it)
+ *   requiredFrom  the loan amount, in kwacha, from which 'amount' asks; else null
  *   types         collateral type keys accepted (empty: every active type, collateral.js)
- *   minCoverage   pledged value ÷ loan amount the items must reach (1.2 is 120%), or null
+ *   mustCover     when required, the pledges' lending value (after haircut and
+ *                 loan-to-value) must reach the loan amount
  */
-export const DEFAULT_COLLATERAL_RULES = { requirement: 'none', types: [], minCoverage: null }
+export const DEFAULT_COLLATERAL_RULES = { requirement: 'none', requiredFrom: null, types: [], mustCover: false }
+
+// Rules saved before lending values: a minimum cover stood for "must cover the loan".
+const collateralRules = ({ minCoverage, ...rules } = {}) => ({
+  ...DEFAULT_COLLATERAL_RULES,
+  ...(rules.mustCover === undefined && Number(minCoverage) > 0 ? { mustCover: true } : {}),
+  ...rules,
+})
 
 const BUILT_IN_PRODUCTS = {
   personal: {
@@ -197,7 +207,7 @@ export const buildProducts = (stored = {}) => {
     .filter(([id, value]) => !BUILT_IN_PRODUCTS[id] && value && APPLICANT_FORMS[value.form])
     .sort(([, a], [, b]) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')))
     .map(([id, value]) => finish({ ...productDefaults(value.form), ...value, id }))
-  return [...builtIn, ...added].map((product) => ({ ...product, collateral: { ...DEFAULT_COLLATERAL_RULES, ...(product.collateral || {}) } }))
+  return [...builtIn, ...added].map((product) => ({ ...product, collateral: collateralRules(product.collateral) }))
 }
 
 export const LOAN_PRODUCTS = buildProducts()

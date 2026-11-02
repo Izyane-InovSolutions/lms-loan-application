@@ -46,6 +46,8 @@ describe('application lifecycle', () => {
 
   beforeAll(async () => {
     adminId = (await admin.post('/auth/demo', { role: 'admin' })).body.user.id
+    // Approval without legal sign-off: these tests are about what comes before and after it (tests/legalReview.test.js covers the gate).
+    await admin.put('/settings/workflow', { requireSecondApproval: true, slaDays: 3, requireLegalReview: false })
     officerId = (await officer.post('/auth/demo', { role: 'loan_officer' })).body.user.id
     await dsa.post('/auth/demo', { role: 'dsa' })
     await rm.post('/auth/demo', { role: 'rm' })
@@ -253,7 +255,7 @@ describe('application lifecycle', () => {
 
   it('holds officers to their approval limit', async () => {
     await admin.patch(`/users/${officerId}`, { approvalMin: 0, approvalMax: 3000 })
-    await admin.put('/settings/workflow', { requireSecondApproval: false, slaDays: 3 })
+    await admin.put('/settings/workflow', { requireSecondApproval: false, slaDays: 3, requireLegalReview: false })
     const { token, body } = await prepareDraft('limit@example.com')
     body.data.personalInfo.email = 'limit@example.com'
     body.loanData.amount = 3000
@@ -271,7 +273,7 @@ describe('application lifecycle', () => {
     const within = await act({ action: 'recommend', verdict: 'approve', rationale: 'Fine', amount: 3000 })
     expect(within.body.application.status).toBe('approved')
     await admin.patch(`/users/${officerId}`, { approvalMin: 0, approvalMax: null })
-    await admin.put('/settings/workflow', { requireSecondApproval: true, slaDays: 3 })
+    await admin.put('/settings/workflow', { requireSecondApproval: true, slaDays: 3, requireLegalReview: false })
   })
 
   it('pulls a sample credit report only with consent, and re-prescreens', async () => {

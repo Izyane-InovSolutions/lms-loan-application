@@ -20,7 +20,7 @@ import { DatePicker } from '@mui/x-date-pickers/DatePicker'
 import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs'
 import dayjs from 'dayjs'
 import { aiFailureMessage, isRetryableAiFailure } from '../../services/aiApi'
-import { COLLATERAL_REQUIREMENTS, MAX_COLLATERAL_ITEMS, acceptedTypes, collateralValue, typeLabel } from '@/config/collateral'
+import { COLLATERAL_REQUIREMENTS, MAX_COLLATERAL_ITEMS, acceptedItems, collateralLendingValue, collateralRequirement, collateralValue, describeTerms, itemLabel, lendingValue, pledgeTerms, typeLabel } from '@/config/collateral'
 import { formatKwacha } from '@/config/loanProducts'
 import { acceptsPhotos, readDocument } from '@/utils/documentSlots'
 import { EMPLOYMENT_OPTIONS, businessPeople, employerField, idField, positionLabel, positionsFor, presentDocuments } from '@/config/applicantRules'
@@ -88,7 +88,7 @@ export function WizardStep(props) {
     applicantEmail,
     assistedBy,
     businessData,
-    collateralTypes,
+    collateralCatalog,
     consentCode,
     consentCodeState,
     currentStep,
@@ -272,7 +272,9 @@ export function WizardStep(props) {
   ]
 
   const activeData = selectedLoanType === 'personal' ? personalData : businessData
-  const collateralRule = product.collateral?.requirement || 'none'
+  // What the product asks at the amount chosen ('none', 'optional', 'required'); by-amount products change as it moves.
+  const collateralRule = collateralRequirement(product, loanData.amount)
+  const collateralFrom = product.collateral?.requirement === 'amount' ? Number(product.collateral.requiredFrom) : 0
   // A company's directors, a partnership's partners, or a sole proprietor (applicantRules.js).
   const people = businessPeople(businessData.businessInfo.businessType)
   const isZambianApplicant = idField(personalData.employmentInfo.nationality).kind === 'nrc'
@@ -321,18 +323,19 @@ export function WizardStep(props) {
 
   // Said on the documents step, so collateral proof isn't looked for here.
   const collateralNext =
-    collateralRule !== 'none' ? (
+    collateralRule !== 'none' || collateralFrom ? (
       <p className="flex items-start gap-2 rounded-md bg-accent/60 px-4 py-3 text-sm text-accent-foreground md:col-span-2">
         <Landmark className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
         <span>
-          This loan {collateralRule === 'required' ? 'needs' : 'can take'} collateral. You’ll list what you’re pledging, and attach its proof, on the next step.
+          {collateralFrom ? `Loans of ${formatKwacha(collateralFrom)} or more need collateral.` : `This loan ${collateralRule === 'required' ? 'needs' : 'can take'} collateral.`} You’ll list what
+          you’re pledging, and attach its proof, on the next step.
         </span>
       </p>
     ) : null
 
   const collateralSummaryRows = collateralItems.map((item, index) =>
     renderSummaryRow(
-      `${typeLabel(item.type, collateralTypes)}${collateralItems.length > 1 ? ` (${index + 1})` : ''}`,
+      `${itemLabel(item, collateralCatalog)}${collateralItems.length > 1 ? ` (${index + 1})` : ''}`,
       [item.description, Number(item.value) > 0 ? formatKwacha(item.value) : ''].filter(Boolean).join(' · ')
     )
   )
@@ -345,14 +348,16 @@ export function WizardStep(props) {
   // ---------------------------------------------------------------------------
 
   /**
-   * What the applicant pledges, when the product asks: a row per item (kind, description,
-   * estimated value) with an optional proof each. The minimum cover follows the amount.
+   * What the applicant pledges, when the product asks: a row per item (the lender's
+   * collateral item, a description, the applicant's estimate of its value) with an optional
+   * proof each. Each shows what can be lent against it after its type's haircut and LTV.
    */
   const renderCollateral = () => {
-    const types = acceptedTypes(product, collateralTypes)
-    const cover = Number(product.collateral?.minCoverage) || 0
-    const needed = cover > 0 ? Math.ceil(loanData.amount * cover) : 0
+    const items = acceptedItems(product, collateralCatalog)
+    const groups = collateralCatalog.types.map((type) => ({ type, items: items.filter((item) => item.type === type.key) })).filter((group) => group.items.length)
+    const mustCover = collateralRule === 'required' && product.collateral?.mustCover
     const pledged = collateralValue(collateralItems)
+    const lending = collateralLendingValue(collateralItems, collateralCatalog)
     const required = collateralRule === 'required'
     return (
       <fieldset className="rounded-lg border bg-card p-5 shadow-soft sm:p-6">
@@ -370,8 +375,12 @@ export function WizardStep(props) {
                 </span>
               </h2>
               <p className="mt-1 text-sm text-muted-foreground">
-                {required ? 'This loan needs security. List what you are pledging and what each item is worth.' : 'You can pledge security for this loan. List each item and what it is worth.'}
-                {needed ? ` Pledge at least ${formatKwacha(needed)}: ${Math.round(cover * 100)}% of the loan.` : ''}
+                {collateralFrom
+                  ? `Loans of ${formatKwacha(collateralFrom)} or more need security. List what you are pledging and what each item is worth.`
+                  : required
+                    ? 'This loan needs security. List what you are pledging and what each item is worth.'
+                    : 'You can pledge security for this loan. List each item and what it is worth.'}
+                {mustCover ? ` Together, their lending value must reach ${formatKwacha(loanData.amount)}.` : ''}
               </p>
             </div>
           </div>
@@ -391,62 +400,82 @@ export function WizardStep(props) {
 
         <div className="mt-5 space-y-4">
           {collateralItems.length ? (
-            collateralItems.map((item, index) => (
-              <div key={index} className="rounded-md border border-border bg-secondary/40 p-4">
-                <div className="mb-4 flex items-center justify-between gap-3">
-                  <Badge variant="secondary">Item {index + 1}</Badge>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => removeCollateralItem(index)}
-                    className="h-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                  >
-                    <Trash2 />
-                    Remove
-                  </Button>
-                </div>
-                <div className="grid gap-5 md:grid-cols-3">
-                  <FormField name={`collateral.items.${index}.type`} label="Kind of collateral" required error={validationErrors[`collateral.items.${index}.type`]} hint={types.find((type) => type.key === item.type)?.description}>
-                    {(field) => (
-                      <Select {...field} value={item.type || ''} onChange={(event) => updateCollateralItem(index, 'type', event.target.value)}>
-                        <option value="">Select a kind</option>
-                        {types.map((type) => (
-                          <option key={type.key} value={type.key}>
-                            {type.label}
-                          </option>
-                        ))}
-                      </Select>
-                    )}
-                  </FormField>
-                  <FormField name={`collateral.items.${index}.description`} label="Description" required error={validationErrors[`collateral.items.${index}.description`]} hint="For example make and registration, or plot number.">
-                    {(field) => <Input {...field} value={item.description || ''} maxLength={200} onChange={(event) => updateCollateralItem(index, 'description', event.target.value)} />}
-                  </FormField>
-                  <FormField name={`collateral.items.${index}.value`} label="Estimated value (K)" required error={validationErrors[`collateral.items.${index}.value`]}>
-                    {(field) => <Input {...field} inputMode="numeric" value={item.value || ''} placeholder="e.g. 150000" onChange={(event) => updateCollateralItem(index, 'value', event.target.value)} />}
-                  </FormField>
-                  <div className="md:col-span-3">
-                    {renderUploadField(
-                      'Proof of ownership or value',
-                      `collateral.${index}`,
-                      readDocument(activeData.documents, `collateral.${index}`),
-                      false,
-                      'application/pdf,image/*',
-                      `documents.collateral.${index}`,
-                      false,
-                      'For example a title deed, white book, valuation or invoice.'
-                    )}
+            collateralItems.map((item, index) => {
+              const chosen = items.find((entry) => entry.code === item.code)
+              return (
+                <div key={index} className="rounded-md border border-border bg-secondary/40 p-4">
+                  <div className="mb-4 flex items-center justify-between gap-3">
+                    <Badge variant="secondary">Item {index + 1}</Badge>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => removeCollateralItem(index)}
+                      className="h-8 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    >
+                      <Trash2 />
+                      Remove
+                    </Button>
+                  </div>
+                  <div className="grid gap-5 md:grid-cols-3">
+                    <FormField
+                      name={`collateral.items.${index}.code`}
+                      label="Collateral"
+                      required
+                      error={validationErrors[`collateral.items.${index}.code`]}
+                      hint={chosen ? `${typeLabel(chosen.type, collateralCatalog)} · ${describeTerms(pledgeTerms(item, collateralCatalog))}` : undefined}
+                    >
+                      {(field) => (
+                        <Select {...field} value={item.code || ''} onChange={(event) => updateCollateralItem(index, 'code', event.target.value)}>
+                          <option value="">Select what you’re pledging</option>
+                          {groups.map((group) => (
+                            <optgroup key={group.type.key} label={group.type.label}>
+                              {group.items.map((entry) => (
+                                <option key={entry.code} value={entry.code}>
+                                  {entry.name}
+                                </option>
+                              ))}
+                            </optgroup>
+                          ))}
+                        </Select>
+                      )}
+                    </FormField>
+                    <FormField name={`collateral.items.${index}.description`} label="Description" required error={validationErrors[`collateral.items.${index}.description`]} hint="For example make and registration, or plot number.">
+                      {(field) => <Input {...field} value={item.description || ''} maxLength={200} onChange={(event) => updateCollateralItem(index, 'description', event.target.value)} />}
+                    </FormField>
+                    <FormField
+                      name={`collateral.items.${index}.value`}
+                      label="Estimated value (K)"
+                      required
+                      error={validationErrors[`collateral.items.${index}.value`]}
+                      hint={chosen && Number(item.value) > 0 ? `Lending value ${formatKwacha(lendingValue(item, collateralCatalog))}` : undefined}
+                    >
+                      {(field) => <Input {...field} inputMode="numeric" value={item.value || ''} placeholder="e.g. 150000" onChange={(event) => updateCollateralItem(index, 'value', event.target.value)} />}
+                    </FormField>
+                    <div className="md:col-span-3">
+                      {renderUploadField(
+                        'Proof of ownership or value',
+                        `collateral.${index}`,
+                        readDocument(activeData.documents, `collateral.${index}`),
+                        false,
+                        'application/pdf,image/*',
+                        `documents.collateral.${index}`,
+                        false,
+                        'For example a title deed, white book, valuation or invoice.'
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))
+              )
+            })
           ) : (
             <p className="text-sm text-muted-foreground">{required ? 'Add at least one item.' : 'No collateral added.'}</p>
           )}
           {collateralItems.length ? (
             <p className="text-sm text-muted-foreground">
-              Total pledged: <span className="font-semibold text-foreground">{formatKwacha(pledged)}</span>
-              {needed ? ` of ${formatKwacha(needed)} needed` : ''}
+              Total pledged: <span className="font-semibold text-foreground">{formatKwacha(pledged)}</span> · lending value{' '}
+              <span className="font-semibold text-foreground">{formatKwacha(lending)}</span>
+              {mustCover ? ` of ${formatKwacha(loanData.amount)} needed` : ''}
             </p>
           ) : null}
         </div>
@@ -493,7 +522,14 @@ export function WizardStep(props) {
           }, 'number', `${minTenure} to ${maxTenure}`, { min: minTenure, max: maxTenure }, true)}
         </FieldGroup>
 
-        {collateralRule !== 'none' ? renderCollateral() : null}
+        {collateralRule !== 'none' ? (
+          renderCollateral()
+        ) : collateralFrom ? (
+          <p className="flex items-start gap-2 rounded-md bg-accent/60 px-4 py-3 text-sm text-accent-foreground">
+            <Landmark className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+            <span>No collateral is needed for this amount. Loans of {formatKwacha(collateralFrom)} or more need it.</span>
+          </p>
+        ) : null}
       </div>
 
       <div className="xl:sticky xl:top-8 xl:self-start">

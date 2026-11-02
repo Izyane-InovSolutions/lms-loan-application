@@ -1,7 +1,7 @@
 import { and, desc, eq } from 'drizzle-orm'
 import { getDb, schema } from './db/client.js'
 import { putBlob, readBlob } from './blob.js'
-import { getApplicationProduct, getCollateralTypes } from './products.js'
+import { getApplicationProduct, getCollateralCatalog } from './products.js'
 import { describeCollateral } from '../../src/config/collateral.js'
 import { getPublishedTemplate } from './templates.js'
 import { fillUploadedPdf, renderTextTemplate, sha256 } from './pdf.js'
@@ -65,7 +65,7 @@ export const mergeValuesFor = async (application) => {
     company_name: application.companyName || '',
     reference: application.reference,
     product: product?.name || LOAN_TYPE_LABELS[application.loanType] || 'Loan',
-    collateral: describeCollateral(data, await getCollateralTypes()) || 'None',
+    collateral: describeCollateral(data, await getCollateralCatalog()) || 'None',
     amount: kwacha(amount),
     tenure: `${tenure} ${tenure === 1 ? 'month' : 'months'}`,
     interest: product ? describeInterest(product) : '',

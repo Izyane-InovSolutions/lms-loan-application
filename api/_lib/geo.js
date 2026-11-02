@@ -58,21 +58,24 @@ const gpsLabel = (point) => `${Number(point.latitude).toFixed(5)}, ${Number(poin
  *   km             the distance between the two, or null when it can't be measured
  *   gps            the coordinates compared, and the nearest named place to them
  *   address        what was typed, whether it was found on the map, and where
- *   reason         when km is null, why — in words an officer can act on
+ *   reason         when km is null, why — in words an officer can act on (why, then fix)
+ *   why / fix / action  the same, in parts: what went wrong, what to do, and the button
+ *                  for it (ask_applicant, rerun, settings), for the case page's list
  * No AI is involved: the typed address is looked up on OpenStreetMap (GEOCODER).
  */
 export const addressDistance = async (application, point) => {
   const typed = String(addressOf(application) || '').trim()
   const address = { typed: typed || null, found: null, label: null }
-  if (!point) return { km: null, gps: null, address, reason: 'The applicant’s location wasn’t recorded when they submitted.' }
+  const unmeasured = (extra, why, fix = '', action = null) => ({ km: null, ...extra, address: extra.address || address, why, fix, action, reason: fix ? `${why} ${fix}` : why })
+  if (!point) return unmeasured({ gps: null }, 'The applicant’s location wasn’t recorded when they submitted.', 'Confirm their home address with them, or log a visit to it (Details tab, Location).', 'ask_applicant')
   const geocoding = (process.env.GEOCODER || '').trim() === 'nominatim'
   const gps = { latitude: Number(point.latitude), longitude: Number(point.longitude), accuracy: point.accuracyMeters ?? point.accuracy ?? null, place: geocoding ? await placeNear(point) : null }
   const at = `They submitted from ${gpsLabel(gps)}${gps.place ? ` (near ${gps.place})` : ''}`
-  if (!geocoding) return { km: null, gps, address, reason: `${at}, but address look-up isn’t set up (GEOCODER), so the home address can’t be placed on the map to compare.` }
-  if (typed.length < 5) return { km: null, gps, address: { ...address, found: false }, reason: `${at}, but the home address they typed${typed ? `, “${typed}”,` : ''} is too short to find on the map. Check the address with the applicant.` }
+  if (!geocoding) return unmeasured({ gps }, `${at}, but address look-up isn’t set up (GEOCODER), so the home address can’t be placed on the map to compare.`, 'Compare the two by hand on the location map below. To do it automatically, set GEOCODER=nominatim on the server.')
+  if (typed.length < 5) return unmeasured({ gps, address: { ...address, found: false } }, `${at}, but the home address they typed${typed ? `, “${typed}”,` : ''} is too short to find on the map.`, 'Check the address with the applicant.', 'ask_applicant')
   const place = await geocodeNominatim(typed).catch(() => undefined)
-  if (place === undefined) return { km: null, gps, address, reason: `${at}, but the map service didn’t answer when looking up their home address. Run the rules again to retry.` }
-  if (!place) return { km: null, gps, address: { ...address, found: false }, reason: `${at}, but the home address they typed, “${typed}”, couldn’t be found on the map to compare. Check the address with the applicant.` }
+  if (place === undefined) return unmeasured({ gps }, `${at}, but the map service didn’t answer when looking up their home address.`, 'Run the rules again to retry.', 'rerun')
+  if (!place) return unmeasured({ gps, address: { ...address, found: false } }, `${at}, but the home address they typed, “${typed}”, couldn’t be found on the map to compare.`, 'Check the address with the applicant.', 'ask_applicant')
   return { km: Number(haversineKm(place, gps).toFixed(1)), gps, address: { typed, found: true, label: place.label, latitude: place.latitude, longitude: place.longitude } }
 }
 

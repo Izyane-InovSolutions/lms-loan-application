@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { ArrowDownToLine, ChevronLeft, ChevronRight, FilePlus2, FileStack, Loader2, Search, X } from 'lucide-react'
+import { ArrowDownToLine, ChevronLeft, ChevronRight, FilePen, FilePlus2, FileStack, Loader2, Search, X } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
-import { APPLICATION_STATUSES, CHANNELS, LOAN_TYPE_LABELS, OPEN_STATUSES, channelLabel, renamedStatus, statusLabel } from '@/config/applications'
+import { APPLICATION_STATUSES, CHANNELS, LOAN_TYPE_LABELS, OPEN_STATUSES, channelLabel, statusLabel } from '@/config/applications'
 import { hasPermission, registeredRoles } from '@/config/roles'
 import { applyPath } from '@/config/applicationSteps'
 import { setAssistedFlag } from '@/lib/assisted'
@@ -14,21 +14,8 @@ import { api, toQuery } from '../api'
 import { useAuth } from '../auth'
 import { EmptyState, FormError, OutcomeMark, PageHeader, StatusBadge, daysSince, downloadCsv, money, timeAgo, useToast } from '../components'
 import { AssistedApplicationTypeDialog } from '../AssistedApplicationTypeDialog'
-
-const TABS = [
-  { value: 'open', label: 'Open' },
-  { value: 'submitted', label: 'New' },
-  { value: 'in_review', label: 'In review' },
-  { value: 'info_requested', label: 'Waiting on applicant' },
-  { value: 'pending_approval', label: 'Awaiting approval' },
-  { value: 'approved', label: 'Approved' },
-  { value: 'accepted', label: 'Accepted' },
-  { value: 'disbursed', label: 'Paid out' },
-  { value: 'declined', label: 'Declined' },
-  { value: 'withdrawn', label: 'Withdrawn' },
-  { value: 'expired', label: 'Expired' },
-  { value: 'all', label: 'All' },
-]
+import { DraftDialog } from '../DraftDialog'
+import { DRAFT_STAGE, endStages, retiredStages, stageLabel, workStages } from '../stages'
 
 const DESCRIPTIONS = {
   admin: 'Every application in the workspace.',
@@ -36,6 +23,7 @@ const DESCRIPTIONS = {
   sales_manager: 'Every application: follow the team’s pipeline, bring customers in and work cases.',
   rm: 'Applications from your customers and the agents who report to you.',
   dsa: 'Applications you referred or filled in for customers.',
+  legal_officer: 'Every application. Open one and use its Legal review to verify the collateral and documents.',
 }
 
 // For roles an admin added, by what their scope lets them see.
@@ -48,8 +36,14 @@ const SCOPE_DESCRIPTIONS = {
 // Open cases older than this get an ageing badge.
 const AGEING_DAYS = 3
 
+/** A case's stage as the list shows it: its workflow state, and whether it waits on the applicant. */
+const rowStage = (workflow, row) => {
+  const stage = stageLabel(workflow, row) || statusLabel(row.status)
+  return row.status === 'info_requested' ? `${stage} · waiting on applicant` : stage
+}
+
 export function ApplicationsPage() {
-  const { user } = useAuth()
+  const { user, workflow } = useAuth()
   const navigate = useNavigate()
   const notify = useToast()
   const [params, setParams] = useSearchParams()
@@ -57,8 +51,13 @@ export function ApplicationsPage() {
   const [result, setResult] = useState({ status: 'loading', applications: [], total: 0, statusCounts: {} })
   const [exporting, setExporting] = useState(false)
   const [chooseType, setChooseType] = useState(false)
+  const [drafts, setDrafts] = useState({ status: 'idle', drafts: [], privateCount: 0 })
+  const [openDraft, setOpenDraft] = useState(null)
+  const showDrafts = hasPermission(user, 'drafts.view')
 
   const filters = {
+    // A workflow stage (a state id, or "draft"); else a status: open (the default), all, or one from a link.
+    stage: params.get('stage') || '',
     status: params.get('status') || 'open',
     loanType: params.get('loanType') || 'all',
     product: params.get('product') || 'all',
@@ -98,9 +97,40 @@ export function ApplicationsPage() {
     return () => clearTimeout(timer)
   }, [search])
 
-  const query = toQuery({ ...filters, status: filters.status === 'all' ? '' : filters.status, page: filters.page > 1 ? filters.page : '' })
+  /** Shows one tab: a stage, Open or All. */
+  const setTab = (value) => {
+    const next = new URLSearchParams(params)
+    next.delete('stage')
+    next.delete('status')
+    next.delete('page')
+    if (value === 'all') next.set('status', 'all')
+    else if (value !== 'open') next.set('stage', value)
+    setParams(next, { replace: true })
+  }
+
+  const draftTab = filters.stage === DRAFT_STAGE.key
+  // What the server filters by: a stage is a workflow state, across every status.
+  const listParams = (extra = {}) => {
+    const { stage, ...rest } = filters
+    return toQuery({ ...rest, status: stage || filters.status === 'all' ? '' : filters.status, state: stage, ...extra })
+  }
+  const query = listParams({ page: filters.page > 1 ? filters.page : '' })
+
+  // Drafts are loaded for the tab's count too, and again when a draft window closes.
+  useEffect(() => {
+    if (!showDrafts) return undefined
+    let cancelled = false
+    setDrafts((prev) => ({ ...prev, status: prev.status === 'ready' ? 'ready' : 'loading' }))
+    api('/drafts')
+      .then((data) => !cancelled && setDrafts({ status: 'ready', drafts: data.drafts, privateCount: data.privateCount || 0 }))
+      .catch((error) => !cancelled && setDrafts({ status: 'error', drafts: [], privateCount: 0, message: error.message }))
+    return () => {
+      cancelled = true
+    }
+  }, [showDrafts, openDraft])
 
   useEffect(() => {
+    if (draftTab) return undefined
     let cancelled = false
     setResult((prev) => ({ ...prev, status: prev.applications.length ? 'refreshing' : 'loading' }))
     api(`/applications${query}`)
@@ -111,11 +141,28 @@ export function ApplicationsPage() {
     }
   }, [query])
 
+  // Tabs: Draft, Open, each stage of the workflow in order, its ends, All. Counts come with
+  // every list load (they ignore the tab); drafts are counted once the Draft tab is opened.
+  const stateCounts = result.stateCounts || {}
+  const tabs = useMemo(() => {
+    // A state turned off, or left in an earlier version, shows only while cases are in it.
+    const stages = [...workStages(workflow), ...retiredStages(workflow)].filter((stage) => !(stage.disabled || stage.retired) || stateCounts[stage.id])
+    return [
+      ...(showDrafts ? [{ value: DRAFT_STAGE.key, label: DRAFT_STAGE.label }] : []),
+      { value: 'open', label: 'Open' },
+      ...stages.map((stage) => ({ value: stage.id, label: stage.label })),
+      ...endStages(workflow).map((stage) => ({ value: stage.id, label: stage.label, ended: true })),
+      { value: 'all', label: 'All' },
+    ]
+  }, [workflow, showDrafts, stateCounts])
+  const activeTab = filters.stage || (filters.status === 'all' ? 'all' : filters.status === 'open' ? 'open' : null)
+
   const tabCount = (value) => {
     const counts = result.statusCounts || {}
+    if (value === DRAFT_STAGE.key) return drafts.status === 'ready' ? drafts.drafts.length : null
     if (value === 'all') return Object.values(counts).reduce((sum, count) => sum + count, 0)
     if (value === 'open') return OPEN_STATUSES.reduce((sum, status) => sum + (counts[status] || 0), 0)
-    return counts[value] || 0
+    return stateCounts[value] || 0
   }
 
   const startAssisted = (loanType = 'personal') => {
@@ -133,12 +180,12 @@ export function ApplicationsPage() {
     try {
       const rows = []
       for (let page = 1; page <= 10; page += 1) {
-        const data = await api(`/applications${toQuery({ ...filters, status: filters.status === 'all' ? '' : filters.status, page, pageSize: 200 })}`)
+        const data = await api(`/applications${listParams({ page, pageSize: 200 })}`)
         rows.push(...data.applications)
         if (rows.length >= data.total) break
       }
       downloadCsv(`applications-${new Date().toISOString().slice(0, 10)}.csv`, [
-        ['Reference', 'Applicant', 'Company', 'Product', 'Amount (ZMW)', 'Tenure (months)', 'Status', 'Rules', 'Channel', 'Brought in by', 'Officer', 'Submitted'],
+        ['Reference', 'Applicant', 'Company', 'Product', 'Amount (ZMW)', 'Tenure (months)', 'Stage', 'Status', 'Rules', 'Channel', 'Brought in by', 'Officer', 'Submitted'],
         ...rows.map((row) => [
           row.reference,
           row.applicantName,
@@ -146,6 +193,7 @@ export function ApplicationsPage() {
           row.productName || LOAN_TYPE_LABELS[row.loanType],
           row.amount,
           row.tenure,
+          stageLabel(workflow, row) || '',
           statusLabel(row.status),
           row.prescreenOutcome || '',
           channelLabel(row.channel),
@@ -172,7 +220,7 @@ export function ApplicationsPage() {
         description={DESCRIPTIONS[user.role] || SCOPE_DESCRIPTIONS[user.scope]}
         actions={
           <>
-            <Button variant="outline" onClick={exportCsv} disabled={exporting || !result.total}>
+            <Button variant="outline" onClick={exportCsv} disabled={exporting || draftTab || !result.total}>
               {exporting ? <Loader2 className="animate-spin" /> : <ArrowDownToLine />}
               Export CSV
             </Button>
@@ -186,26 +234,48 @@ export function ApplicationsPage() {
         }
       />
 
-      <nav aria-label="Application status" className="-mx-1 flex gap-1 overflow-x-auto pb-1">
-        {TABS.map((tab) => {
-          const active = filters.status === tab.value
+      <nav aria-label="Application stage" className="-mx-1 flex gap-1 overflow-x-auto pb-1">
+        {tabs.map((tab, index) => {
+          const active = activeTab === tab.value
+          const count = tabCount(tab.value)
           return (
-            <button
-              key={tab.value}
-              type="button"
-              onClick={() => setFilter('status', tab.value)}
-              aria-current={active ? 'page' : undefined}
-              className={cn(
-                'flex shrink-0 items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                active ? 'bg-card text-foreground shadow-sm ring-1 ring-border' : 'text-muted-foreground hover:bg-card/60 hover:text-foreground'
-              )}
-            >
-              {renamedStatus(tab.value) || tab.label}
-              <span className={cn('rounded px-1.5 text-xs tabular-nums', active ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground')}>{tabCount(tab.value)}</span>
-            </button>
+            <React.Fragment key={tab.value}>
+              {/* A thin rule between the stages and where cases end up. */}
+              {tab.ended && !tabs[index - 1]?.ended ? <span className="mx-1 my-1.5 w-px shrink-0 bg-border" aria-hidden="true" /> : null}
+              <button
+                type="button"
+                onClick={() => setTab(tab.value)}
+                aria-current={active ? 'page' : undefined}
+                className={cn(
+                  'flex shrink-0 items-center gap-2 rounded-md px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                  active ? 'bg-card text-foreground shadow-sm ring-1 ring-border' : 'text-muted-foreground hover:bg-card/60 hover:text-foreground'
+                )}
+              >
+                {tab.label}
+                {count === null ? null : (
+                  <span className={cn('rounded px-1.5 text-xs tabular-nums', active ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground')}>{count}</span>
+                )}
+              </button>
+            </React.Fragment>
           )
         })}
       </nav>
+
+      {activeTab === null ? (
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <span className="inline-flex items-center gap-2 rounded-full border bg-card py-1 pl-3 pr-1 shadow-sm">
+            Status <span className="font-medium text-foreground">{statusLabel(filters.status)}</span>
+            <button
+              type="button"
+              aria-label="Show every open application"
+              onClick={() => setTab('open')}
+              className="rounded-full p-1 text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <X className="size-3.5" aria-hidden="true" />
+            </button>
+          </span>
+        </div>
+      ) : null}
 
       {filters.sourcedBy ? (
         <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -282,10 +352,19 @@ export function ApplicationsPage() {
           </div>
         </div>
         <p className="text-sm text-muted-foreground lg:ml-auto" aria-live="polite">
-          {result.status !== 'loading' ? `${result.total} ${result.total === 1 ? 'application' : 'applications'}` : null}
+          {draftTab
+            ? drafts.status === 'ready'
+              ? `${drafts.drafts.length} ${drafts.drafts.length === 1 ? 'draft' : 'drafts'}`
+              : null
+            : result.status !== 'loading'
+              ? `${result.total} ${result.total === 1 ? 'application' : 'applications'}`
+              : null}
         </p>
       </div>
 
+      {draftTab ? (
+        <DraftList drafts={drafts} search={filters.q} viewerId={user.id} onOpen={setOpenDraft} />
+      ) : (
       <div className={cn('overflow-hidden rounded-xl border bg-card transition-opacity', result.status === 'refreshing' && 'opacity-70')}>
         {result.status === 'loading' ? (
           <p className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
@@ -299,7 +378,7 @@ export function ApplicationsPage() {
         ) : result.applications.length === 0 ? (
           <EmptyState
             icon={FileStack}
-            title={hasFilters ? 'Nothing matches these filters' : filters.status === 'open' ? 'No open applications' : `No ${statusLabel(filters.status).toLowerCase()} applications`}
+            title={hasFilters ? 'Nothing matches these filters' : activeTab === 'open' ? 'No open applications' : `Nothing in ${(tabs.find((tab) => tab.value === activeTab)?.label || statusLabel(filters.status)).toLowerCase()}`}
             action={
               canStart ? (
                 <Button size="sm" onClick={beginAssisted}>
@@ -324,7 +403,7 @@ export function ApplicationsPage() {
                           {row.reference}, {money(row.amount)} {(row.productName || LOAN_TYPE_LABELS[row.loanType]).toLowerCase()}
                         </p>
                       </div>
-                      <StatusBadge status={row.status} label={statusLabel(row.status)} />
+                      <StatusBadge status={row.status} label={rowStage(workflow, row)} />
                     </div>
                     <div className="mt-2 flex items-center gap-3">
                       <OutcomeMark outcome={row.prescreenOutcome} />
@@ -343,7 +422,7 @@ export function ApplicationsPage() {
                     <th scope="col" className="px-4 py-3 text-right font-medium">Amount</th>
                     <th scope="col" className="px-4 py-3 font-medium">Brought in by</th>
                     <th scope="col" className="px-4 py-3 font-medium">Policy rules</th>
-                    <th scope="col" className="px-4 py-3 font-medium">Status</th>
+                    <th scope="col" className="px-4 py-3 font-medium">Stage</th>
                     <th scope="col" className="px-4 py-3 font-medium">Officer</th>
                     <th scope="col" className="px-5 py-3 font-medium">Submitted</th>
                   </tr>
@@ -372,7 +451,7 @@ export function ApplicationsPage() {
                           <OutcomeMark outcome={row.prescreenOutcome} />
                         </td>
                         <td className="px-4 py-3">
-                          <StatusBadge status={row.status} label={statusLabel(row.status)} />
+                          <StatusBadge status={row.status} label={rowStage(workflow, row)} />
                         </td>
                         <td className="px-4 py-3 text-muted-foreground">{row.assignedOfficerName || (APPLICATION_STATUSES[row.status]?.open ? 'Unassigned' : '—')}</td>
                         <td className="px-5 py-3 whitespace-nowrap text-muted-foreground">
@@ -388,8 +467,9 @@ export function ApplicationsPage() {
           </>
         )}
       </div>
+      )}
 
-      {pages > 1 ? (
+      {!draftTab && pages > 1 ? (
         <div className="flex items-center justify-between">
           <p className="text-sm text-muted-foreground">
             Page {filters.page} of {pages}
@@ -406,12 +486,71 @@ export function ApplicationsPage() {
           </div>
         </div>
       ) : null}
+      {showDrafts ? <DraftDialog draftId={openDraft} onOpenChange={(open) => !open && setOpenDraft(null)} onChanged={() => setOpenDraft(null)} /> : null}
       {choosesLoanType ? (
         <AssistedApplicationTypeDialog
           open={chooseType}
           onOpenChange={setChooseType}
           onChoose={startAssisted}
         />
+      ) : null}
+    </div>
+  )
+}
+
+/** The Draft stage: unfinished applications, newest save first. Opens one in its own window. */
+function DraftList({ drafts, search, viewerId, onOpen }) {
+  const needle = search.trim().toLowerCase()
+  const rows = drafts.drafts.filter((row) => !needle || [row.applicantName, row.companyName, row.email].some((field) => String(field || '').toLowerCase().includes(needle)))
+  return (
+    <div className="space-y-3">
+      <div className="overflow-hidden rounded-xl border bg-card">
+        {drafts.status === 'loading' || drafts.status === 'idle' ? (
+          <p className="flex items-center gap-2 p-6 text-sm text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+            Loading drafts…
+          </p>
+        ) : drafts.status === 'error' ? (
+          <div className="p-6">
+            <FormError message={drafts.message} />
+          </div>
+        ) : rows.length === 0 ? (
+          <EmptyState icon={FilePen} title={needle ? 'No drafts match' : 'No drafts'}>
+            Applications started but not yet submitted appear here.
+          </EmptyState>
+        ) : (
+          <ul className="divide-y">
+            {rows.map((row) => (
+              <li key={row.id}>
+                <button type="button" onClick={() => onOpen(row.id)} className="flex w-full flex-wrap items-center gap-x-6 gap-y-2 px-5 py-3 text-left hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium text-foreground">{row.companyName || row.applicantName || row.email}</span>
+                    <span className="block text-xs text-muted-foreground">
+                      {LOAN_TYPE_LABELS[row.loanType]}
+                      {row.amount ? `, ${money(row.amount)}` : ''}
+                      {row.sourcedByName && row.sourcedBy !== viewerId ? `, via ${row.sourcedByName}` : ''}
+                    </span>
+                  </span>
+                  <span className="flex w-48 items-center gap-2">
+                    <span className="h-1.5 flex-1 rounded-full bg-muted" aria-hidden="true">
+                      <span className="block h-full rounded-full bg-primary/60" style={{ width: `${((row.currentStep + 1) / row.stepCount) * 100}%` }} />
+                    </span>
+                    <span className="text-xs tabular-nums text-muted-foreground">
+                      Step {row.currentStep + 1} of {row.stepCount}
+                    </span>
+                  </span>
+                  <span className="w-32 text-right text-xs text-muted-foreground">Saved {timeAgo(row.lastSavedAt)}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+      {drafts.privateCount ? (
+        <p className="text-sm text-muted-foreground">
+          {drafts.privateCount} more {drafts.privateCount === 1 ? 'application was' : 'applications were'} started by customers on their own and {drafts.privateCount === 1 ? 'is' : 'are'} kept private.
+          With Help with finishing on (Settings), they show here the next time their applicants save.
+        </p>
       ) : null}
     </div>
   )

@@ -51,6 +51,11 @@ export const PERMISSION_GROUPS = [
         description: 'Within their own approval limit. With four-eyes on, never on a case they recommended or brought in.',
       },
       { key: 'cases.disburse', label: 'Send to the LMS and record payouts' },
+      {
+        key: 'legal.verify',
+        label: 'Verify collateral and documents',
+        description: 'Mark each pledged collateral item and each document verified, or record an issue with it, on the case’s Legal review.',
+      },
     ],
   },
   {
@@ -124,6 +129,12 @@ export const BUILT_IN_ROLES = {
     description: 'Manages a portfolio of customers and the agents assigned to them.',
     scope: 'team',
     permissions: RM_PERMISSIONS,
+  },
+  legal_officer: {
+    label: 'Legal officer',
+    description: 'Checks and verifies the collateral pledged and the documents on applications. Doesn’t work or decide cases.',
+    scope: 'all',
+    permissions: ['legal.verify'],
   },
   dsa: {
     label: 'Direct sales agent',

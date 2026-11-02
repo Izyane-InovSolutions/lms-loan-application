@@ -78,7 +78,7 @@ const approve = async (id, { amount } = {}) => {
 beforeAll(async () => {
   await admin.post('/auth/demo', { role: 'admin' })
   await officer.post('/auth/demo', { role: 'loan_officer' })
-  await admin.put('/settings/workflow', { requireSecondApproval: false, officerApprovalLimit: 1000000, slaDays: 3 })
+  await admin.put('/settings/workflow', { requireSecondApproval: false, officerApprovalLimit: 1000000, slaDays: 3, requireLegalReview: false })
 })
 
 describe('building blocks', () => {

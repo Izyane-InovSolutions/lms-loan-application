@@ -415,6 +415,7 @@ const DEMO_NAMES = {
   sales_manager: 'Bwalya Musonda',
   rm: 'Chanda Lungu',
   dsa: 'Kelvin Mbewe',
+  legal_officer: 'Mulenga Banda',
   customer: 'Thandiwe Phiri',
 }
 

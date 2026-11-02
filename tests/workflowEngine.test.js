@@ -46,6 +46,8 @@ const move = (who, id, actionId, extra = {}) => act(who, id, 'transition', { act
 
 beforeAll(async () => {
   await admin.post('/auth/demo', { role: 'admin' })
+  // Approval without legal sign-off: these tests are about what comes before and after it (tests/legalReview.test.js covers the gate).
+  await admin.put('/settings/workflow', { requireSecondApproval: true, slaDays: 3, requireLegalReview: false })
   await officer.post('/auth/demo', { role: 'loan_officer' })
   await salesManager.post('/auth/demo', { role: 'sales_manager' })
 })
@@ -80,14 +82,14 @@ describe('the workflow made from today’s settings', () => {
 
   it('follows the settings while nobody has published from the editor', async () => {
     // Four-eyes off: the officer's recommendation becomes the decision, for open cases too.
-    expect((await admin.put('/settings/workflow', { requireSecondApproval: false, slaDays: 3 })).status).toBe(200)
+    expect((await admin.put('/settings/workflow', { requireSecondApproval: false, slaDays: 3, requireLegalReview: false })).status).toBe(200)
     const moved = await consistent(id)
     expect(moved.workflowVersion).toBe(2)
     expect(moved.state).toBe('in_review')
     const approved = await act(officer, id, 'recommend', { verdict: 'approve', rationale: 'Affordable' })
     expect(approved.body.application.status, JSON.stringify(approved.body)).toBe('approved')
     expect(await consistent(id)).toMatchObject({ state: 'approved' })
-    await admin.put('/settings/workflow', { requireSecondApproval: true, slaDays: 3 })
+    await admin.put('/settings/workflow', { requireSecondApproval: true, slaDays: 3, requireLegalReview: false })
   })
 
   it('maps cases with no state yet onto it', async () => {
@@ -160,9 +162,9 @@ describe('a workflow published from the editor', () => {
     expect(application.state).toBe('in_review')
     expect((await getWorkflowVersion(application.workflowVersion)).legacy).toBe(true)
     // Settings changes no longer rewrite the workflow.
-    await admin.put('/settings/workflow', { requireSecondApproval: false, slaDays: 3 })
+    await admin.put('/settings/workflow', { requireSecondApproval: false, slaDays: 3, requireLegalReview: false })
     expect((await row(before)).workflowVersion).toBe(application.workflowVersion)
-    await admin.put('/settings/workflow', { requireSecondApproval: true, slaDays: 3 })
+    await admin.put('/settings/workflow', { requireSecondApproval: true, slaDays: 3, requireLegalReview: false })
   })
 
   it('moves a case through its states, by the roles each names', async () => {

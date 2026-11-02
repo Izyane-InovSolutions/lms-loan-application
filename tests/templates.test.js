@@ -55,6 +55,8 @@ const lenderPdf = async () => {
 
 beforeAll(async () => {
   await admin.post('/auth/demo', { role: 'admin' })
+  // Approval without legal sign-off: these tests are about what comes before and after it (tests/legalReview.test.js covers the gate).
+  await admin.put('/settings/workflow', { requireSecondApproval: true, slaDays: 3, requireLegalReview: false })
   await officer.post('/auth/demo', { role: 'loan_officer' })
 })
 

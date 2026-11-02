@@ -1,7 +1,7 @@
 import { and, desc, eq, inArray, isNull, ne, notInArray, or, sql } from 'drizzle-orm'
 import { getDb, schema } from './db/client.js'
 import { getSetting } from './settings.js'
-import { SYSTEM_FINAL_IDS, analyzeWorkflow, legacyStateOf, legacyToWorkflow } from '../../src/config/workflow.js'
+import { DEFAULT_STAGE_NAMES, SYSTEM_FINAL_IDS, analyzeWorkflow, legacyStateOf, legacyToWorkflow } from '../../src/config/workflow.js'
 
 const { workflowVersions, applications, applicationEvents } = schema
 
@@ -18,6 +18,18 @@ const { workflowVersions, applications, applicationEvents } = schema
  */
 
 const byVersion = new Map()
+
+// JSON with keys in a fixed order: a definition read back from jsonb has its keys reordered.
+const canonical = (value) =>
+  Array.isArray(value)
+    ? `[${value.map(canonical).join(',')}]`
+    : value && typeof value === 'object'
+      ? `{${Object.keys(value)
+          .sort()
+          .filter((key) => value[key] !== undefined)
+          .map((key) => `${JSON.stringify(key)}:${canonical(value[key])}`)
+          .join(',')}}`
+      : JSON.stringify(value)
 
 /** A published version's definition and its analysis (phases, categories, order). */
 const withAnalysis = (row) => ({ version: row.version, legacy: row.legacy, definition: row.definition, analysis: analyzeWorkflow(row.definition), publishedAt: row.publishedAt })
@@ -71,14 +83,104 @@ const mapCasesOnto = async (db, target, { fromVersions = [] } = {}) => {
 const publishedRow = async (db) => (await db.select().from(workflowVersions).where(eq(workflowVersions.status, 'published')).orderBy(desc(workflowVersions.version)).limit(1))[0] || null
 
 let ensuring = null
+let refreshedLegacy = false
+let renamedStages = false
+
+// The names the built-in stages had before Pre-screening, Appraisal, Underwriting, Offer
+// Issuance and Loan Booking (by state id), and what each became.
+const FORMER_STAGE_NAMES = {
+  submitted: ['New', DEFAULT_STAGE_NAMES.submitted],
+  in_review: ['In review', DEFAULT_STAGE_NAMES.in_review],
+  pending_approval: ['Awaiting approval', DEFAULT_STAGE_NAMES.pending_approval],
+  approved: ['Offer made', DEFAULT_STAGE_NAMES.offer],
+  accepted: ['Offer accepted', DEFAULT_STAGE_NAMES.booking],
+}
+
+/**
+ * `definition` with the built-in stages that still carry their former default names given
+ * the new ones, and the action names that follow them ("Send to In review", "Start
+ * review"); null when there is nothing to rename. A name the workspace chose is kept.
+ */
+export const withCurrentStageNames = (definition) => {
+  const renames = new Map()
+  for (const state of definition?.states || []) {
+    const [former, next] = FORMER_STAGE_NAMES[state.id] || []
+    if (former && state.label === former) renames.set(former, next)
+    else if (former && state.label?.startsWith(`${former}: `)) renames.set(former, next)
+  }
+  if (!renames.size) return null
+  const rename = (label) => {
+    if (typeof label !== 'string') return label
+    for (const [former, next] of renames) {
+      if (label === former) return next
+      if (label.startsWith(`${former}: `)) return `${next}${label.slice(former.length)}`
+      if (label === `Send to ${former}`) return `Send to ${next}`
+    }
+    if (label === 'Start review' && renames.has('In review')) return `Start ${renames.get('In review').toLowerCase()}`
+    return label
+  }
+  return {
+    ...definition,
+    states: definition.states.map((state) => ({
+      ...state,
+      label: rename(state.label),
+      ...(state.actions ? { actions: state.actions.map((action) => ({ ...action, label: rename(action.label) })) } : {}),
+    })),
+  }
+}
+
+/**
+ * A workflow published from the editor before the stages were renamed keeps the former
+ * names it was started from. Once per process: publishes it again with the new names (same
+ * states, so open cases on it move across), and renames them in the editor's draft too.
+ */
+const renameFormerStages = async (current) => {
+  const definition = withCurrentStageNames(current.definition)
+  const db = await getDb()
+  const draft = await getDraftWorkflow()
+  const draftRenamed = draft && withCurrentStageNames(draft.definition)
+  if (draftRenamed) await db.update(workflowVersions).set({ definition: draftRenamed, updatedAt: new Date() }).where(eq(workflowVersions.id, draft.id))
+  if (!definition) return current
+  try {
+    const published = await db.transaction(async (tx) => {
+      const [{ max }] = await tx.select({ max: sql`coalesce(max(${workflowVersions.version}), 0)::int` }).from(workflowVersions)
+      await tx.update(workflowVersions).set({ status: 'retired', updatedAt: new Date() }).where(eq(workflowVersions.status, 'published'))
+      const [row] = await tx
+        .insert(workflowVersions)
+        .values({ version: max + 1, status: 'published', definition, legacy: false, note: 'Stages renamed: Pre-screening, Appraisal, Underwriting, Offer Issuance, Loan Booking.', publishedAt: new Date() })
+        .returning()
+      // Only the names changed: every open case on the version before carries on, on this one.
+      await tx
+        .update(applications)
+        .set({ workflowVersion: row.version })
+        .where(and(eq(applications.workflowVersion, current.version), notInArray(applications.state, SYSTEM_FINAL_IDS)))
+      return row
+    })
+    return cached(published)
+  } catch (error) {
+    // Another instance renamed it first.
+    console.warn(`[workflow] stages not renamed: ${error?.message || error}`)
+    return cached(await publishedRow(db))
+  }
+}
 
 /**
  * The workflow new applications follow. The first call on a database without one builds
- * version 1 from the current settings and puts every existing case on it.
+ * version 1 from the current settings and puts every existing case on it. While it is
+ * still made from the settings, the first call in a process remakes it, so a change to how
+ * the settings are read (new default stage names, say) reaches workspaces already running.
  */
 export const getPublishedWorkflow = async () => {
   const db = await getDb()
   const row = await publishedRow(db)
+  if (row?.legacy && !refreshedLegacy) {
+    refreshedLegacy = true
+    return regenerateLegacyWorkflow()
+  }
+  if (row && !row.legacy && !renamedStages) {
+    renamedStages = true
+    return renameFormerStages(cached(row))
+  }
   if (row) return cached(row)
   // One build per process at a time; a parallel instance is caught by the unique version.
   ensuring = ensuring || buildFirstVersion().finally(() => (ensuring = null))
@@ -93,6 +195,7 @@ const buildFirstVersion = async () => {
     .values({ version: 1, status: 'published', definition, legacy: true, note: 'Made from the existing settings.', publishedAt: new Date() })
     .onConflictDoNothing()
   const published = cached(await publishedRow(db))
+  refreshedLegacy = true
   await mapCasesOnto(db, published)
   return published
 }
@@ -121,7 +224,7 @@ export const regenerateLegacyWorkflow = async (actor = null) => {
   const current = await getPublishedWorkflow()
   if (!current.legacy) return current
   const definition = legacyToWorkflow(await legacySettings())
-  if (JSON.stringify(definition) === JSON.stringify(current.definition)) return current
+  if (canonical(definition) === canonical(current.definition)) return current
   const db = await getDb()
   const published = await db.transaction(async (tx) => {
     const [{ max }] = await tx.select({ max: sql`coalesce(max(${workflowVersions.version}), 0)::int` }).from(workflowVersions)
@@ -203,4 +306,8 @@ export const listWorkflowHistory = async () => {
 }
 
 /** For tests: forget cached versions (each test file has its own database). */
-export const clearWorkflowCache = () => byVersion.clear()
+export const clearWorkflowCache = () => {
+  byVersion.clear()
+  refreshedLegacy = false
+  renamedStages = false
+}

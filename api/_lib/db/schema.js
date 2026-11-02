@@ -213,6 +213,9 @@ export const applications = pgTable(
     checks: jsonb('checks').notNull().default(sql`'{}'::jsonb`),
     // Configurable stages done so far (Settings → Stages): { [stageId]: { done, note, by, byName, at } }
     stageProgress: jsonb('stage_progress').notNull().default(sql`'{}'::jsonb`),
+    // Legal review (legal.verify): { documents: { [documentId]: check }, collateral: { [itemIndex]: check } },
+    // each check { status: 'verified' | 'issue', note, by, byName, at }.
+    verifications: jsonb('verifications').notNull().default(sql`'{}'::jsonb`),
     // Where the case is in its workflow (workflow_versions): the state's id, and the
     // version it follows. `status` is that state's reporting category (src/config/workflow.js).
     state: text('state'),

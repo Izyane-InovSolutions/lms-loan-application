@@ -7,15 +7,16 @@ import { Select } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
 import { APPLICANT_FORMS, DOCUMENT_CATALOGUE, PRODUCT_ID_PATTERN, buildProducts, describeFee, describeInterest, formatKwacha, priceLoan, productDefaults } from '@/config/loanProducts'
-import { COLLATERAL_REQUIREMENTS } from '@/config/collateral'
+import { COLLATERAL_CODE_PATTERN, COLLATERAL_REQUIREMENTS, buildCollateralCatalog, describeRequirement } from '@/config/collateral'
 import { api } from '../api'
 import { Field, FormError, Panel } from '../components'
 
 /*
  * Settings → Loan products: the products applicants choose from, each on one of the two
  * application forms, with its pricing, the documents it asks for and the collateral it
- * takes; and the collateral types products choose from. Saved one product at a time
- * (api/_handlers/settings.js validates each), so editing one never resets another.
+ * takes; the collateral types (each with its haircut and loan-to-value) products choose
+ * from; and the collateral items applicants pick, each of a type. Saved one product at a
+ * time (api/_handlers/settings.js validates each), so editing one never resets another.
  */
 
 const textareaClass = 'w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
@@ -33,8 +34,9 @@ const editable = ({ steps, requiredDocuments, ...product }) => product
 export function ProductsTab({ settings, notify }) {
   const [section, setSection] = useState('products')
   const [stored, setStored] = useState(settings.products)
-  const [types, setTypes] = useState(settings.collateral.types)
+  const [catalog, setCatalog] = useState(() => buildCollateralCatalog(settings.collateral))
   const products = useMemo(() => buildProducts(stored), [stored])
+  const types = catalog.types
 
   return (
     <div className="space-y-5">
@@ -42,6 +44,7 @@ export function ProductsTab({ settings, notify }) {
         {[
           ['products', `Products (${products.length})`],
           ['collateral', `Collateral types (${types.filter((type) => !type.retired).length})`],
+          ['collateralItems', `Collateral items (${catalog.items.filter((item) => !item.retired).length})`],
         ].map(([key, label]) => (
           <button
             key={key}
@@ -58,7 +61,9 @@ export function ProductsTab({ settings, notify }) {
           </button>
         ))}
       </div>
-      {section === 'products' ? <Products products={products} types={types} onSaved={setStored} notify={notify} /> : <CollateralTypes types={types} onSaved={setTypes} notify={notify} />}
+      {section === 'products' ? <Products products={products} types={types} onSaved={setStored} notify={notify} /> : null}
+      {section === 'collateral' ? <CollateralTypes catalog={catalog} onSaved={setCatalog} notify={notify} /> : null}
+      {section === 'collateralItems' ? <CollateralItems catalog={catalog} onSaved={setCatalog} notify={notify} /> : null}
     </div>
   )
 }
@@ -93,7 +98,7 @@ function Products({ products, types, onSaved, notify }) {
                   <span className="block truncate font-medium text-foreground">{product.name}</span>
                   <span className="block text-xs text-muted-foreground">
                     {APPLICANT_FORMS[product.form].label} form · {product.documents.length} documents
-                    {product.collateral.requirement !== 'none' ? ` · collateral ${product.collateral.requirement}` : ''}
+                    {product.collateral.requirement !== 'none' ? ` · collateral ${describeRequirement(product).toLowerCase()}` : ''}
                   </span>
                 </span>
                 <span className={cn('mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium', product.enabled ? 'bg-success/15 text-success' : 'bg-muted text-muted-foreground')}>
@@ -274,7 +279,7 @@ function ProductEditor({ product, types, onSave }) {
       </Panel>
 
       <Panel title="Collateral" description="Whether applicants pledge security for this loan, and how much.">
-        <CollateralRules rules={value.collateral} types={types} onChange={(changes) => set({ collateral: { ...value.collateral, ...changes } })} />
+        <CollateralRules id={value.id} product={value} types={types} onChange={(changes) => set({ collateral: { ...value.collateral, ...changes } })} />
       </Panel>
 
       <SaveCard
@@ -530,14 +535,17 @@ function DocumentsEditor({ product, onChange }) {
   )
 }
 
-function CollateralRules({ rules, types, onChange }) {
+function CollateralRules({ id, product, types, onChange }) {
+  const rules = product.collateral
   const active = types.filter((type) => !type.retired)
   const off = rules.requirement === 'none'
+  const byAmount = rules.requirement === 'amount'
+  const from = Number(rules.requiredFrom)
   return (
     <div className="space-y-5">
       <fieldset className="space-y-2">
         <legend className="text-sm font-medium text-foreground">Collateral is</legend>
-        <div className="grid gap-2 sm:grid-cols-3">
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
           {Object.entries(COLLATERAL_REQUIREMENTS).map(([key, entry]) => (
             <label
               key={key}
@@ -550,11 +558,33 @@ function CollateralRules({ rules, types, onChange }) {
           ))}
         </div>
       </fieldset>
+      {byAmount ? (
+        <Field
+          id={`${id}-collateral-from`}
+          label="Required from (K)"
+          hint={
+            from > Number(product.maxAmount)
+              ? `Above this product’s largest loan (${formatKwacha(product.maxAmount)}), so no applicant will be asked.`
+              : from > 0
+                ? `Loans of ${formatKwacha(from)} or more need collateral; smaller ones aren’t asked.`
+                : 'The loan amount from which applicants must pledge collateral.'
+          }
+        >
+          <Input
+            id={`${id}-collateral-from`}
+            type="number"
+            step="any"
+            className="max-w-[12rem]"
+            value={rules.requiredFrom ?? ''}
+            onChange={(event) => onChange({ requiredFrom: event.target.value === '' ? null : Number(event.target.value) })}
+          />
+        </Field>
+      ) : null}
       {!off ? (
         <>
           <fieldset className="space-y-2">
             <legend className="text-sm font-medium text-foreground">Accepted types</legend>
-            <p className="text-xs text-muted-foreground">Tick none to accept every active type.</p>
+            <p className="text-xs text-muted-foreground">Applicants pick from the items of these types. Tick none to accept every active type.</p>
             <div className="grid gap-1.5 sm:grid-cols-2">
               {active.map((type) => (
                 <label key={type.key} className="flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-sm hover:bg-muted/40">
@@ -569,45 +599,61 @@ function CollateralRules({ rules, types, onChange }) {
               ))}
             </div>
           </fieldset>
-          <Field id="collateral-cover" label="Minimum cover (% of the loan)" hint="Leave blank for no minimum. 120 means pledged items must be worth at least 1.2 times the loan.">
-            <Input
-              id="collateral-cover"
-              type="number"
-              step="any"
-              className="max-w-[10rem]"
-              value={rules.minCoverage === null || rules.minCoverage === undefined || rules.minCoverage === '' ? '' : Number((Number(rules.minCoverage) * 100).toFixed(2))}
-              onChange={(event) => onChange({ minCoverage: event.target.value === '' ? null : Number(event.target.value) / 100 })}
-            />
-          </Field>
+          {rules.requirement !== 'optional' ? (
+            <label className="flex cursor-pointer items-start gap-2 text-sm">
+              <input type="checkbox" checked={Boolean(rules.mustCover)} onChange={(event) => onChange({ mustCover: event.target.checked })} className="mt-0.5 size-4 accent-primary" />
+              <span>
+                <span className="font-medium text-foreground">Lending value must cover the loan</span>
+                <span className="block text-xs text-muted-foreground">
+                  Each item’s lending value is the applicant’s value, less its type’s haircut, times its loan-to-value ratio. Together they must reach the amount borrowed.
+                </span>
+              </span>
+            </label>
+          ) : null}
         </>
       ) : null}
     </div>
   )
 }
 
-function CollateralTypes({ types, onSaved, notify }) {
-  const [value, setValue] = useState(types)
+// Haircuts and loan-to-value ratios are kept as fractions (0.3) and shown as percentages (30).
+const asPercent = (value) => (value === '' || value === null || value === undefined ? '' : Number((Number(value) * 100).toFixed(2)))
+const fromPercent = (value) => (value === '' ? '' : Number(value) / 100)
+
+/** Saves the whole catalog; a type or item that applications use comes back switched off instead of deleted. */
+const saveCatalog = async (next, notify, what) => {
+  const response = await api('/settings/collateral', { method: 'PUT', body: next })
+  const saved = buildCollateralCatalog(response.collateral)
+  const kept = [
+    ...saved.types.filter((type) => !next.types.some((entry) => entry.key === type.key)).map((type) => type.label),
+    ...saved.items.filter((item) => !next.items.some((entry) => entry.code === item.code)).map((item) => item.name),
+  ]
+  notify(
+    kept.length
+      ? `Saved. ${kept.join(', ')} ${kept.length === 1 ? 'is' : 'are'} used on applications, so ${kept.length === 1 ? 'it was' : 'they were'} switched off instead of deleted.`
+      : `${what} saved`
+  )
+  return saved
+}
+
+function CollateralTypes({ catalog, onSaved, notify }) {
+  const [value, setValue] = useState(catalog.types)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  const [newLabel, setNewLabel] = useState('')
-  useEffect(() => setValue(types), [types])
-  const dirty = JSON.stringify(value) !== JSON.stringify(types)
+  const [draft, setDraft] = useState({ label: '', haircut: '', ltv: '' })
+  useEffect(() => setValue(catalog.types), [catalog.types])
+  const dirty = JSON.stringify(value) !== JSON.stringify(catalog.types)
   const update = (key, changes) => setValue((prev) => prev.map((type) => (type.key === key ? { ...type, ...changes } : type)))
-  const newKey = slugOf(newLabel).replace(/-/g, '_')
+  const newKey = slugOf(draft.label).replace(/-/g, '_')
+  const itemsOf = (key) => catalog.items.filter((item) => item.type === key).length
+  const percentOk = (number, min, max) => number !== '' && number >= min && number <= max
+  const canAdd = draft.label.trim().length >= 2 && /^[a-z]/.test(newKey) && !value.some((type) => type.key === newKey) && percentOk(draft.haircut, 0, 0.99) && percentOk(draft.ltv, 0.01, 1)
 
   const save = async () => {
     setSaving(true)
     setError('')
     try {
-      const response = await api('/settings/collateral', { method: 'PUT', body: { types: value } })
-      // A deleted type that applications already name comes back switched off, not gone.
-      const kept = response.collateral.types.filter((type) => !value.some((entry) => entry.key === type.key))
-      onSaved(response.collateral.types)
-      notify(
-        kept.length
-          ? `Saved. ${kept.map((type) => type.label).join(', ')} ${kept.length === 1 ? 'is' : 'are'} used on applications, so ${kept.length === 1 ? 'it was' : 'they were'} switched off instead of deleted.`
-          : 'Collateral types saved'
-      )
+      onSaved(await saveCatalog({ types: value, items: catalog.items }, notify, 'Collateral types'))
     } catch (saveError) {
       setError(saveError.message)
     } finally {
@@ -619,50 +665,117 @@ function CollateralTypes({ types, onSaved, notify }) {
     <div className="space-y-5">
       <Panel
         title="Collateral types"
-        description="The kinds of security applicants can pledge. A product can accept all of them or a few. Switch a type off to stop offering it; delete it if it was never used."
+        description="Classes of security, and how each is valued: the haircut comes off the applicant’s stated value, and the loan-to-value ratio is the share of what is left that can be lent against. Switch a type off to stop offering its items."
       >
-        <ul className="divide-y rounded-lg border">
-          {value.map((type) => (
-            <li key={type.key} className={cn('flex flex-wrap items-center gap-2 p-3', type.retired && 'opacity-60')}>
-              <Shield className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
-              <Input aria-label="Type name" value={type.label} onChange={(event) => update(type.key, { label: event.target.value })} className="h-9 w-56 text-sm" />
-              <Input
-                aria-label={`What counts as ${type.label}`}
-                placeholder="What applicants should have, e.g. the title deed"
-                value={type.description}
-                onChange={(event) => update(type.key, { description: event.target.value })}
-                className="h-9 min-w-[14rem] flex-1 text-sm"
-              />
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={!type.retired} onChange={(event) => update(type.key, { retired: !event.target.checked })} className="size-4 accent-primary" />
-                Active
-              </label>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="size-8 text-destructive"
-                onClick={() => setValue((prev) => prev.filter((entry) => entry.key !== type.key))}
-                aria-label={`Delete ${type.label}`}
-                title="Delete. If applications already use it, it is switched off instead."
-              >
-                <Trash2 className="size-4" />
-              </Button>
-            </li>
-          ))}
-        </ul>
+        <div className="overflow-x-auto rounded-lg border">
+          <table className="w-full min-w-[36rem] text-sm">
+            <thead className="bg-muted/40 text-left text-xs text-muted-foreground">
+              <tr>
+                <th className="px-3 py-2 font-medium">Collateral type name</th>
+                <th className="w-32 px-3 py-2 font-medium">Haircut %</th>
+                <th className="w-32 px-3 py-2 font-medium">Loan to value %</th>
+                <th className="w-20 px-3 py-2 font-medium">Active</th>
+                <th className="w-12 px-3 py-2">
+                  <span className="sr-only">Delete</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {value.map((type) => (
+                <tr key={type.key} className={cn(type.retired && 'opacity-60')}>
+                  <td className="px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      <Shield className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                      <Input aria-label="Collateral type name" value={type.label} onChange={(event) => update(type.key, { label: event.target.value })} className="h-9 text-sm" />
+                    </div>
+                    <p className="mt-1 pl-6 text-xs text-muted-foreground">{itemsOf(type.key) === 1 ? '1 item' : `${itemsOf(type.key)} items`}</p>
+                  </td>
+                  <td className="px-3 py-2 align-top">
+                    <Input
+                      aria-label={`${type.label} haircut %`}
+                      type="number"
+                      step="any"
+                      min="0"
+                      max="99"
+                      value={asPercent(type.haircut)}
+                      onChange={(event) => update(type.key, { haircut: fromPercent(event.target.value) })}
+                      className="h-9 text-sm"
+                    />
+                  </td>
+                  <td className="px-3 py-2 align-top">
+                    <Input
+                      aria-label={`${type.label} loan to value %`}
+                      type="number"
+                      step="any"
+                      min="1"
+                      max="100"
+                      value={asPercent(type.ltv)}
+                      onChange={(event) => update(type.key, { ltv: fromPercent(event.target.value) })}
+                      className="h-9 text-sm"
+                    />
+                  </td>
+                  <td className="px-3 py-2 align-top">
+                    <input
+                      type="checkbox"
+                      aria-label={`${type.label} active`}
+                      checked={!type.retired}
+                      onChange={(event) => update(type.key, { retired: !event.target.checked })}
+                      className="mt-2.5 size-4 accent-primary"
+                    />
+                  </td>
+                  <td className="px-3 py-2 align-top">
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="size-9 text-destructive"
+                      disabled={itemsOf(type.key) > 0}
+                      onClick={() => setValue((prev) => prev.filter((entry) => entry.key !== type.key))}
+                      aria-label={`Delete ${type.label}`}
+                      title={itemsOf(type.key) > 0 ? 'Collateral items use this type. Move or delete them first.' : 'Delete. If applications already use it, it is switched off instead.'}
+                    >
+                      <Trash2 className="size-4" />
+                    </Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
         <div className="mt-4 flex flex-wrap items-end gap-2">
           <Field id="new-collateral-type" label="Add a type">
-            <Input id="new-collateral-type" placeholder="e.g. Livestock" value={newLabel} onChange={(event) => setNewLabel(event.target.value)} className="h-9 w-64 text-sm" />
+            <Input id="new-collateral-type" placeholder="e.g. Livestock" value={draft.label} onChange={(event) => setDraft({ ...draft, label: event.target.value })} className="h-9 w-56 text-sm" />
+          </Field>
+          <Field id="new-collateral-haircut" label="Haircut %">
+            <Input
+              id="new-collateral-haircut"
+              type="number"
+              step="any"
+              placeholder="e.g. 30"
+              value={asPercent(draft.haircut)}
+              onChange={(event) => setDraft({ ...draft, haircut: fromPercent(event.target.value) })}
+              className="h-9 w-28 text-sm"
+            />
+          </Field>
+          <Field id="new-collateral-ltv" label="Loan to value %">
+            <Input
+              id="new-collateral-ltv"
+              type="number"
+              step="any"
+              placeholder="e.g. 70"
+              value={asPercent(draft.ltv)}
+              onChange={(event) => setDraft({ ...draft, ltv: fromPercent(event.target.value) })}
+              className="h-9 w-28 text-sm"
+            />
           </Field>
           <Button
             type="button"
             variant="outline"
             size="sm"
-            disabled={newLabel.trim().length < 2 || !/^[a-z]/.test(newKey) || value.some((type) => type.key === newKey)}
+            disabled={!canAdd}
             onClick={() => {
-              setValue((prev) => [...prev, { key: newKey, label: newLabel.trim(), description: '', retired: false }])
-              setNewLabel('')
+              setValue((prev) => [...prev, { key: newKey, label: draft.label.trim(), haircut: draft.haircut, ltv: draft.ltv, retired: false }])
+              setDraft({ label: '', haircut: '', ltv: '' })
             }}
           >
             <Plus />
@@ -675,8 +788,169 @@ function CollateralTypes({ types, onSaved, notify }) {
         saving={saving}
         error={error}
         onSave={save}
-        onDiscard={() => setValue(types)}
-        note="Products and applicants see the change straight away. Types already used on applications are switched off rather than deleted."
+        onDiscard={() => setValue(catalog.types)}
+        note="Applies to applications submitted from now on; submitted ones keep the haircut and loan-to-value they were filed with."
+      />
+    </div>
+  )
+}
+
+function CollateralItems({ catalog, onSaved, notify }) {
+  const [value, setValue] = useState(catalog.items)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [draft, setDraft] = useState({ code: '', type: '', name: '' })
+  useEffect(() => setValue(catalog.items), [catalog.items])
+  const dirty = JSON.stringify(value) !== JSON.stringify(catalog.items)
+  const update = (index, changes) => setValue((prev) => prev.map((item, position) => (position === index ? { ...item, ...changes } : item)))
+  const typeOf = (key) => catalog.types.find((type) => type.key === key)
+  const codeOf = (text) => text.toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 20)
+  const draftProblem = !draft.code
+    ? null
+    : !COLLATERAL_CODE_PATTERN.test(draft.code)
+      ? 'A code needs 2 to 20 capital letters, numbers or dashes.'
+      : value.some((item) => item.code === draft.code)
+        ? 'Another item already uses this code.'
+        : null
+  const duplicate = value.find((item, index) => value.findIndex((entry) => entry.code === item.code) !== index)
+
+  const save = async () => {
+    setSaving(true)
+    setError('')
+    try {
+      onSaved(await saveCatalog({ types: catalog.types, items: value }, notify, 'Collateral items'))
+    } catch (saveError) {
+      setError(saveError.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      <Panel
+        title="Collateral items"
+        description="What applicants pick when they pledge collateral. Each takes the haircut and loan-to-value ratio of its type (set under Collateral types); applicants enter the value themselves."
+      >
+        <div className="overflow-x-auto rounded-lg border">
+          <table className="w-full min-w-[48rem] text-sm">
+            <thead className="bg-muted/40 text-left text-xs text-muted-foreground">
+              <tr>
+                <th className="w-36 px-3 py-2 font-medium">Collateral code</th>
+                <th className="w-52 px-3 py-2 font-medium">Collateral type</th>
+                <th className="px-3 py-2 font-medium">Collateral name</th>
+                <th className="w-24 px-3 py-2 font-medium">Loan to value</th>
+                <th className="w-20 px-3 py-2 font-medium">Haircut</th>
+                <th className="w-16 px-3 py-2 font-medium">Active</th>
+                <th className="w-12 px-3 py-2">
+                  <span className="sr-only">Delete</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {value.map((item, index) => {
+                const type = typeOf(item.type)
+                return (
+                  <tr key={index} className={cn((item.retired || type?.retired) && 'opacity-60')}>
+                    <td className="px-3 py-2">
+                      <Input aria-label="Collateral code" value={item.code} onChange={(event) => update(index, { code: codeOf(event.target.value) })} className="h-9 font-mono text-sm" />
+                    </td>
+                    <td className="px-3 py-2">
+                      <Select aria-label={`${item.code} collateral type`} value={item.type} onChange={(event) => update(index, { type: event.target.value })} className="h-9 text-sm">
+                        {catalog.types.map((entry) => (
+                          <option key={entry.key} value={entry.key}>
+                            {entry.label}
+                            {entry.retired ? ' (off)' : ''}
+                          </option>
+                        ))}
+                      </Select>
+                    </td>
+                    <td className="px-3 py-2">
+                      <Input aria-label={`${item.code} collateral name`} value={item.name} onChange={(event) => update(index, { name: event.target.value })} className="h-9 text-sm" />
+                    </td>
+                    <td className="px-3 py-2 tabular-nums text-muted-foreground" aria-readonly="true">
+                      {type ? `${asPercent(type.ltv)}%` : '—'}
+                    </td>
+                    <td className="px-3 py-2 tabular-nums text-muted-foreground" aria-readonly="true">
+                      {type ? `${asPercent(type.haircut)}%` : '—'}
+                    </td>
+                    <td className="px-3 py-2">
+                      <input
+                        type="checkbox"
+                        aria-label={`${item.code} active`}
+                        checked={!item.retired}
+                        onChange={(event) => update(index, { retired: !event.target.checked })}
+                        className="size-4 accent-primary"
+                      />
+                    </td>
+                    <td className="px-3 py-2">
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="size-9 text-destructive"
+                        onClick={() => setValue((prev) => prev.filter((_, position) => position !== index))}
+                        aria-label={`Delete ${item.code}`}
+                        title="Delete. If applications already use it, it is switched off instead."
+                      >
+                        <Trash2 className="size-4" />
+                      </Button>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        </div>
+        {!value.length ? <p className="mt-3 text-sm text-muted-foreground">No items yet: applicants have nothing to pledge until you add some.</p> : null}
+        <div className="mt-4 flex flex-wrap items-end gap-2">
+          <Field id="new-collateral-code" label="Collateral code">
+            <Input id="new-collateral-code" placeholder="e.g. MV-CAR" value={draft.code} onChange={(event) => setDraft({ ...draft, code: codeOf(event.target.value) })} className="h-9 w-36 font-mono text-sm" />
+          </Field>
+          <Field id="new-collateral-item-type" label="Collateral type">
+            <Select id="new-collateral-item-type" value={draft.type} onChange={(event) => setDraft({ ...draft, type: event.target.value })} className="h-9 w-52 text-sm">
+              <option value="">Choose…</option>
+              {catalog.types
+                .filter((type) => !type.retired)
+                .map((type) => (
+                  <option key={type.key} value={type.key}>
+                    {type.label}
+                  </option>
+                ))}
+            </Select>
+          </Field>
+          <Field id="new-collateral-name" label="Collateral name">
+            <Input id="new-collateral-name" placeholder="e.g. Passenger vehicle" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} className="h-9 w-56 text-sm" />
+          </Field>
+          {typeOf(draft.type) ? (
+            <p className="pb-2 text-xs text-muted-foreground">
+              LTV {asPercent(typeOf(draft.type).ltv)}% · haircut {asPercent(typeOf(draft.type).haircut)}%
+            </p>
+          ) : null}
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={!draft.code || Boolean(draftProblem) || !draft.type || draft.name.trim().length < 2}
+            onClick={() => {
+              setValue((prev) => [...prev, { code: draft.code, type: draft.type, name: draft.name.trim(), retired: false }])
+              setDraft({ code: '', type: '', name: '' })
+            }}
+          >
+            <Plus />
+            Add
+          </Button>
+        </div>
+        {draftProblem ? <p className="mt-2 text-xs text-destructive">{draftProblem}</p> : null}
+        {duplicate ? <p className="mt-2 text-xs text-destructive">The code {duplicate.code} is used twice.</p> : null}
+      </Panel>
+      <SaveCard
+        dirty={dirty}
+        saving={saving}
+        error={error}
+        onSave={save}
+        onDiscard={() => setValue(catalog.items)}
+        note="Applicants see the change straight away. Items already used on applications are switched off rather than deleted."
       />
     </div>
   )

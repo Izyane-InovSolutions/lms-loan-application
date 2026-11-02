@@ -24,9 +24,9 @@ import { resolveState } from '../../src/config/workflow.js'
 import { runPrescreen } from '../_lib/prescreen/run.js'
 import { verifyApplicationWithZra } from '../_lib/zra/verifyApplication.js'
 import { BUILT_IN_PRODUCT_IDS, priceLoan, productFor } from '../../src/config/loanProducts.js'
-import { getApplicationProduct, getCollateralTypes, getProductConfig, getProducts } from '../_lib/products.js'
+import { getApplicationProduct, getCollateralCatalog, getProductConfig, getProducts } from '../_lib/products.js'
 import { APPLICATION_STATUSES, APPROVED_STATUSES, OPEN_STATUSES, WITHDRAWABLE_STATUSES, describeSlot, requestableSlots, requiredSlots, slotFromDraftPath, supersededDocuments } from '../../src/config/applications.js'
-import { collateralErrors } from '../../src/config/collateral.js'
+import { activeCatalog, collateralErrors, collateralRequirement, stampCollateral } from '../../src/config/collateral.js'
 import { isStaffRole } from '../../src/config/roles.js'
 import { CONSENT_NOTICES } from '../../src/config/consent.js'
 import { checkOtp, consumeOtp } from '../_lib/otp.js'
@@ -165,9 +165,13 @@ const submitApplication = async (req) => {
       'missing_documents'
     )
   }
-  // Collateral the product asks for: enough of it, of the kinds it accepts (src/config/collateral.js).
-  const collateralProblems = Object.values(collateralErrors(product, data, amount, await getCollateralTypes()))
+  // Collateral the product asks for at this amount: enough of it, of the kinds it accepts
+  // (src/config/collateral.js), filed with today's haircut and loan-to-value. Not asked: none kept.
+  const collateralCatalog = await getCollateralCatalog()
+  const collateralProblems = Object.values(collateralErrors(product, data, amount, collateralCatalog))
   if (collateralProblems.length) fail(400, collateralProblems[0], 'invalid_collateral')
+  if (collateralRequirement(product, amount) === 'none') delete data.collateral
+  else data.collateral = { items: stampCollateral(data, collateralCatalog) }
   // Only the documents this product asks for (and its directors' and collateral proofs) are filed.
   const asked = new Set(requestableSlots(product, data).map((entry) => entry.slot))
   Object.keys(slotRefs).forEach((slot) => {
@@ -393,12 +397,14 @@ const listApplications = async (req, res, { query }) => {
   const filters = await listFilters(viewer, query)
   const where = filters.length ? and(...filters) : undefined
 
-  // Tab counts ignore the status filter so every tab shows its own total.
+  // Tab counts ignore the status and stage filters so every tab shows its own total.
   const countQuery = new URLSearchParams(query)
   countQuery.delete('status')
+  countQuery.delete('state')
   const countFilters = await listFilters(viewer, countQuery)
 
-  const [rows, [{ total }], statusCounts, { slaDays }] = await Promise.all([
+  const countWhere = countFilters.length ? and(...countFilters) : undefined
+  const [rows, [{ total }], statusCounts, stateCounts, { slaDays }] = await Promise.all([
     db
       .select({
         application: applications,
@@ -415,11 +421,8 @@ const listApplications = async (req, res, { query }) => {
       .limit(pageSize)
       .offset((page - 1) * pageSize),
     db.select({ total: sql`count(*)::int` }).from(applications).where(where),
-    db
-      .select({ status: applications.status, count: sql`count(*)::int` })
-      .from(applications)
-      .where(countFilters.length ? and(...countFilters) : undefined)
-      .groupBy(applications.status),
+    db.select({ status: applications.status, count: sql`count(*)::int` }).from(applications).where(countWhere).groupBy(applications.status),
+    db.select({ state: applications.state, count: sql`count(*)::int` }).from(applications).where(countWhere).groupBy(applications.state),
     getSetting('workflow'),
   ])
 
@@ -435,6 +438,8 @@ const listApplications = async (req, res, { query }) => {
     page,
     pageSize,
     statusCounts: Object.fromEntries(statusCounts.map((row) => [row.status, row.count])),
+    // By workflow state, for the stage tabs.
+    stateCounts: Object.fromEntries(stateCounts.filter((row) => row.state).map((row) => [row.state, row.count])),
     // Settings → Workflow's target days to a decision, for ageing badges.
     slaDays,
   }
@@ -512,9 +517,9 @@ export const loadCase = async (applicationId, viewer) => {
     // Where the case is in its workflow and what this viewer can do next (workflow.js).
     workflow: viewer ? await workflowView(viewer, row.application, { recommendation: appraisalRows.find((appraisal) => appraisal.kind === 'recommendation') || null }) : null,
     crbProvider: getCrb()?.name || null,
-    // The product it was made under, for its document list and collateral rules; and the collateral types, to name its pledges.
+    // The product it was made under, for its document list and collateral rules; and the collateral catalog, to name its pledges.
     product: await getApplicationProduct(row.application),
-    collateralTypes: await getCollateralTypes(),
+    collateralCatalog: await getCollateralCatalog(),
   }
 }
 
@@ -797,10 +802,10 @@ const draftFile = async (req, res, { query }) => {
 }
 
 /** Public: the products applicants can choose, with current pricing. */
-// Public: what applicants can apply for, and the collateral kinds they can pledge (active ones).
+// Public: what applicants can apply for, and the collateral they can pledge (active types and items).
 const listProducts = async () => ({
   products: (await getProducts()).filter((product) => product.enabled),
-  collateralTypes: (await getCollateralTypes()).filter((type) => !type.retired),
+  collateralCatalog: activeCatalog(await getCollateralCatalog()),
 })
 
 export const applicationRoutes = [
