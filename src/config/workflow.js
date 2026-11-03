@@ -23,9 +23,12 @@
  *
  * A state can be turned off (`disabled`) instead of deleted: cases pass straight through it
  * by its Move action, as they pass a state limited to other products, and its setup stays.
+ * A state marked `appraisal` (valuing what was pledged) is passed through the
+ * same way by a case that pledged no collateral.
  */
 
 import { APPLICATION_STATUSES } from './applications.js'
+import { collateralItems } from './collateral.js'
 import { DEFAULT_CHECKLIST } from './stages.js'
 import { PERMISSION_GROUPS } from './roles.js'
 import { FACILITY_LETTER_KIND, OFFER_DOCUMENT_KINDS, TEMPLATE_KINDS, TEMPLATE_KIND_KEYS } from './templates.js'
@@ -92,8 +95,19 @@ export const PHASES = { review: 'Before the decision', decided: 'After approval'
 
 export const stateById = (definition, id) => (definition?.states || []).find((state) => state.id === id) || null
 
-/** Whether a state applies to a product; a state turned off, or limited to others, is skipped. */
-export const appliesTo = (state, product) => !state?.disabled && (!state?.products?.length || !product || state.products.includes(product))
+/**
+ * What a state's "applies to" asks of a case: its form (product loanType), and whether it
+ * pledged collateral. Callers that only know the form pass it as a string: collateral then
+ * counts as unknown, and an appraisal state as applying.
+ */
+export const caseSubject = (application) => ({ form: application?.loanType, collateral: collateralItems(application?.data).length > 0 })
+const formOf = (subject) => (typeof subject === 'string' ? subject : subject?.form)
+
+/** Whether a state applies to a case; a state turned off, limited to other products, or for secured loans only on an unsecured one, is skipped. */
+export const appliesTo = (state, subject) =>
+  !state?.disabled &&
+  (!state?.products?.length || !formOf(subject) || state.products.includes(formOf(subject))) &&
+  !(state?.appraisal && subject && typeof subject === 'object' && !subject.collateral)
 
 /** The edges that move a case on, including an offer's acceptance. */
 export const forwardEdges = (state) => [
@@ -311,6 +325,7 @@ export const validateWorkflow = (definition, { roles, documentKinds } = {}) => {
   else {
     if (start.type !== 'work') add(errors, 'New applications must start in an in-progress state.', start.id)
     if (start.products?.length) add(errors, 'The start state must apply to every loan product.', start.id)
+    if (start.appraisal) add(errors, 'The start state must apply to every loan, with collateral or without.', start.id)
     if (start.disabled) add(errors, `Applications start in “${start.label}”, so it can’t be turned off. Start them in another state first.`, start.id)
   }
 
@@ -398,6 +413,8 @@ export const validateWorkflow = (definition, { roles, documentKinds } = {}) => {
       add(errors, `“${state.label}” is turned off, so cases pass straight through it by its Move action. It needs exactly one.`, state.id)
     } else if (state.products?.length && state.products.length < PRODUCTS.length && moves !== 1) {
       add(errors, `“${state.label}” is for some loans only, so it needs exactly one Move action: the way other loans go past it.`, state.id)
+    } else if (state.appraisal && moves !== 1) {
+      add(errors, `“${state.label}” is only for loans with collateral, so it needs exactly one Move action: the way unsecured loans go past it.`, state.id)
     }
   }
   if (offers.length > 1) add(errors, 'A workflow can have one offer state.', offers[1].id)
@@ -452,8 +469,9 @@ const PHASE_PERMISSIONS = { review: 'cases.work', approval: 'cases.decide', clos
 /** What the workflow made from the settings calls its stages, unless renamed (Settings → Stages labels). */
 export const DEFAULT_STAGE_NAMES = {
   submitted: 'Pre-screening',
-  in_review: 'Appraisal',
-  pending_approval: 'Underwriting',
+  appraisal: 'Appraisal',
+  in_review: 'Underwriting',
+  pending_approval: 'Underwriting: approval',
   offer: 'Offer Issuance',
   booking: 'Loan Booking',
 }
@@ -476,8 +494,10 @@ export const legacyToWorkflow = ({ workflow = {}, offers = {}, lms = {}, stages 
   const fourEyes = workflow.requireSecondApproval !== false
   const requiredToApprove = (stages.checklist || DEFAULT_CHECKLIST).filter((check) => check.requiredToApprove).map((check) => check.key)
 
-  // The stages a case moves through, by default: Pre-screening, Appraisal, Underwriting,
-  // Offer Issuance, Loan Booking (Draft, before them, is the unfinished application).
+  // The stages a case moves through, by default: Pre-screening; Appraisal (valuing the
+  // collateral: secured loans only); Underwriting (the officer's checks and recommendation,
+  // then a second person's decision); Offer Issuance; Loan Booking. Draft, before them, is
+  // the unfinished application.
   const reviewName = name('in_review', DEFAULT_STAGE_NAMES.in_review)
   const approvalName = name('pending_approval', DEFAULT_STAGE_NAMES.pending_approval)
   const closingStatus = requireAcceptance ? 'accepted' : 'approved'
@@ -512,7 +532,19 @@ export const legacyToWorkflow = ({ workflow = {}, offers = {}, lms = {}, stages 
       askApplicant: true,
       handToLms: lms.syncOn === 'submit',
       legacyStatus: 'submitted',
-      actions: [{ id: 'start_review', label: `Start ${reviewName.toLowerCase()}`, kind: 'move', to: review[0]?.id || 'in_review', options: { claim: true } }],
+      actions: [{ id: 'start_review', label: 'Start the review', kind: 'move', to: 'appraisal', options: { claim: true } }],
+    },
+    {
+      // Valuing what was pledged. A loan with no collateral passes straight through, and one
+      // with collateral moves on once every item is valued (Settings → Credit workflow).
+      id: 'appraisal',
+      label: DEFAULT_STAGE_NAMES.appraisal,
+      type: 'work',
+      roles: [],
+      products: [],
+      appraisal: true,
+      askApplicant: true,
+      actions: [{ id: 'appraised', label: 'Appraisal done', kind: 'move', to: review[0]?.id || 'in_review', permission: 'cases.work' }],
     },
     ...review.map((stage, index) => stageState(stage, reviewName, 'in_review', review[index + 1]?.id || 'in_review', PHASE_PERMISSIONS.review)),
     {
@@ -542,6 +574,8 @@ export const legacyToWorkflow = ({ workflow = {}, offers = {}, lms = {}, stages 
             type: 'work',
             roles: [],
             products: [],
+            // Underwriting may need more from the applicant before it decides (a conditional "more information").
+            askApplicant: true,
             legacyStatus: 'pending_approval',
             actions: [
               { id: 'approve', label: 'Approve', kind: 'approve', to: afterDecision, options: { fourEyes } },

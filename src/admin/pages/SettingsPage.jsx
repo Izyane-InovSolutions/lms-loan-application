@@ -59,7 +59,7 @@ const TABS = [
   { id: "danger", label: "Danger zone", adminOnly: true, feature: "dataWipe" },
 ];
 
-function Toggle({ id, label, description, checked, onChange, disabled }) {
+export function Toggle({ id, label, description, checked, onChange, disabled }) {
   return (
     <label
       htmlFor={id}
@@ -339,9 +339,16 @@ function WorkflowTab({ settings, notify }) {
           <Toggle
             id="require-legal-review"
             label="Legal sign-off before approval"
-            description="A case can't be approved until a legal officer has verified every collateral item and document on its Legal review, with no issue left open."
+            description="A secured loan can't be approved until a legal officer has verified each collateral item and its proof documents on the case's Collateral tab, with no issue left open. Unsecured loans have nothing to check."
             checked={workflow.value.requireLegalReview !== false}
             onChange={(requireLegalReview) => workflow.set({ requireLegalReview })}
+          />
+          <Toggle
+            id="require-valuation"
+            label="Collateral valued in Appraisal"
+            description="A secured loan stays in Appraisal until every collateral item has a valuation recorded on its Collateral tab, and can't be recommended or approved without one. Unsecured loans skip Appraisal."
+            checked={workflow.value.requireValuation !== false}
+            onChange={(requireValuation) => workflow.set({ requireValuation })}
           />
           <p className="text-sm text-muted-foreground">
             How much each person may approve is now set per user on the{" "}
@@ -478,6 +485,13 @@ function LmsTab({ settings, integrations, notify, onSaved }) {
             description="Frappe LMS. Enter the details the LMS team provides."
             checked={value.enabled}
             onChange={(enabled) => connection.set({ enabled })}
+          />
+          <Toggle
+            id="lms-security"
+            label="Send collateral and guarantors as lists"
+            description="Adds collateral_items (each item with its valuation, haircut, loan-to-value and lending value) and guarantors to each loan sent. Turn on only once the LMS team’s method accepts them; the one-line collateral_pledged is always sent."
+            checked={Boolean(value.sendSecurity)}
+            onChange={(sendSecurity) => connection.set({ sendSecurity })}
           />
           <Field
             id="lms-url"

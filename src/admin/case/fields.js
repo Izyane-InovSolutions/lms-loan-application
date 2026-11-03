@@ -3,6 +3,7 @@
  * steps so an officer reads it in the order the applicant filled it in.
  */
 
+import { guarantorsOf } from '@/config/guarantors'
 import { collateralItems, collateralLendingValue, collateralValue, describeTerms, itemLabel, lendingValue, pledgeTerms } from '@/config/collateral'
 import { employerField, positionLabel } from '@/config/applicantRules'
 import { formatKwacha } from '@/config/loanProducts'
@@ -115,7 +116,23 @@ export const collateralSection = (application, catalog) => {
   ]
 }
 
+/** The guarantors named, one row each. */
+export const guarantorSection = (application) => {
+  const people = guarantorsOf(application.data)
+  if (!people.length) return []
+  return [
+    {
+      title: 'Guarantors',
+      rows: people.map((person, index) => [
+        `Guarantor ${index + 1}`,
+        [person.name, `NRC ${person.nrc}`, person.relationship, phone(person.phone), person.email, person.address].filter(Boolean).join(', '),
+      ]),
+    },
+  ]
+}
+
 export const sectionsFor = (application, catalog) => [
   ...(application.loanType === 'personal' ? personalSections(application.data) : businessSections(application.data)),
   ...collateralSection(application, catalog),
+  ...guarantorSection(application),
 ]

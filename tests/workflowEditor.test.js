@@ -78,8 +78,8 @@ describe('the Workflow editor', () => {
     await act(officer, inReview, 'start_review')
     inNew = await submit('editor-new@example.com')
 
-    // Without the default "New" state: applications now start straight in review.
-    const states = published.states.filter((state) => state.id !== 'submitted').map((state) => ({ ...state, legacyStatus: undefined }))
+    // Without the default start and Appraisal states: applications now start straight in review.
+    const states = published.states.filter((state) => !['submitted', 'appraisal'].includes(state.id)).map((state) => ({ ...state, legacyStatus: undefined }))
     const draft = await admin.put('/admin/workflow/draft', { definition: { ...published, start: 'in_review', states } })
     expect(draft.body.validation.errors).toEqual([])
     const response = await admin.post('/admin/workflow/publish', { note: 'Skip intake' })

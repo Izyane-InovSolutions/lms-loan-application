@@ -21,13 +21,16 @@ import SuccessModal from '../components/SuccessModal'
 const FaceCaptureCamera = lazy(() => import('../components/FaceCaptureCamera').then((module) => ({ default: module.FaceCaptureCamera })))
 import dayjs from 'dayjs'
 import footerLogo from '../assets/izyane-black.svg'
-import { submitApplication, fetchSession, requestConsentCode, extractApiError } from '../services/applicationsApi'
+import { submitApplication, fetchSession, requestConsentCode, extractApiError, matchLoanProducts } from '../services/applicationsApi'
 import { extractFiles } from '../utils/fileTree'
 import { readReferral } from '../lib/referral'
 import { isAssistedFlagSet, clearAssistedFlag } from '../lib/assisted'
 import { useProductCatalog } from '../hooks/useProducts'
-import { describeInterest, getProduct, priceLoan } from '../config/loanProducts'
+import { describeInterest, getProduct, matchingProduct, priceLoan } from '../config/loanProducts'
 import { asksForCollateral, collateralErrors, collateralRequirement, MAX_COLLATERAL_ITEMS } from '../config/collateral'
+import { affordabilityError, eligibilityFor } from '../config/eligibility'
+import { fromVerdict, usePolicyVerdicts } from '../hooks/usePolicyVerdicts'
+import { MAX_GUARANTORS, guarantorErrors } from '../config/guarantors'
 import { EMPLOYMENT_OPTIONS, businessPeople, employerField, isValidPassportNumber, isZambian, positionsFor, presentDocuments } from '../config/applicantRules'
 import { useApplicationDraft } from '../hooks/useApplicationDraft'
 import { useDocumentAnalysis } from '../hooks/useDocumentAnalysis'
@@ -40,7 +43,7 @@ import {
 } from '../services/aiApi'
 import { describeRequestError } from '../lib/requestError'
 import { documentNotes, findFormMismatches } from '../utils/documentChecks'
-import { acceptsPhotos, readDocument, removeCollateralProof, writeDocument } from '../utils/documentSlots'
+import { acceptsPhotos, collateralProofs, nextCollateralSlot, readDocument, removeCollateralProof, writeDocument } from '../utils/documentSlots'
 
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -99,7 +102,9 @@ function DashboardPage() {
   // the draft layer restores the answers. The product's form (personal or business)
   // decides the steps, the questions and the checks; the product its name, pricing,
   // documents and collateral.
-  const { products, collateralCatalog, loaded: productsLoaded } = useProductCatalog()
+  const { products: offered, loanTypes, collateralCatalog, loaded: productsLoaded } = useProductCatalog()
+  // The products on offer, and each loan type's "we'll match you" application (match-<type>, loanProducts.js).
+  const products = useMemo(() => [...offered, ...loanTypes.map((type) => matchingProduct(type, offered)).filter(Boolean)], [offered, loanTypes])
   const routeProduct = products.find((entry) => entry.id === typeParam)
   const fallbackForm = typeParam === 'business' || location.state?.type === 'business' ? 'business' : 'personal'
   const product =
@@ -111,6 +116,9 @@ function DashboardPage() {
   // An added product is only known once the workspace's products have loaded; until
   // then its URL is left alone rather than "corrected" to a built-in product.
   const awaitingProduct = !routeProduct && !productsLoaded && isProductSlug(typeParam) && !isLoanType(typeParam)
+  // "We'll match you": before a product is chosen the application is the loan type's matching one;
+  // once chosen it is that product's, still remembering it was matched (loanData.matchType).
+  const choosingProduct = Boolean(product.matching)
   const selectedProductId = product.id
   const selectedLoanType = product.form
   // Collateral is pledged on the loan terms step, so its name says so when the product asks for it.
@@ -288,13 +296,30 @@ function DashboardPage() {
     }
   }, [startEmail, selectedLoanType, resumedDraft])
 
+  // What they told the loan finder they earn (LoanProducts): it decides what they qualify
+  // for, so it travels with the loan terms. A draft that already has figures keeps them.
+  const startFigures = location.state?.eligibility
+  useEffect(() => {
+    if (!startFigures?.income || resumedDraft) return
+    setLoanData((prev) => (prev.income ? prev : { ...prev, income: startFigures.income, commitments: startFigures.commitments || '' }))
+  }, [startFigures, resumedDraft])
+
   // Each step starts at the top, including on browser Back/Forward.
   useEffect(() => {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }, [currentStep])
 
-  // Limits and pricing come from the workspace's product settings (useProductCatalog).
-  const { minAmount, maxAmount, minTenure, maxTenure } = product
+  // Limits and pricing come from the workspace's product settings (useProductCatalog); the
+  // largest amount from what they earn (src/config/eligibility.js), once they have said.
+  const { minAmount, minTenure, maxTenure } = product
+  // The policy's income bands (Policy rules) have the last word on whether this product is open to them.
+  const verdicts = usePolicyVerdicts(product.matching ? null : product.loanType, { income: loanData.income, commitments: loanData.commitments })
+  const eligibility = useMemo(() => {
+    const own = eligibilityFor(product, { income: loanData.income, commitments: loanData.commitments })
+    const verdict = verdicts?.[product.id]
+    return own.status !== 'unknown' && verdict ? fromVerdict(verdict) : own
+  }, [product, loanData.income, loanData.commitments, verdicts])
+  const maxAmount = eligibility.status === 'eligible' ? Math.max(minAmount, eligibility.maxAmount) : product.maxAmount
   const price = useMemo(() => priceLoan(loanData.amount, loanData.tenure, product), [loanData.amount, loanData.tenure, product])
   const totalRepayable = price.total
   const monthlyRepayment = price.monthly
@@ -434,6 +459,49 @@ function DashboardPage() {
   const collateralAsked = collateralRequirement(product, loanData.amount) !== 'none'
   const collateralRows = collateralAsked ? activeData.collateral?.items || [] : []
 
+  // "We'll match you", on the Loan Terms step: the loan type's products the applicant
+  // qualifies for, worked out by the server from their documents and answers
+  // (src/config/productEligibility.js). Asked again when the income they type (only when the
+  // documents gave none) or their other repayments change.
+  const matchType = choosingProduct ? product.loanType : loanData.matchType || null
+  const [match, setMatch] = useState({ status: 'idle' })
+  const matchKey = matchType && currentStep === 3 ? JSON.stringify([matchType, draftToken || '', loanData.statedIncome || '', loanData.commitments || '']) : null
+  useEffect(() => {
+    if (!matchKey) return undefined
+    let cancelled = false
+    setMatch((prev) => ({ ...prev, status: prev.status === 'ready' ? 'refreshing' : 'loading' }))
+    const timer = setTimeout(() => {
+      matchLoanProducts(draftToken, { loanType: matchType, data: activeData, income: loanData.statedIncome, commitments: loanData.commitments })
+        .then((result) => !cancelled && setMatch({ status: 'ready', ...result }))
+        .catch((error) => !cancelled && setMatch({ status: 'error', message: extractApiError(error) }))
+    }, 400)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+    // activeData is read as it is when the step is reached; the key covers what changes here.
+  }, [matchKey])
+
+  // The income the terms are worked out on: what the documents show, else what they typed.
+  const matchedIncome = match.status === 'ready' || match.status === 'refreshing' ? match.income?.income ?? null : null
+  useEffect(() => {
+    if (!matchType || !matchedIncome) return
+    setLoanData((prev) => (Number(prev.income) === matchedIncome ? prev : { ...prev, income: String(matchedIncome) }))
+  }, [matchType, matchedIncome])
+
+  // `acceptDocumentIssues`: chosen although a document issue rules it out ("Continue anyway"),
+  // which the server allows for document issues only and files for the officer.
+  const chooseMatchedProduct = (id, { acceptDocumentIssues = false } = {}) => {
+    const chosen = products.find((entry) => entry.id === id)
+    if (!chosen) return
+    setLoanData((prev) => ({ ...prev, matchType, acceptDocumentIssues }))
+    navigateToStep(chosen, 3, { replace: true })
+  }
+
+  // A matched product may need documents the matching application didn't ask for.
+  const missingDocuments =
+    matchType && !choosingProduct ? presentDocuments(product, activeData).filter((document) => !document.skipped && document.required && !readDocument(activeData.documents, document.slot)) : []
+
   // What each built-in document should agree with on the form (the server checks the same
   // pairs, api/_lib/prescreen/facts.js expectedFor). A product's own documents and
   // collateral proofs are only checked for being what was asked for.
@@ -468,14 +536,17 @@ function DashboardPage() {
       // A product's own document is checked against what the product says it is.
       ...(document.docType === 'custom' ? { productId: selectedProductId } : {}),
     }))
-    const collateralSlots = collateralRows.map((_, index) => ({
-      fieldKey: `collateral.${index}`,
-      docType: 'collateral',
-      slot: `Collateral ${index + 1} proof`,
-      required: false,
-      file: readDocument(docs, `collateral.${index}`),
-      expected: {},
-    }))
+    // Every proof file of every pledged item, each checked on its own.
+    const collateralSlots = collateralRows.flatMap((_, index) =>
+      collateralProofs(docs, index).map(({ slot, file }, position) => ({
+        fieldKey: slot,
+        docType: 'collateral',
+        slot: `Collateral ${index + 1} proof ${position + 1}`,
+        required: false,
+        file,
+        expected: {},
+      }))
+    )
     if (selectedLoanType === 'personal') return [...productSlots, ...collateralSlots]
 
     const directors = businessData.directorInfo.directors || []
@@ -509,6 +580,15 @@ function DashboardPage() {
     retry: retryDocumentChecks,
   } = useDocumentAnalysis({ token: draftToken, slots: analysisSlots, onInvalidToken: invalidateDraftToken })
 
+  // What the documents show the applicant earns (the AI's reading of their payslip, or a
+  // business's bank statements), to set beside the figure they type on Loan Terms.
+  const documentIncome = (() => {
+    const entry = documentAnalyses[selectedLoanType === 'personal' ? 'payslips' : 'bankStatements']
+    const read = entry?.analysis?.extracted?.[selectedLoanType === 'personal' ? 'netPay' : 'averageMonthlyCredits']
+    const amount = Number(String(read ?? '').replace(/[^0-9.]/g, ''))
+    return amount > 0 ? amount : null
+  })()
+
   /** What FileUploadField shows for a slot, with form mismatches computed against current answers. */
   const analysisFor = (fieldKey) => {
     const entry = documentAnalyses[fieldKey]
@@ -520,6 +600,35 @@ function DashboardPage() {
       message: entry.status === 'error' ? aiFailureMessage(entry.reason) : undefined,
       onRetry: entry.status === 'error' && isRetryableAiFailure(entry.reason) ? retryDocumentChecks : undefined,
     }
+  }
+
+  /**
+   * Adds the files chosen for collateral item `index` as its next proofs (PDFs or photos,
+   * as many as are needed): each in its own slot, checked on its own. One that isn't a PDF
+   * or photo, or is too large, is left out and said so.
+   */
+  const addCollateralProofs = (index, event) => {
+    const files = [...(event.target.files || [])]
+    event.target.value = ''
+    if (!files.length) return
+    const problems = []
+    const accepted = files.filter((file) => {
+      const problem = validatePassportFile(file)
+      if (problem) problems.push(`${file.name}: ${problem}`)
+      return !problem
+    })
+    // Numbered on from the item's last slot, so files already there keep theirs.
+    const first = Number(nextCollateralSlot(activeData.documents, index).split('.').pop())
+    const placed = accepted.map((file, offset) => ({ slot: `collateral.${index}.${first + offset}`, file }))
+    setActiveData((prev) => ({ ...prev, documents: placed.reduce((documents, { slot, file }) => writeDocument(documents, slot, file), prev.documents) }))
+    placed.forEach(({ slot }) => setUploadStatus(slot, 'success'))
+    setValidationError(`documents.collateral.${index}`, problems.join(' '))
+  }
+
+  /** Takes one proof file off: its slot is left empty, so the others keep theirs. */
+  const removeCollateralProofFile = (slot) => {
+    setActiveData((prev) => ({ ...prev, documents: writeDocument(prev.documents, slot, null) }))
+    setUploadStatus(slot, 'idle')
   }
 
   const handleDocumentInputChange = (field, event) => {
@@ -620,6 +729,23 @@ function DashboardPage() {
   // Collateral (Loan terms step), when the product asks for it: the items pledged at
   // <form>Data.collateral.items, each with an optional proof at documents.collateral[i].
   // ---------------------------------------------------------------------------
+
+  // Guarantors (Loan terms step), when the product asks for them: data.guarantors (guarantors.js).
+  const addGuarantor = () =>
+    setActiveData((prev) => {
+      const people = prev.guarantors || []
+      if (people.length >= MAX_GUARANTORS) return prev
+      return { ...prev, guarantors: [...people, { name: '', nrc: '', phone: '', email: '', relationship: '', address: '' }] }
+    })
+  const updateGuarantor = (index, field, value) => {
+    setActiveData((prev) => ({ ...prev, guarantors: (prev.guarantors || []).map((person, position) => (position === index ? { ...person, [field]: value } : person)) }))
+    setValidationError(`guarantors.${index}.${field}`, '')
+    setValidationError('guarantors', '')
+  }
+  const removeGuarantor = (index) => {
+    setActiveData((prev) => ({ ...prev, guarantors: (prev.guarantors || []).filter((_, position) => position !== index) }))
+    setValidationErrors((prev) => Object.fromEntries(Object.entries(prev).filter(([key]) => !key.startsWith('guarantors'))))
+  }
 
   const addCollateralItem = () => {
     setActiveData((prev) => {
@@ -817,12 +943,32 @@ function DashboardPage() {
       })
     }
 
+    // Loan terms: what they earn must qualify them, with an instalment inside their budget.
+    if (currentStep === 3 && choosingProduct) {
+      const noneFit = match.status === 'ready' && !match.products.some((result) => result.status === 'eligible')
+      const canContinue = match.status === 'ready' && match.products.some((result) => result.canContinue)
+      recordError(
+        'loanData.product',
+        noneFit ? (canContinue ? 'Replace the document listed below, or choose “Continue anyway” on a loan.' : 'None of our loans fit yet. Put right what’s listed below, then choose one.') : 'Choose one of the loans you qualify for.'
+      )
+    } else if (currentStep === 3) {
+      const unaffordable = (eligibility.status === 'ineligible' && eligibility.reason) || affordabilityError(product, { income: loanData.income, commitments: loanData.commitments }, loanData.amount, loanData.tenure)
+      if (unaffordable) recordError('loanData.income', unaffordable)
+      if (missingDocuments.length) {
+        recordError('documents.missing', `The ${product.name} also needs: ${missingDocuments.map((document) => document.label).join(', ')}. Add ${missingDocuments.length === 1 ? 'it' : 'them'} on the Documents step.`)
+      }
+    }
+
+    // Loan terms: the guarantors the product asks for.
+    if (currentStep === 3 && !choosingProduct) {
+      Object.entries(guarantorErrors(product, activeData)).forEach(([key, message]) => recordError(key, message))
+    }
+
     // Loan terms: the collateral the product asks for, and each proof attached.
     if (currentStep === 3 && collateralAsked) {
       Object.entries(collateralErrors(product, activeData, loanData.amount, collateralCatalog)).forEach(([key, message]) => recordError(key, message))
       collateralRows.forEach((_, index) => {
-        const file = readDocument(activeData.documents, `collateral.${index}`)
-        if (file) recordError(`documents.collateral.${index}`, validatePassportFile(file))
+        collateralProofs(activeData.documents, index).forEach(({ file }) => recordError(`documents.collateral.${index}`, validatePassportFile(file)))
       })
     }
 
@@ -1363,6 +1509,11 @@ function DashboardPage() {
 
               <WizardStep
                 addCollateralItem={addCollateralItem}
+                addGuarantor={addGuarantor}
+                updateGuarantor={updateGuarantor}
+                removeGuarantor={removeGuarantor}
+                addCollateralProofs={addCollateralProofs}
+                removeCollateralProofFile={removeCollateralProofFile}
                 addDirector={addDirector}
                 addDirectorUpload={addDirectorUpload}
                 collateralCatalog={collateralCatalog}
@@ -1382,6 +1533,14 @@ function DashboardPage() {
                 interestLabel={interestLabel}
                 loanData={loanData}
                 maxAmount={maxAmount}
+                eligibility={eligibility}
+                matchType={matchType}
+                match={match}
+                choosingProduct={choosingProduct}
+                offeredProducts={offered}
+                onChooseProduct={chooseMatchedProduct}
+                missingDocuments={missingDocuments}
+                documentIncome={documentIncome}
                 maxTenure={maxTenure}
                 minAmount={minAmount}
                 minTenure={minTenure}

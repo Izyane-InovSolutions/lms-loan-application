@@ -31,6 +31,7 @@ import { ActionDialog } from './ActionDialog'
 import {
   AffordabilityPanel,
   AppraisalsPanel,
+  ConditionsPanel,
   ConsentPanel,
   CrbPanel,
   LmsPanel,
@@ -39,9 +40,11 @@ import {
   StageDocumentsPanel,
   StagesPanel,
   VerificationChecklist,
+  QualificationPanel,
 } from './CasePanels'
 import { CaseSummary, expectedForSlot } from './CaseSummary'
 import { sectionsFor } from './fields'
+import { conditionsOf } from '@/config/conditions'
 import { LegalReview } from './LegalReview'
 
 const withinAssignmentRange = (person, amount) =>
@@ -121,6 +124,25 @@ export function CasePage() {
   const post = useCallback(
     async (path, body, message) => {
       const data = await api(`/applications/${id}${path}`, { method: 'POST', body })
+      setState({ status: 'ready', ...data })
+      if (message) notify(message)
+    },
+    [id, notify]
+  )
+  const put = useCallback(
+    async (path, body, message) => {
+      const data = await api(`/applications/${id}${path}`, { method: 'PUT', body })
+      setState({ status: 'ready', ...data })
+      if (message) notify(message)
+    },
+    [id, notify]
+  )
+  // A file to the case (multipart, as uploadStaffDocument sends), answered with the case.
+  const upload = useCallback(
+    async (path, form, message) => {
+      const response = await fetch(`/api/v1/applications/${id}${path}`, { method: 'POST', body: form, credentials: 'same-origin' })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.message || 'The upload failed.')
       setState({ status: 'ready', ...data })
       if (message) notify(message)
     },
@@ -262,7 +284,7 @@ export function CasePage() {
             ['analysis', 'AI Analysis'],
             ['details', 'Details'],
             ['documents', `Documents (${documents.length})`],
-            ['legal', 'Legal review'],
+            ['legal', 'Collateral'],
             ['workflow', 'Workflow'],
             ['timeline', 'Timeline'],
           ].map(([value, label]) => (
@@ -326,6 +348,7 @@ export function CasePage() {
                   onRun={() => pullCrb('Credit report added')}
                 />
               </div>
+              {application.data?.eligibility ? <QualificationPanel application={application} product={product} /> : null}
             </div>
           </div>
         ) : null}
@@ -357,7 +380,7 @@ export function CasePage() {
           </div>
         ) : null}
 
-        {/* Collateral and documents, as checked by the legal officer. */}
+        {/* The collateral: its valuation (Appraisal) and the legal officer's check (Underwriting). */}
         {tab === 'legal' ? (
           <LegalReview
             application={application}
@@ -365,13 +388,18 @@ export function CasePage() {
             collateralCatalog={collateralCatalog}
             canVerify={may.verify}
             holdsApproval={Boolean(workflow?.state?.legalReview)}
+            canValue={may.work}
+            onValue={(index, values) => put(`/valuations/${index}`, values, 'Valuation saved; the rules ran again')}
+            onUploadReport={(index, file) => {
+              const form = new FormData()
+              form.append('file', file)
+              return upload(`/valuations/${index}/report`, form, 'Valuation report added')
+            }}
+            canComment={may.verify || may.work}
             onVerify={(target, itemId, status, note) =>
               post('/verifications', { target, id: itemId, status, note }, status === 'verified' ? 'Marked verified' : status === 'issue' ? 'Issue recorded' : 'Check cleared')
             }
-            onOpenDocument={(value) => {
-              setDocumentId(value)
-              showTab('documents')
-            }}
+            onComment={(target, itemId, text) => post('/verifications/comments', { target, id: itemId, text }, 'Comment added')}
           />
         ) : null}
 
@@ -386,6 +414,9 @@ export function CasePage() {
               onReopen={(stage) => setDialog({ type: 'reopen_stage', stage })}
             />
             <AppraisalsPanel appraisals={appraisals} />
+            {conditionsOf(application).length ? (
+              <ConditionsPanel application={application} canTick={may.work || may.disburse} onSet={(condition, met, note) => post(`/conditions/${condition.id}`, { met, note }, met ? 'Condition met' : 'Condition reopened')} />
+            ) : null}
             <LmsPanel
               application={application}
               lmsConfigured={lmsConfigured}
@@ -591,8 +622,11 @@ function CaseActions({ application, workflow, may, canTake, hasEligibleOfficers,
   // Required documents not yet back hold the case here (the same words the server uses).
   const hints = state?.documentsOutstanding?.length && !waiting ? [`Waiting for signed documents: ${state.documentsOutstanding.join(', ')}.`] : []
   // Approval held for the legal review, while declining or sending back stays open: say why it's missing.
-  const legalHold = (workflow?.actions || []).find((action) => action.kind === 'approve' && action.blocked && state?.legalReview && !state.legalReview.complete)
-  if (legalHold && !waiting) hints.push(legalHold.blocked)
+  // The collateral holds a case (appraisal.js) while declining or sending back stays open: say
+  // what is left — valuations to recommend approval, valuations and the legal check to approve.
+  const kinds = (workflow?.actions || []).map((action) => action.kind)
+  if (!waiting && kinds.includes('approve') && state?.approvalHold) hints.push(`Approval waits for ${state.approvalHold}.`)
+  else if (!waiting && kinds.includes('recommend') && state?.valuationHold) hints.push(`Recommending approval waits for ${state.valuationHold}.`)
 
   const buttons = groups.map((group) => {
     const usable = group.actions.filter((action) => !action.blocked)
@@ -779,7 +813,11 @@ function CaseDialogs({ dialog, onClose, application, product, lastRecommendation
         description={dialog?.group?.single ? 'Your decision stands, within your approval limit.' : `A colleague reviews your recommendation and makes the final decision${dialog?.action?.toLabel ? ` (${dialog.action.toLabel})` : ''}.`}
         initial={{ verdict: recommendVerdicts(dialog)[0]?.value || 'approve', amount: application.amount, tenure: application.tenure }}
         before={(values) => checklist(neededFor(chosenAction(values), values.verdict))}
-        blocked={(values) => outstanding(neededFor(chosenAction(values), values.verdict))}
+        blocked={(values) =>
+          values.verdict === 'approve' && (dialog?.group?.single ? workflow?.state?.approvalHold : workflow?.state?.valuationHold)
+            ? `${dialog?.group?.single ? 'Approval' : 'Recommending approval'} waits for ${dialog?.group?.single ? workflow.state.approvalHold : workflow.state.valuationHold}.`
+            : outstanding(neededFor(chosenAction(values), values.verdict))
+        }
         fields={[
           {
             name: 'verdict',
@@ -790,7 +828,15 @@ function CaseDialogs({ dialog, onClose, application, product, lastRecommendation
           },
           { name: 'amount', label: 'Amount (K)', type: 'number', showIf: (values) => values.verdict === 'approve', hint: `Asked for ${money(application.amount)}` },
           { name: 'tenure', label: 'Tenure (months)', type: 'number', showIf: (values) => values.verdict === 'approve' },
-          { name: 'conditions', label: 'Conditions (optional)', type: 'textarea', rows: 2, showIf: (values) => values.verdict === 'approve' },
+          {
+            name: 'conditions',
+            label: 'Conditions (optional)',
+            type: 'textarea',
+            rows: 3,
+            optional: true,
+            hint: 'One per line. Each must be ticked off before the loan is booked and paid out.',
+            showIf: (values) => values.verdict === 'approve',
+          },
           { name: 'rationale', label: 'Why', type: 'textarea', hint: 'Staff only. The applicant never sees this.' },
         ]}
         submitLabel={(values) => (values.verdict === 'approve' ? 'Recommend approval' : 'Recommend decline')}
@@ -810,9 +856,16 @@ function CaseDialogs({ dialog, onClose, application, product, lastRecommendation
             ? `${lastRecommendation.officerName} recommended ${lastRecommendation.verdict === 'approve' ? `approving ${money(lastRecommendation.amount)} over ${lastRecommendation.tenure} months` : 'declining'}: “${lastRecommendation.rationale}”`
             : undefined
         }
-        initial={{ verdict: lastRecommendation && decideVerdicts(dialog).some((option) => option.value === lastRecommendation.verdict) ? lastRecommendation.verdict : decideVerdicts(dialog)[0]?.value, amount: lastRecommendation?.amount ?? application.amount, tenure: lastRecommendation?.tenure ?? application.tenure }}
+        initial={{
+          verdict: lastRecommendation && decideVerdicts(dialog).some((option) => option.value === lastRecommendation.verdict) ? lastRecommendation.verdict : decideVerdicts(dialog)[0]?.value,
+          amount: lastRecommendation?.amount ?? application.amount,
+          tenure: lastRecommendation?.tenure ?? application.tenure,
+          conditions: lastRecommendation?.conditions || '',
+        }}
         before={(values) => checklist(neededFor(chosenAction(values), values.verdict))}
-        blocked={(values) => outstanding(neededFor(chosenAction(values), values.verdict))}
+        blocked={(values) =>
+          values.verdict === 'approve' && workflow?.state?.approvalHold ? `Approval waits for ${workflow.state.approvalHold}.` : outstanding(neededFor(chosenAction(values), values.verdict))
+        }
         fields={[
           {
             name: 'verdict',
@@ -823,6 +876,15 @@ function CaseDialogs({ dialog, onClose, application, product, lastRecommendation
           },
           { name: 'amount', label: 'Amount (K)', type: 'number', showIf: (values) => values.verdict === 'approve' },
           { name: 'tenure', label: 'Tenure (months)', type: 'number', showIf: (values) => values.verdict === 'approve' },
+          {
+            name: 'conditions',
+            label: 'Conditions (optional)',
+            type: 'textarea',
+            rows: 3,
+            optional: true,
+            hint: 'One per line. Each must be ticked off before the loan is booked and paid out.',
+            showIf: (values) => values.verdict === 'approve',
+          },
           { name: 'rationale', label: 'Why', type: 'textarea', hint: 'Staff only.' },
         ]}
         submitLabel={(values) => ({ approve: 'Approve', decline: 'Decline', return: 'Send back' })[values.verdict]}
@@ -830,7 +892,13 @@ function CaseDialogs({ dialog, onClose, application, product, lastRecommendation
         onSubmit={(values) =>
           act(
             'transition',
-            { actionId: decideVerdicts(dialog).find((option) => option.value === values.verdict)?.actionId, rationale: values.rationale, amount: Number(values.amount), tenure: Number(values.tenure) },
+            {
+              actionId: decideVerdicts(dialog).find((option) => option.value === values.verdict)?.actionId,
+              rationale: values.rationale,
+              amount: Number(values.amount),
+              tenure: Number(values.tenure),
+              conditions: values.conditions,
+            },
             { approve: 'Approved', decline: 'Declined', return: 'Sent back for more work' }[values.verdict]
           )
         }

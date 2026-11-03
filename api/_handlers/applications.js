@@ -22,11 +22,17 @@ import { getPublishedWorkflow } from '../_lib/workflowVersions.js'
 import { queueCondition, workflowView } from '../_lib/workflow.js'
 import { resolveState } from '../../src/config/workflow.js'
 import { runPrescreen } from '../_lib/prescreen/run.js'
+import { autoPullCreditReport } from '../_lib/crb/pull.js'
 import { verifyApplicationWithZra } from '../_lib/zra/verifyApplication.js'
-import { BUILT_IN_PRODUCT_IDS, priceLoan, productFor } from '../../src/config/loanProducts.js'
+import { BUILT_IN_PRODUCT_IDS, buildLoanTypes, priceLoan, productFor } from '../../src/config/loanProducts.js'
 import { getApplicationProduct, getCollateralCatalog, getProductConfig, getProducts } from '../_lib/products.js'
-import { APPLICATION_STATUSES, APPROVED_STATUSES, OPEN_STATUSES, WITHDRAWABLE_STATUSES, describeSlot, requestableSlots, requiredSlots, slotFromDraftPath, supersededDocuments } from '../../src/config/applications.js'
+import { APPLICATION_STATUSES, APPROVED_STATUSES, OPEN_STATUSES, WITHDRAWABLE_STATUSES, describeSlot, isCollateralProofSlot, requestableSlots, requiredSlots, slotFromDraftPath, supersededDocuments } from '../../src/config/applications.js'
 import { activeCatalog, collateralErrors, collateralRequirement, stampCollateral } from '../../src/config/collateral.js'
+import { affordabilityError, eligibilityFor, readFigures } from '../../src/config/eligibility.js'
+import { checkSubmission, matchDraft } from '../_lib/matching.js'
+import { openConditions } from '../../src/config/conditions.js'
+import { asksForGuarantors, cleanGuarantors, guarantorErrors } from '../../src/config/guarantors.js'
+import { isMatchingId } from '../../src/config/loanProducts.js'
 import { isStaffRole } from '../../src/config/roles.js'
 import { CONSENT_NOTICES } from '../../src/config/consent.js'
 import { checkOtp, consumeOtp } from '../_lib/otp.js'
@@ -131,6 +137,7 @@ const submitApplication = async (req) => {
   if (existing) return { id: existing.id, reference: existing.reference, duplicate: true }
 
   // The product applied for; older clients send only the form, meaning its built-in product.
+  if (isMatchingId(body.loanData?.productId)) fail(400, 'Choose one of the loans you qualify for before submitting.', 'product_unavailable')
   const product = await getProductConfig(text(body.loanData?.productId, 40) || loanType)
   if (!product?.enabled || product.form !== loanType) fail(400, 'This loan product isn’t available at the moment.', 'product_unavailable')
   if (!Number.isFinite(amount) || amount < product.minAmount || amount > product.maxAmount) {
@@ -140,6 +147,15 @@ const submitApplication = async (req) => {
     fail(400, `Choose a tenure between ${product.minTenure} and ${product.maxTenure} months.`, 'invalid_tenure')
   }
   const price = priceLoan(amount, tenure, product)
+  // How they came to this product: the website finder, on what they said they earn, or
+  // "we'll match you", on what their documents show (checked once the documents are known, below).
+  const route = body.loanData?.matchType ? 'match' : 'finder'
+  const stated = { income: body.loanData?.income, commitments: Number(String(body.loanData?.commitments ?? '').replace(/[^0-9.]/g, '')) || 0 }
+  // The finder: what they earn decides what they qualify for (src/config/eligibility.js), and an instalment within their budget.
+  if (route === 'finder') {
+    const unaffordable = affordabilityError(product, readFigures(stated), amount, tenure)
+    if (unaffordable) fail(400, unaffordable, 'not_eligible')
+  }
 
   const applicant = applicantFromData(loanType, data)
   if (applicant.name.length < 2 || !parseEmail(applicant.email)) fail(400, 'The applicant’s name and email are required.', 'invalid_input')
@@ -172,11 +188,34 @@ const submitApplication = async (req) => {
   if (collateralProblems.length) fail(400, collateralProblems[0], 'invalid_collateral')
   if (collateralRequirement(product, amount) === 'none') delete data.collateral
   else data.collateral = { items: stampCollateral(data, collateralCatalog) }
+  // Guarantors the product asks for (src/config/guarantors.js): checked, and filed clean; none kept when it doesn't ask.
+  const guarantorProblems = Object.values(guarantorErrors(product, data))
+  if (guarantorProblems.length) fail(400, guarantorProblems[0], 'invalid_guarantors')
+  if (asksForGuarantors(product)) data.guarantors = cleanGuarantors(data)
+  else delete data.guarantors
   // Only the documents this product asks for (and its directors' and collateral proofs) are filed.
   const asked = new Set(requestableSlots(product, data).map((entry) => entry.slot))
+  const pledged = Array.isArray(data.collateral?.items) ? data.collateral.items.length : 0
   Object.keys(slotRefs).forEach((slot) => {
-    if (!asked.has(slot)) delete slotRefs[slot]
+    // Each pledged item may have any number of proof files (collateral.0.0, collateral.0.1, …).
+    if (!asked.has(slot) && !isCollateralProofSlot(slot, pledged)) delete slotRefs[slot]
   })
+  // The product eligibility rules (Policy rules → Product eligibility), on the server's own
+  // analyses of exactly these files: they decide a matched application, and are kept for
+  // the officer on one from the finder (src/config/productEligibility.js, _lib/matching.js).
+  const analysed = await Promise.all(
+    Object.entries(slotRefs).map(async ([slot, ref]) => {
+      const kept = await kv.get(`aiAnalysis:${draftEmail}:${slot}`)
+      return { slot, docType: describeSlot(product, slot).docType, aiAnalysis: kept && kept.filename === ref.filename && kept.size === ref.size ? kept.analysis : null }
+    })
+  )
+  const qualification = await checkSubmission(product, { route, data, documents: analysed, stated, amount, tenure, acceptDocumentIssues: body.loanData?.acceptDocumentIssues === true })
+  if (qualification.error) fail(400, qualification.error, 'not_eligible')
+  // The figures it qualified on: the credit rules compare a stated income with the payslips and statements.
+  const figures = readFigures({ income: qualification.income, commitments: stated.commitments })
+  const qualified = eligibilityFor(product, figures)
+  const { error: _ignored, income: _income, ...outcome } = qualification
+  data.eligibility = { ...figures, budget: qualified.budget, maxAmount: qualified.maxAmount, repaymentShare: product.eligibility.repaymentShare, ...outcome }
 
   const wanted = body.consents || {}
   if (!wanted.dataProcessing) fail(400, 'Please accept the terms before submitting.', 'consent_required')
@@ -326,6 +365,8 @@ const submitApplication = async (req) => {
   afterResponse('ZRA taxpayer check', () => verifyApplicationWithZra(application.id))
   afterResponse('prescreen and LMS hand-off', async () => {
     await runPrescreen(application.id)
+    // Pre-screening's credit check, when the applicant consented (Settings → Credit bureau).
+    await autoPullCreditReport(application)
     const who = application.companyName || application.applicantName
     await notifyUsers(await creditStaffIds(), { type: 'new_application', title: `New application ${application.reference}`, body: `${who}, K${application.amount.toLocaleString()}`, applicationId: application.id }, { origin })
     if (application.assignedRm && application.assignedRm !== application.sourcedBy) {
@@ -433,7 +474,7 @@ const listApplications = async (req, res, { query }) => {
       return { ...rest, productName: productFor(application, products).name, sourcedByName, assignedOfficerName, prescreenOutcome: outcome ?? null }
     }),
     // Every product, switched off ones included, for the product filter.
-    products: products.map(({ id, name, enabled }) => ({ id, name, enabled })),
+    products: products.map(({ id, name, enabled, deleted }) => ({ id, name, enabled, deleted })),
     total,
     page,
     pageSize,
@@ -589,6 +630,8 @@ const sendToLms = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'cases.disburse' })
   const application = await findVisibleApplication(viewer, params.id)
   if (!(await getLms())) fail(400, 'No LMS is connected to this workspace.', 'lms_not_configured')
+  const open = openConditions(application)
+  if (open.length) fail(409, `Tick off the offer’s conditions first: ${open.map((condition) => condition.text).join('; ')}.`, 'conditions_open')
   if (!['waiting', 'pending', 'failed'].includes(application.lmsSyncStatus)) {
     fail(409, application.lmsSyncStatus === 'uncertain' ? 'Check the LMS and reconcile this case first.' : 'This case is already in the LMS or on its way.', 'lms_state')
   }
@@ -801,15 +844,34 @@ const draftFile = async (req, res, { query }) => {
   sendFile(res, { data: stored.data, contentType: ref.contentType || stored.contentType, filename: ref.filename })
 }
 
+/**
+ * "We'll match you": the products of a loan type the applicant qualifies for, from their
+ * draft's documents (read with its draft token) and answers. POST { loanType, data, income?,
+ * commitments? }. Without a token — an applicant who gave no email — only the answers and
+ * the income they type count; a token that has expired is refused.
+ */
+const matchProducts = async (req) => {
+  const token = bearer(req)
+  const email = token ? await draftEmailFor(token) : null
+  if (token && !email) fail(401, 'Your session has expired. Save your application again.', 'invalid_token')
+  const body = req.body || {}
+  const data = body.data && typeof body.data === 'object' ? body.data : {}
+  const result = await matchDraft(email, text(body.loanType, 40), data, { income: body.income, commitments: body.commitments })
+  if (!result) fail(404, 'That loan type isn’t offered.', 'not_found')
+  return result
+}
+
 /** Public: the products applicants can choose, with current pricing. */
-// Public: what applicants can apply for, and the collateral they can pledge (active types and items).
+// Public: what applicants can apply for, grouped by loan type, and the collateral they can pledge (active types and items).
 const listProducts = async () => ({
   products: (await getProducts()).filter((product) => product.enabled),
+  loanTypes: buildLoanTypes(await getSetting('loanTypes')),
   collateralCatalog: activeCatalog(await getCollateralCatalog()),
 })
 
 export const applicationRoutes = [
   ['GET', '/products', listProducts],
+  ['POST', '/match', matchProducts],
   ['POST', '/applications', submitApplication],
   ['GET', '/applications', listApplications],
   ['GET', '/applications/:id', getApplication],

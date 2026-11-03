@@ -197,7 +197,7 @@ const submit = async (email, { nrc = '123456/78/9', crb = true } = {}) => {
     {
       submissionKey: crypto.randomUUID(),
       loanType: 'personal',
-      loanData: { amount: 5000, tenure: 6 },
+      loanData: { amount: 5000, tenure: 6, income: 20000 },
       consents: { dataProcessing: true, location: true, crb },
       location: { latitude: -15.41, longitude: 28.28, accuracy: 20 },
       data: {
@@ -430,6 +430,40 @@ describe('Product 109 pulls (against a stand-in bureau)', () => {
     expect(response.status).toBe(422)
     expect(response.body.code).toBe('crb_identity_invalid')
     expect(bureau.calls).toHaveLength(0)
+  })
+})
+
+describe('pre-screening’s own credit check', () => {
+  const crbEvents = async (id) => {
+    for (let attempt = 0; attempt < 60; attempt += 1) {
+      const events = await eventsOf(id)
+      if (events.length) return events
+      await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    return []
+  }
+
+  it('pulls a report as the application arrives, when the applicant consented', async () => {
+    const id = await submit('crb.auto@example.com')
+    const [event] = await crbEvents(id)
+    expect(event.message).toMatch(/^Pre-screening: Credit bureau score/)
+    const detail = (await officer.get(`/applications/${id}`)).body
+    expect(detail.crbReports[0]).toMatchObject({ requestedBy: null })
+  })
+
+  it('asks nothing without consent, or when the workspace turns it off', async () => {
+    const withoutConsent = await submit('crb.noconsent@example.com', { crb: false })
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(await eventsOf(withoutConsent)).toEqual([])
+
+    const { crb } = (await admin.get('/settings')).body.settings
+    expect((await admin.put('/settings/crb', { ...crb, autoPull: false })).status).toBe(200)
+    bureau.calls = []
+    const off = await submit('crb.off@example.com')
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    expect(bureau.calls).toHaveLength(0)
+    expect(await eventsOf(off)).toEqual([])
+    await admin.put('/settings/crb', { ...crb, autoPull: true })
   })
 })
 

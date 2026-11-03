@@ -65,6 +65,8 @@ export const personalInitial = {
   },
   // What is pledged, when the product asks for collateral (src/config/collateral.js).
   collateral: { items: [] },
+  // Who guarantees the loan, when the product asks (src/config/guarantors.js).
+  guarantors: [],
 }
 
 export const businessInitial = {
@@ -111,6 +113,7 @@ export const businessInitial = {
     collateral: [],
   },
   collateral: { items: [] },
+  guarantors: [],
 }
 
 // Ask for credit bureau consent only where a bureau is connected.

@@ -3,13 +3,14 @@ import { getDb, schema } from './db/client.js'
 import { putBlob, readBlob } from './blob.js'
 import { getApplicationProduct, getCollateralCatalog } from './products.js'
 import { describeCollateral } from '../../src/config/collateral.js'
+import { describeGuarantors } from '../../src/config/guarantors.js'
 import { getPublishedTemplate } from './templates.js'
 import { fillUploadedPdf, renderTextTemplate, sha256 } from './pdf.js'
 import { addEvent } from './applications.js'
 import { brandName, getLetterhead } from './branding.js'
 import { LOAN_TYPE_LABELS, APPROVED_STATUSES } from '../../src/config/applications.js'
 import { OFFER_DOCUMENT_KINDS, TEMPLATE_KINDS } from '../../src/config/templates.js'
-import { describeInterest, priceLoan } from '../../src/config/loanProducts.js'
+import { describeInterest, priceLoan, repaymentSchedule } from '../../src/config/loanProducts.js'
 
 const { applications, applicationDocuments, appraisals } = schema
 
@@ -44,6 +45,19 @@ const approvalOf = async (db, applicationId) => {
   return row || null
 }
 
+/** The schedule's merge fields: when the first instalment falls due, and every instalment, one per line. */
+const scheduleValues = (amount, tenure, product, application) => {
+  if (!product) return { repayment_schedule: '', first_repayment_date: '' }
+  const paidOut = application.status === 'disbursed' && application.updatedAt
+  const payout = paidOut ? new Date(application.updatedAt) : new Date()
+  const rows = repaymentSchedule(amount, tenure, product, payout)
+  const lines = rows.map((row) => `${row.number}. ${longDate(row.due)}: ${kwacha(row.amount)} (${kwacha(row.balance)} left after it)`)
+  return {
+    first_repayment_date: longDate(rows[0].due),
+    repayment_schedule: [paidOut ? `Paid out on ${longDate(payout)}:` : `If paid out on ${longDate(payout)} (each date moves with the actual payout date):`, ...lines].join('\n'),
+  }
+}
+
 /** Every merge field (src/config/templates.js) for one application. */
 export const mergeValuesFor = async (application) => {
   const db = await getDb()
@@ -66,6 +80,7 @@ export const mergeValuesFor = async (application) => {
     reference: application.reference,
     product: product?.name || LOAN_TYPE_LABELS[application.loanType] || 'Loan',
     collateral: describeCollateral(data, await getCollateralCatalog()) || 'None',
+    guarantors: describeGuarantors(data) || 'None',
     amount: kwacha(amount),
     tenure: `${tenure} ${tenure === 1 ? 'month' : 'months'}`,
     interest: product ? describeInterest(product) : '',
@@ -73,6 +88,8 @@ export const mergeValuesFor = async (application) => {
     facility_fee: kwacha(price.fee),
     total_repayable: kwacha(application.totalRepayable ?? price.total),
     monthly_instalment: kwacha(application.monthlyInstalment ?? price.monthly),
+    // Dated from the payout once it is made; until then, as if paid out today.
+    ...scheduleValues(amount, tenure, product, application),
     conditions: approval?.conditions || 'None.',
     offer_expiry_date: application.offerExpiresAt ? longDate(application.offerExpiresAt) : 'the date we tell you',
     decision_date: longDate(application.decidedAt),

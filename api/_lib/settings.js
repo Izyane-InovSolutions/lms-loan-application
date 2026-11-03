@@ -1,7 +1,7 @@
 import { eq } from 'drizzle-orm'
 import { getDb, schema } from './db/client.js'
 import { decryptSecret, encryptSecret, isEncrypted } from './secrets.js'
-import { DEFAULT_PRICING } from '../../src/config/loanProducts.js'
+import { DEFAULT_LOAN_TYPES, DEFAULT_PRICING } from '../../src/config/loanProducts.js'
 import { DEFAULT_COLLATERAL_CATALOG } from '../../src/config/collateral.js'
 import { AI_FIELDS, AI_SECRET_FIELDS } from '../../src/config/aiProviders.js'
 import { DEFAULT_STAGES_CONFIG } from '../../src/config/stages.js'
@@ -65,6 +65,10 @@ export const SETTING_DEFAULTS = {
     statusField: 'loan_application_status',
     disbursedStatuses: ['Disbursed'],
     timeoutSeconds: 60,
+    // Also send each collateral item (with its valuation) and each guarantor as lists —
+    // collateral_items and guarantors — for an LMS method made to accept them. Off: only the
+    // one-line collateral_pledged, as every LMS method takes.
+    sendSecurity: false,
   },
   zra: {
     enabled: false,
@@ -94,6 +98,8 @@ export const SETTING_DEFAULTS = {
     timeoutSeconds: 30,
     // UAT only: "NRC|other names|surname" of the bureau's test person. Refused in production.
     testIdentity: '',
+    // Pre-screening pulls a report as each application arrives, when the applicant consented.
+    autoPull: true,
   },
   workflow: {
     // A second person must approve what an officer recommends (four-eyes).
@@ -103,6 +109,8 @@ export const SETTING_DEFAULTS = {
     // Nothing is approved until a legal officer has verified every collateral item and
     // document, with no issue left open (src/config/legalReview.js).
     requireLegalReview: true,
+    // Nor until every pledged collateral item is valued (Appraisal). An unsecured loan has none to value.
+    requireValuation: true,
     // Note: how much each person may finally approve is now a per-user limit band on their
     // team profile (users.approvalMin / approvalMax), not a workflow-wide setting.
   },
@@ -132,6 +140,8 @@ export const SETTING_DEFAULTS = {
    * collateral rules. Only what differs from the defaults needs to be stored.
    */
   products: DEFAULT_PRICING,
+  // Loan types (Personal loans, Business loans, …): what products are grouped under, each on an application form.
+  loanTypes: { types: DEFAULT_LOAN_TYPES },
   // The collateral the lender accepts (src/config/collateral.js): types, with their haircut
   // and loan-to-value, and the items applicants pick from. Products choose types from these.
   collateral: DEFAULT_COLLATERAL_CATALOG,

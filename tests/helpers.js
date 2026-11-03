@@ -161,7 +161,7 @@ export const draftPreparer = (kv, putBlob) => async (email, { withNrc = true } =
     body: {
       submissionKey: crypto.randomUUID(),
       loanType: 'personal',
-      loanData: { amount: 5000, tenure: 6 },
+      loanData: { amount: 5000, tenure: 6, income: 20000 },
       consents: { dataProcessing: true, location: true, crb: true },
       location: { latitude: -15.41, longitude: 28.28, accuracy: 20 },
       data: {

@@ -9,6 +9,7 @@ import { checklistOf } from '@/config/stages'
 import { PHASES } from '@/config/workflow'
 import { roleLabel } from '@/config/roles'
 import { FACTS, formatFact } from '@/config/creditRules'
+import { compareIncome } from '@/config/eligibility'
 import { consentText } from '@/config/consent'
 import { useBranding } from '@/components/brand/BrandingProvider'
 import { Panel, dateTime, money, timeAgo } from '../components'
@@ -17,6 +18,155 @@ import { LocationMap } from './LocationMap'
 const FACT_SNAPSHOT = {
   personal: ['monthly_instalment', 'net_monthly_pay', 'debt_to_income', 'average_monthly_credits', 'applicant_age'],
   business: ['monthly_instalment', 'annual_turnover', 'loan_to_turnover', 'order_value', 'loan_to_order', 'business_age_months'],
+}
+
+/**
+ * The offer's conditions as a checklist (conditions.js): what must be done before the loan is
+ * booked in the LMS and paid out. Each is ticked off with a note of what was seen; booking and
+ * payout wait for the last one.
+ */
+export function ConditionsPanel({ application, canTick, onSet }) {
+  const conditions = application.checks?.conditions || []
+  const open = conditions.filter((condition) => !condition.met).length
+  const [notes, setNotes] = useState({})
+  const [busy, setBusy] = useState(null)
+  const [error, setError] = useState('')
+  const booked = application.lmsSyncStatus === 'synced'
+  const set = async (condition, met) => {
+    setBusy(condition.id)
+    setError('')
+    try {
+      await onSet(condition, met, notes[condition.id] || '')
+      setNotes((prev) => ({ ...prev, [condition.id]: '' }))
+    } catch (setError_) {
+      setError(setError_.message)
+    } finally {
+      setBusy(null)
+    }
+  }
+  return (
+    <Panel
+      title="Conditions before booking"
+      description={open ? `${open} of ${conditions.length} still open: the loan isn’t booked in the LMS or paid out until every one is met.` : 'Every condition is met.'}
+    >
+      <ul className="space-y-3">
+        {conditions.map((condition) => (
+          <li key={condition.id} className="rounded-md border p-3 text-sm">
+            <div className="flex items-start gap-2">
+              {condition.met ? <Check className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" /> : <CircleDashed className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
+              <div className="min-w-0 flex-1">
+                <p className={cn('text-foreground', condition.met && 'text-muted-foreground')}>{condition.text}</p>
+                {condition.met ? (
+                  <p className="text-xs text-muted-foreground">
+                    Met{condition.note ? `: ${condition.note}` : ''} — {condition.byName}, {timeAgo(condition.at)}
+                  </p>
+                ) : null}
+              </div>
+              {canTick && condition.met && !booked ? (
+                <Button type="button" variant="ghost" size="sm" className="h-8" disabled={busy === condition.id} onClick={() => set(condition, false)}>
+                  Reopen
+                </Button>
+              ) : null}
+            </div>
+            {canTick && !condition.met ? (
+              <div className="mt-2 flex flex-col gap-2 sm:flex-row">
+                <Input
+                  aria-label={`How “${condition.text}” was met`}
+                  placeholder="How it was met (optional), e.g. letter from HR received"
+                  value={notes[condition.id] || ''}
+                  onChange={(event) => setNotes((prev) => ({ ...prev, [condition.id]: event.target.value }))}
+                  className="h-9 flex-1 text-sm"
+                />
+                <Button type="button" size="sm" className="h-9" disabled={busy === condition.id} onClick={() => set(condition, true)}>
+                  {busy === condition.id ? <Loader2 className="animate-spin" /> : <Check />}
+                  Mark met
+                </Button>
+              </div>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+      {error ? <p className="mt-2 text-sm text-destructive">{error}</p> : null}
+    </Panel>
+  )
+}
+
+/**
+ * How the applicant came to this product (data.eligibility, filed on submission): matched
+ * from their documents, or chosen in the website's loan finder on what they said they earn;
+ * the income it went on, and any product eligibility rule (Policy rules) not met. On a
+ * finder application an unmet rule didn't stop them: it is for the officer to weigh.
+ */
+export function QualificationPanel({ application, product }) {
+  const outcome = application.data.eligibility
+  const matched = outcome.route === 'match'
+  const failed = outcome.failed || []
+  const unchecked = outcome.unchecked || []
+  const incomeWord = application.loanType === 'personal' ? 'Net pay' : 'Monthly revenue'
+  // A typed income set against what the documents show (only when the typed one was used).
+  const comparison = outcome.incomeSource === 'stated' ? compareIncome(outcome.income, outcome.documentIncome) : null
+  return (
+    <Panel
+      title="How they qualified"
+      description={matched ? `Matched to ${product?.name || 'this product'} from their documents.` : `Chose ${product?.name || 'this product'} in the website’s loan finder, on what they said they earn.`}
+      className="lg:col-span-2"
+    >
+      <dl className="grid gap-x-6 gap-y-2 text-sm sm:grid-cols-3">
+        <div>
+          <dt className="text-muted-foreground">{incomeWord} it went on</dt>
+          <dd className="font-medium text-foreground">
+            {outcome.income ? money(outcome.income) : '—'}{' '}
+            <span className="font-normal text-muted-foreground">{outcome.incomeSource === 'documents' ? '(from documents)' : '(stated, unverified)'}</span>
+          </dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground">{incomeWord} the documents show</dt>
+          <dd className="font-medium text-foreground">{outcome.documentIncome ? money(outcome.documentIncome) : 'Not read'}</dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground">Could borrow up to</dt>
+          <dd className="font-medium text-foreground">
+            {outcome.maxAmount ? money(outcome.maxAmount) : '—'}
+            {outcome.budget ? <span className="font-normal text-muted-foreground"> at {money(outcome.budget)} a month</span> : null}
+          </dd>
+        </div>
+      </dl>
+      {comparison?.differs ? (
+        <p className="mt-4 flex items-start gap-2 rounded-md border border-warning/40 bg-warning/10 p-3 text-sm text-foreground">
+          <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
+          <span>
+            The {incomeWord.toLowerCase()} they entered, {money(comparison.stated)}, doesn’t match the {application.loanType === 'personal' ? 'payslip' : 'bank statements'}: {money(comparison.found)} (
+            {Math.round((Math.abs(comparison.stated - comparison.found) / comparison.found) * 100)}% {comparison.stated > comparison.found ? 'more' : 'less'} than the documents show).
+          </span>
+        </p>
+      ) : null}
+      {failed.length ? (
+        <div className="mt-4 rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">
+          <p className="flex items-center gap-2 font-medium text-foreground">
+            <AlertTriangle className="size-4 text-warning" aria-hidden="true" />
+            {outcome.documentIssuesAccepted
+              ? 'The applicant chose to continue despite a document issue'
+              : failed.length === 1
+                ? 'An eligibility rule for this product isn’t met'
+                : `${failed.length} eligibility rules for this product aren’t met`}
+          </p>
+          <ul className="mt-1.5 space-y-1 text-muted-foreground">
+            {failed.map((rule) => (
+              <li key={rule.id}>
+                {rule.requirement} — the documents show {rule.actual}.
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <p className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
+          <Check className="size-4 text-success" aria-hidden="true" />
+          Every product eligibility rule that could be checked is met.
+        </p>
+      )}
+      {unchecked.length ? <p className="mt-2 text-xs text-muted-foreground">Couldn’t be checked from the documents: {unchecked.join('; ')}.</p> : null}
+    </Panel>
+  )
 }
 
 /** The GPS position against the typed home address: how far apart, or why they couldn't be compared. */

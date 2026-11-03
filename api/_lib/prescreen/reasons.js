@@ -93,8 +93,12 @@ export const factReasonDetails = (application, documents, facts, context = {}) =
   if (unknown('address_found')) reasons.address_found = located || reason(distance.reason || 'The home address wasn’t looked up on the map.')
   if (unknown('crb_score'))
     reasons.crb_score = context.crbProvider ? reason('No credit bureau report has been pulled yet.', 'Run a credit check on this case.', 'run_crb') : reason('No credit bureau is connected, so there is no score.', 'Connect one under Settings → Credit bureau.', 'settings')
+  if (unknown('stated_income')) reasons.stated_income = reason('The application was made before applicants stated their income to qualify.')
+  if (unknown('income_vs_stated'))
+    reasons.income_vs_stated = facts.stated_income === null ? reason('The applicant didn’t state their income when qualifying.') : reason(`The ${application.loanType === 'personal' ? 'net pay couldn’t be read from the payslips' : 'monthly credits couldn’t be read from the bank statements'}, so there is nothing to compare with what was stated.`, 'Enter the figure from the documents on the case.', 'enter_figure')
   if (unknown('collateral_value')) reasons.collateral_value = reason('The applicant didn’t pledge any collateral.')
   if (unknown('collateral_cover')) reasons.collateral_cover = reason('The applicant didn’t pledge any collateral, so there is nothing to compare with the loan.')
+  if (unknown('collateral_unvalued')) reasons.collateral_unvalued = reason('The applicant didn’t pledge any collateral, so there is nothing to value.')
   if (unknown('collateral_lending_value')) reasons.collateral_lending_value = reason('The applicant didn’t pledge any collateral.')
   if (unknown('collateral_lending_cover')) reasons.collateral_lending_cover = reason('The applicant didn’t pledge any collateral, so there is nothing to compare with the loan.')
   return reasons

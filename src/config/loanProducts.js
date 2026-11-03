@@ -65,6 +65,27 @@ export const priceLoan = (amount, tenure, pricing = DEFAULT_PRICING.personal) =>
   return { interest: round2(interest), fee: round2(fee), total: round2(total), monthly: round2(total / months) }
 }
 
+/**
+ * The repayment schedule of a loan paid out on `payoutDate`: one equal instalment a month,
+ * the first a month after payout, the last taking up any rounding so they add up to the
+ * total repayable. [{ number, due (Date), amount, balance }].
+ */
+export const repaymentSchedule = (amount, tenure, pricing, payoutDate = new Date()) => {
+  const { total, monthly } = priceLoan(amount, tenure, pricing)
+  const months = Math.max(1, Number(tenure) || 1)
+  const start = new Date(payoutDate)
+  let balance = total
+  return Array.from({ length: months }, (_, index) => {
+    const due = new Date(start)
+    due.setMonth(start.getMonth() + index + 1)
+    // A payout on the 31st falls due on the last day of a shorter month, not in the next one.
+    if (due.getDate() !== start.getDate()) due.setDate(0)
+    const instalment = index === months - 1 ? round2(balance) : monthly
+    balance = round2(balance - instalment)
+    return { number: index + 1, due, amount: instalment, balance: Math.max(0, balance) }
+  })
+}
+
 /** "5% flat" / "3% a month", for labels. */
 export const describeInterest = (pricing) =>
   `${round2(pricing.interestRate * 100)}% ${pricing.interestBasis === 'month' ? 'a month' : 'flat'}`
@@ -138,6 +159,70 @@ const collateralRules = ({ minCoverage, ...rules } = {}) => ({
   ...rules,
 })
 
+/**
+ * Loan types: how loans are grouped for applicants, first by who borrows (Settings → Loan
+ * products → Loan types). Applicants choose a type, then one of its products. Each type
+ * uses one of the two application forms, fixed once made, and every product belongs to a
+ * type that uses its own form. A type is deleted only once no product belongs to it.
+ *   { key, label, description, form }
+ */
+export const DEFAULT_LOAN_TYPES = [
+  { key: 'personal', label: 'Personal loans', description: 'Borrowed by an individual for personal, family or household needs.', form: 'personal' },
+  { key: 'business', label: 'Business loans', description: 'Borrowed for business expenses, investment or growth.', form: 'business' },
+]
+
+/** A loan type key: lower-case letters, digits and dashes. */
+export const LOAN_TYPE_KEY_PATTERN = /^[a-z][a-z0-9-]{1,39}$/
+
+/** The workspace's loan types as stored (the defaults until any are saved), each on a known form. */
+export const buildLoanTypes = (stored) =>
+  (Array.isArray(stored?.types) ? stored.types : DEFAULT_LOAN_TYPES)
+    .filter((type) => type && APPLICANT_FORMS[type.form])
+    .map(({ key, label, description, form }) => ({ key, label, description: description || '', form }))
+
+/**
+ * What a loan is for, by who borrows (its application form). A product names one, or none
+ * (general purpose). The purpose is a label for applicants and reports; what the product
+ * asks and how it decides comes from its own settings.
+ */
+export const LOAN_PURPOSES = {
+  personal: [
+    { key: 'unsecured', label: 'Unsecured personal loan', description: 'General-purpose borrowing without collateral.' },
+    { key: 'vehicle', label: 'Vehicle loan', description: 'To buy a car, motorcycle or other vehicle.' },
+    { key: 'home', label: 'Home loan or mortgage', description: 'To buy, build or renovate a home.' },
+    { key: 'education', label: 'Education loan', description: 'To pay for tuition or related study costs.' },
+    { key: 'medical', label: 'Medical loan', description: 'To cover healthcare costs.' },
+    { key: 'debt_consolidation', label: 'Debt-consolidation loan', description: 'To combine existing debts into one repayment.' },
+    { key: 'personal_credit_line', label: 'Personal line of credit', description: 'Reusable borrowing up to an approved limit.' },
+  ],
+  business: [
+    { key: 'working_capital', label: 'Working-capital loan', description: 'Day-to-day expenses such as wages or supplies.' },
+    { key: 'business_term', label: 'Business term loan', description: 'A lump sum repaid over a set period.' },
+    { key: 'business_credit_line', label: 'Business line of credit', description: 'Reusable funds for changing cash-flow needs.' },
+    { key: 'asset_finance', label: 'Equipment or asset-finance loan', description: 'To buy machinery, vehicles or other business assets.' },
+    { key: 'commercial_property', label: 'Commercial property loan', description: 'To buy, build or improve business premises.' },
+    { key: 'inventory_invoice', label: 'Inventory or invoice-finance loan', description: 'To fund stock, or borrow against unpaid invoices.' },
+    { key: 'startup_micro', label: 'Business start-up or microloan', description: 'Smaller financing for a new or small business.' },
+  ],
+}
+
+export const purposeOf = (product) => (LOAN_PURPOSES[product?.form] || []).find((purpose) => purpose.key === product?.purpose) || null
+
+export const INTEREST_TYPES = { fixed: 'Fixed rate', variable: 'Variable rate' }
+
+/**
+ * Who qualifies (src/config/eligibility.js), per product:
+ *   minIncome        no longer set here: who qualifies by income is decided by the policies'
+ *                    "Not eligible for…" rules (net pay bands). Kept as null; one saved
+ *                    before is moved into the published policy (rulesets.js).
+ *   repaymentShare   the most of that income all loan repayments may take, this one
+ *                    included (0.4 is 40%); it sets the largest loan they can afford
+ */
+export const DEFAULT_ELIGIBILITY = {
+  personal: { minIncome: null, repaymentShare: 0.4 },
+  business: { minIncome: null, repaymentShare: 0.3 },
+}
+
 const BUILT_IN_PRODUCTS = {
   personal: {
     id: 'personal',
@@ -162,6 +247,63 @@ const BUILT_IN_PRODUCTS = {
 
 export const BUILT_IN_PRODUCT_IDS = Object.keys(BUILT_IN_PRODUCTS)
 
+// One standard product per purpose: [form, purpose, id, name, tagline, amounts, tenures (months),
+// monthly interest, collateral, eligibility]. Every workspace has them, switched off until an
+// administrator has checked the pricing and switched them on; they can be changed like any other.
+const percentFee = { facilityFee: 0.02, facilityFeeType: 'percent' }
+const secured = (types, extra = {}) => ({ ...DEFAULT_COLLATERAL_RULES, requirement: 'required', types, mustCover: true, ...extra })
+const STANDARD = [
+  ['personal', 'unsecured', 'unsecured-personal-loan', 'Unsecured Personal Loan', 'Borrow without collateral', [500, 50000, 5000], [1, 24, 12], 0.04, DEFAULT_COLLATERAL_RULES, 2000],
+  ['personal', 'vehicle', 'vehicle-loan', 'Vehicle Loan', 'For a car, motorcycle or other vehicle', [10000, 500000, 150000], [12, 60, 36], 0.025, secured(['motor_vehicle']), 5000],
+  ['personal', 'home', 'home-loan', 'Home Loan', 'Buy, build or renovate a home', [50000, 2000000, 400000], [60, 240, 120], 0.015, secured(['land_buildings']), 10000],
+  ['personal', 'education', 'education-loan', 'Education Loan', 'Tuition and study costs', [1000, 100000, 15000], [3, 36, 12], 0.03, DEFAULT_COLLATERAL_RULES, 2000],
+  ['personal', 'medical', 'medical-loan', 'Medical Loan', 'Healthcare costs, when they come', [500, 50000, 5000], [1, 24, 6], 0.035, DEFAULT_COLLATERAL_RULES, 1500],
+  ['personal', 'debt_consolidation', 'debt-consolidation-loan', 'Debt-Consolidation Loan', 'Combine what you owe into one repayment', [5000, 200000, 30000], [6, 48, 24], 0.03, DEFAULT_COLLATERAL_RULES, 3000],
+  ['personal', 'personal_credit_line', 'personal-line-of-credit', 'Personal Line of Credit', 'Reusable borrowing up to a limit', [1000, 50000, 10000], [1, 12, 6], 0.04, DEFAULT_COLLATERAL_RULES, 3000],
+  ['business', 'working_capital', 'working-capital-loan', 'Working-Capital Loan', 'Wages, supplies and day-to-day costs', [5000, 500000, 50000], [1, 12, 6], 0.04, { ...DEFAULT_COLLATERAL_RULES, requirement: 'optional' }, 20000],
+  ['business', 'business_term', 'business-term-loan', 'Business Term Loan', 'A lump sum over a set period', [20000, 2000000, 200000], [12, 60, 36], 0.03, { ...DEFAULT_COLLATERAL_RULES, requirement: 'amount', requiredFrom: 250000, mustCover: true }, 50000],
+  ['business', 'business_credit_line', 'business-line-of-credit', 'Business Line of Credit', 'Funds for changing cash flow', [10000, 500000, 50000], [1, 12, 6], 0.04, { ...DEFAULT_COLLATERAL_RULES, requirement: 'optional' }, 30000],
+  ['business', 'asset_finance', 'asset-finance-loan', 'Equipment & Asset Finance', 'Machinery, vehicles and business assets', [20000, 2000000, 250000], [12, 60, 36], 0.025, secured(['equipment', 'motor_vehicle']), 50000],
+  ['business', 'commercial_property', 'commercial-property-loan', 'Commercial Property Loan', 'Buy, build or improve premises', [100000, 5000000, 1000000], [60, 240, 120], 0.015, secured(['land_buildings']), 100000],
+  ['business', 'inventory_invoice', 'inventory-invoice-finance', 'Inventory & Invoice Finance', 'Fund stock, or borrow against invoices', [5000, 1000000, 100000], [1, 6, 3], 0.04, { ...DEFAULT_COLLATERAL_RULES, requirement: 'optional', types: ['stock', 'receivables'] }, 30000],
+  ['business', 'startup_micro', 'business-microloan', 'Start-Up & Microloan', 'Smaller financing for new and small businesses', [1000, 50000, 10000], [1, 12, 6], 0.05, DEFAULT_COLLATERAL_RULES, 2000],
+]
+
+/**
+ * The minimum income each standard product asked for before the policies' net pay bands took
+ * that over: moved into the published policy once, for workspaces that had them (rulesets.js).
+ */
+export const FORMER_STANDARD_MIN_INCOME = Object.fromEntries(STANDARD.map((entry) => [entry[2], entry[9]]))
+
+export const STANDARD_PRODUCTS = Object.fromEntries(
+  STANDARD.map(([form, purpose, id, name, tagline, [minAmount, maxAmount, exampleAmount], [minTenure, maxTenure, defaultTenure], rate, collateral, minIncome]) => [
+    id,
+    {
+      form,
+      purpose,
+      name,
+      tagline,
+      description: LOAN_PURPOSES[form].find((entry) => entry.key === purpose).description,
+      enabled: false,
+      minAmount,
+      maxAmount,
+      exampleAmount,
+      minTenure,
+      maxTenure,
+      defaultTenure,
+      interestRate: rate,
+      interestBasis: 'month',
+      ...percentFee,
+      collateral,
+      // Who qualifies by income is the policy's (Policy rules → "Not eligible for…" net pay bands).
+      eligibility: { ...DEFAULT_ELIGIBILITY[form], minIncome: null },
+      loanType: form,
+      // After the built-in two, before anything a workspace adds from today.
+      createdAt: '2026-11-01T00:00:00.000Z',
+    },
+  ])
+)
+
 /** A product id an admin can give a new product: lower-case letters, digits and dashes. */
 export const PRODUCT_ID_PATTERN = /^[a-z][a-z0-9-]{1,39}$/
 
@@ -175,6 +317,9 @@ export const productDefaults = (form) => ({
   description: '',
   documents: defaultDocuments(form),
   collateral: DEFAULT_COLLATERAL_RULES,
+  purpose: null,
+  interestType: 'fixed',
+  eligibility: DEFAULT_ELIGIBILITY[form],
 })
 
 /** The derived fields every screen reads: the form's steps, and the documents' names for marketing copy. */
@@ -188,7 +333,17 @@ const finish = (product) => {
     docType: catalogue.find((entry) => entry.slot === document.slot)?.docType || 'custom',
   }))
   return {
+    purpose: null,
+    interestType: 'fixed',
     ...product,
+    // The loan type it belongs to: the built-in type of its form until one is chosen.
+    loanType: product.loanType || product.form,
+    // Whether applicants name guarantors (src/config/guarantors.js).
+    guarantors: { requirement: 'none', ...(product.guarantors || {}) },
+    // Deleted, but applications were made under it: kept so they still read, never offered.
+    deleted: Boolean(product.deleted),
+    enabled: product.deleted ? false : Boolean(product.enabled),
+    eligibility: { ...DEFAULT_ELIGIBILITY[product.form], ...(product.eligibility || {}) },
     documents,
     steps: APPLICANT_FORMS[product.form].steps,
     requiredDocuments: documents.filter((document) => document.required).map((document) => document.label),
@@ -197,18 +352,66 @@ const finish = (product) => {
 
 /**
  * Products from the stored setting (Settings → Loan products), keyed by id: the two
- * built-in ones always exist (they can be switched off, not removed), each over its own
- * defaults; added ones over the defaults of the form they use. Built-ins first, then
- * added ones in the order they were created.
+ * built-in ones and the standard ones (STANDARD_PRODUCTS, off until switched on) exist
+ * over their own defaults until deleted; added ones lie over the defaults of the form they
+ * use. Built-ins first, then the rest in the order they were created.
+ *
+ * Deleting stores null for a product no application used (gone, defaults included), or
+ * marks it `deleted` when applications were made under it (kept for them, see
+ * liveProducts). Every list the workspace edits or offers uses liveProducts.
  */
 export const buildProducts = (stored = {}) => {
-  const builtIn = BUILT_IN_PRODUCT_IDS.map((id) => finish({ ...BUILT_IN_PRODUCTS[id], ...DEFAULT_PRICING[id], ...(stored[id] || {}), id, form: id }))
-  const added = Object.entries(stored)
-    .filter(([id, value]) => !BUILT_IN_PRODUCTS[id] && value && APPLICANT_FORMS[value.form])
+  const builtIn = BUILT_IN_PRODUCT_IDS.filter((id) => stored[id] !== null).map((id) => finish({ ...BUILT_IN_PRODUCTS[id], ...DEFAULT_PRICING[id], ...(stored[id] || {}), id, form: id }))
+  const added = Object.entries({ ...STANDARD_PRODUCTS, ...stored })
+    .filter(([id, value]) => !BUILT_IN_PRODUCTS[id] && value && APPLICANT_FORMS[value.form || STANDARD_PRODUCTS[id]?.form])
+    .map(([id, value]) => [id, { ...(STANDARD_PRODUCTS[id] || {}), ...value }])
     .sort(([, a], [, b]) => String(a.createdAt || '').localeCompare(String(b.createdAt || '')))
     .map(([id, value]) => finish({ ...productDefaults(value.form), ...value, id }))
   return [...builtIn, ...added].map((product) => ({ ...product, collateral: collateralRules(product.collateral) }))
 }
+
+/**
+ * "We'll match you": the application an applicant fills in for a loan type before choosing a
+ * product (id match-<loan type>). It asks the documents every product of the type on offer
+ * requires, and the income evidence matching reads (payslips, or bank statements for a
+ * business); the product-eligibility rules then say which products they qualify for
+ * (productEligibility.js). Never stored or submitted: on choosing, the application becomes
+ * the chosen product's, and any extra documents it needs are asked for then.
+ */
+export const MATCHING_PREFIX = 'match-'
+export const isMatchingId = (id) => String(id || '').startsWith(MATCHING_PREFIX)
+
+export const matchingProduct = (loanType, products) => {
+  const offered = products.filter((product) => product.enabled && !product.deleted && product.loanType === loanType.key)
+  if (!offered.length) return null
+  const { form } = loanType
+  const required = (product, slot) => product.documents.some((document) => document.slot === slot && document.required)
+  const common = offered[0].documents.filter((document) => document.required && offered.every((product) => required(product, document.slot)))
+  const incomeSlot = form === 'personal' ? 'payslips' : 'bankStatements'
+  const incomeDocument = DOCUMENT_CATALOGUE[form].find((entry) => entry.slot === incomeSlot)
+  const documents = common.some((document) => document.slot === incomeSlot)
+    ? common
+    : [...common, { slot: incomeSlot, label: incomeDocument.label, docType: incomeDocument.docType, description: 'We read your income from these to match you to a loan.', required: true }]
+  return finish({
+    ...productDefaults(form),
+    ...DEFAULT_PRICING[form],
+    id: `${MATCHING_PREFIX}${loanType.key}`,
+    name: loanType.label,
+    tagline: 'We’ll match you to a loan',
+    description: loanType.description,
+    form,
+    loanType: loanType.key,
+    matching: true,
+    enabled: true,
+    minAmount: Math.min(...offered.map((product) => product.minAmount)),
+    maxAmount: Math.max(...offered.map((product) => product.maxAmount)),
+    documents,
+    collateral: DEFAULT_COLLATERAL_RULES,
+  })
+}
+
+/** The products that exist for the workspace: deleted ones (kept only for their applications) left out. */
+export const liveProducts = (products) => products.filter((product) => !product.deleted)
 
 export const LOAN_PRODUCTS = buildProducts()
 

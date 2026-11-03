@@ -86,29 +86,36 @@ let ensuring = null
 let refreshedLegacy = false
 let renamedStages = false
 
-// The names the built-in stages had before Pre-screening, Appraisal, Underwriting, Offer
-// Issuance and Loan Booking (by state id), and what each became.
+// What the built-in stages (by state id) have been called before, and what each is now. The
+// first default names (New, In review, …) were followed by Pre-screening, Appraisal,
+// Underwriting…, where "Appraisal" was the officer's review: it is Underwriting now, and
+// Appraisal a stage of its own that values the collateral.
 const FORMER_STAGE_NAMES = {
-  submitted: ['New', DEFAULT_STAGE_NAMES.submitted],
-  in_review: ['In review', DEFAULT_STAGE_NAMES.in_review],
-  pending_approval: ['Awaiting approval', DEFAULT_STAGE_NAMES.pending_approval],
-  approved: ['Offer made', DEFAULT_STAGE_NAMES.offer],
-  accepted: ['Offer accepted', DEFAULT_STAGE_NAMES.booking],
+  submitted: [['New'], DEFAULT_STAGE_NAMES.submitted],
+  in_review: [['In review', 'Appraisal'], DEFAULT_STAGE_NAMES.in_review],
+  pending_approval: [['Awaiting approval', 'Underwriting'], DEFAULT_STAGE_NAMES.pending_approval],
+  approved: [['Offer made'], DEFAULT_STAGE_NAMES.offer],
+  accepted: [['Offer accepted'], DEFAULT_STAGE_NAMES.booking],
 }
 
 /**
- * `definition` with the built-in stages that still carry their former default names given
- * the new ones, and the action names that follow them ("Send to In review", "Start
- * review"); null when there is nothing to rename. A name the workspace chose is kept.
+ * A workflow made from the built-in default, brought up to today's: the built-in stages that
+ * still carry a former default name renamed (and the actions that name them: "Send to In
+ * review", "Start review"); the Appraisal stage (valuing collateral, secured loans only)
+ * put in after the start; and underwriting's approval allowed to ask the applicant for more.
+ * Names the workspace chose are kept. Null when there is nothing to do — and always once it
+ * has an Appraisal stage, so it is done once.
  */
 export const withCurrentStageNames = (definition) => {
+  const states = definition?.states || []
+  if (states.some((state) => state.appraisal)) return null
   const renames = new Map()
-  for (const state of definition?.states || []) {
-    const [former, next] = FORMER_STAGE_NAMES[state.id] || []
-    if (former && state.label === former) renames.set(former, next)
-    else if (former && state.label?.startsWith(`${former}: `)) renames.set(former, next)
+  for (const state of states) {
+    const [formers, next] = FORMER_STAGE_NAMES[state.id] || []
+    // Today's name never counts as a former one ("Underwriting: approval" isn't "Underwriting" with a suffix).
+    const former = state.label === next ? null : formers?.find((name) => state.label === name || state.label?.startsWith(`${name}: `))
+    if (former) renames.set(former, next)
   }
-  if (!renames.size) return null
   const rename = (label) => {
     if (typeof label !== 'string') return label
     for (const [former, next] of renames) {
@@ -116,17 +123,40 @@ export const withCurrentStageNames = (definition) => {
       if (label.startsWith(`${former}: `)) return `${next}${label.slice(former.length)}`
       if (label === `Send to ${former}`) return `Send to ${next}`
     }
-    if (label === 'Start review' && renames.has('In review')) return `Start ${renames.get('In review').toLowerCase()}`
-    return label
+    return ['Start review', 'Start appraisal'].includes(label) ? 'Start the review' : label
   }
-  return {
-    ...definition,
-    states: definition.states.map((state) => ({
+  // The Appraisal stage goes where the start's way on went: between it and what followed.
+  const start = states.find((state) => state.id === definition.start)
+  const startMove = (start?.actions || []).find((action) => action.kind === 'move')
+  const insertAppraisal = Boolean(startMove) && !states.some((state) => state.id === 'appraisal') && renames.size > 0
+  const appraisal = insertAppraisal
+    ? {
+        id: 'appraisal',
+        label: DEFAULT_STAGE_NAMES.appraisal,
+        type: 'work',
+        roles: [],
+        products: [],
+        requiredChecks: [],
+        appraisal: true,
+        askApplicant: true,
+        handToLms: false,
+        trackProgress: false,
+        actions: [{ id: 'appraised', label: 'Appraisal done', kind: 'move', to: startMove.to, permission: 'cases.work', options: {} }],
+      }
+    : null
+  if (!renames.size && !appraisal) return null
+  const upgraded = states.flatMap((state) => {
+    const actions = (state.actions || []).map((action) => ({ ...action, label: rename(action.label), ...(appraisal && state.id === start.id && action === startMove ? { to: 'appraisal' } : {}) }))
+    const next = {
       ...state,
       label: rename(state.label),
-      ...(state.actions ? { actions: state.actions.map((action) => ({ ...action, label: rename(action.label) })) } : {}),
-    })),
-  }
+      ...(state.actions ? { actions } : {}),
+      // Underwriting may need more from the applicant before it decides.
+      ...(state.id === 'pending_approval' && renames.has(state.label) ? { askApplicant: true } : {}),
+    }
+    return appraisal && state.id === start.id ? [next, appraisal] : [next]
+  })
+  return { ...definition, states: upgraded }
 }
 
 /**
@@ -147,7 +177,7 @@ const renameFormerStages = async (current) => {
       await tx.update(workflowVersions).set({ status: 'retired', updatedAt: new Date() }).where(eq(workflowVersions.status, 'published'))
       const [row] = await tx
         .insert(workflowVersions)
-        .values({ version: max + 1, status: 'published', definition, legacy: false, note: 'Stages renamed: Pre-screening, Appraisal, Underwriting, Offer Issuance, Loan Booking.', publishedAt: new Date() })
+        .values({ version: max + 1, status: 'published', definition, legacy: false, note: 'Stages brought in line: Pre-screening; Appraisal values the collateral (secured loans only); Underwriting checks and decides; Offer Issuance; Loan Booking.', publishedAt: new Date() })
         .returning()
       // Only the names changed: every open case on the version before carries on, on this one.
       await tx

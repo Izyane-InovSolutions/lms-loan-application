@@ -140,6 +140,17 @@ export const collateralItems = (data) =>
     (item) => item && (item.code || item.type || String(item.description || '').trim() || Number(item.value) > 0)
   )
 
+/**
+ * Appraisal (applications.valuations, by item index): a pledge as the lender values it — the
+ * valuer's market value once appraised, else the applicant's own estimate. `statedValue`
+ * keeps the estimate; `valued` says which it is.
+ */
+export const appraisedPledge = (pledge, valuation) =>
+  Number(valuation?.marketValue) > 0 ? { ...pledge, statedValue: pledge.value, value: Number(valuation.marketValue), valued: true } : { ...pledge, statedValue: pledge.value, valued: false }
+
+/** The pledged items, each as appraised. */
+export const appraisedItems = (data, valuations) => collateralItems(data).map((item, index) => appraisedPledge(item, valuations?.[index]))
+
 /** Total estimated value pledged, in kwacha (0 when none). */
 export const collateralValue = (items) => items.reduce((sum, item) => sum + (Number(item.value) > 0 ? Number(item.value) : 0), 0)
 

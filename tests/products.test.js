@@ -6,7 +6,8 @@ vi.mock('../api/_lib/kv.js', () => ({ default: kv }))
 
 const { default: handler } = await import('../api/v1/[...path].js')
 const { putBlob } = await import('../api/_lib/blob.js')
-const { buildProducts, productDefaults } = await import('../src/config/loanProducts.js')
+const { STANDARD_PRODUCTS, buildProducts, productDefaults } = await import('../src/config/loanProducts.js')
+const { affordabilityError, eligibilityFor, productTags } = await import('../src/config/eligibility.js')
 const { collateralErrors, collateralRequirement } = await import('../src/config/collateral.js')
 const { describeSlot, requiredSlots } = await import('../src/config/applications.js')
 
@@ -38,7 +39,10 @@ const civilServant = {
 describe('product and collateral rules', () => {
   it('keeps the built-in products and lays added ones over their form’s defaults', () => {
     const products = buildProducts({ personal: { maxAmount: 9000 }, 'civil-servant': { ...civilServant, createdAt: '2026-01-01' } })
-    expect(products.map((product) => product.id)).toEqual(['personal', 'business', 'civil-servant'])
+    // The two built-in products, then by when each was made: this one (January), then the 14 standard ones, off.
+    expect(products.map((product) => product.id).slice(0, 4)).toEqual(['personal', 'business', 'civil-servant', 'unsecured-personal-loan'])
+    expect(products.filter((product) => STANDARD_PRODUCTS[product.id])).toHaveLength(14)
+    expect(products.filter((product) => STANDARD_PRODUCTS[product.id]).every((product) => !product.enabled && product.purpose)).toBe(true)
     expect(products[0].maxAmount).toBe(9000)
     expect(products[2]).toMatchObject({ form: 'personal', steps: expect.any(Array), requiredDocuments: ['NRC copy', 'Employer confirmation letter'] })
     expect(requiredSlots(products[2], {})).toEqual(['nrcCopy', 'custom.employer-letter'])
@@ -65,6 +69,34 @@ describe('product and collateral rules', () => {
     expect(collateralErrors(product, {}, 60000).collateral).toMatch(/needs collateral/)
     // Rules saved with a minimum cover read as "must cover the loan".
     expect(buildProducts({ personal: { collateral: { requirement: 'required', types: [], minCoverage: 1.2 } } })[0].collateral).toMatchObject({ mustCover: true, requiredFrom: null })
+  })
+})
+
+describe('qualifying on income', () => {
+  const vehicle = buildProducts().find((product) => product.id === 'vehicle-loan')
+
+  it('works out the largest loan whose instalment fits the budget', () => {
+    // K10,000 net pay, 40% for repayments: K4,000 a month. 60 months at 2.5% a month, 2% fee.
+    const result = eligibilityFor(vehicle, { income: 10000 })
+    expect(result).toMatchObject({ status: 'eligible', budget: 4000, maxAmount: 95200 })
+    expect(affordabilityError(vehicle, { income: 10000 }, 95200, 60)).toBeNull()
+    expect(affordabilityError(vehicle, { income: 10000 }, 95300, 60)).toMatch(/more than your budget/)
+    // A shorter tenure means a smaller loan.
+    expect(affordabilityError(vehicle, { income: 10000 }, 95200, 24)).toMatch(/Borrow up to K/)
+  })
+
+  it('says why an applicant doesn’t qualify', () => {
+    expect(eligibilityFor(vehicle, {})).toEqual({ status: 'unknown' })
+    // Minimum net pay is the policy's to decide (Policy rules → Personal Policy), not the product's.
+    expect(eligibilityFor(vehicle, { income: 4000 }).status).toBe('eligible')
+    expect(eligibilityFor(vehicle, { income: 6000, commitments: 2400 }).reason).toMatch(/existing repayments/)
+    const home = buildProducts().find((product) => product.id === 'home-loan')
+    expect(eligibilityFor(home, { income: 10000, commitments: 3500 }).reason).toMatch(/smallest loan is K50,000/)
+  })
+
+  it('classifies products from their settings', () => {
+    expect(productTags(vehicle)).toEqual(['Secured', 'Medium-term', 'Fixed rate'])
+    expect(productTags(buildProducts().find((product) => product.id === 'business-term-loan'))).toEqual(['Secured from K250,000', 'Medium-term', 'Fixed rate'])
   })
 })
 
@@ -101,6 +133,33 @@ describe('loan products in the workspace', () => {
     expect((await admin.put('/settings/products', { 'civil-servant': { ...civilServant, collateral: { requirement: 'amount', types: [] } } })).body.message).toMatch(/amount collateral is required from/)
   })
 
+  it('groups products under loan types, which can be added and deleted once empty', async () => {
+    const types = (await admin.get('/settings')).body.settings.loanTypes.types
+    expect(types.map((type) => type.key)).toEqual(['personal', 'business'])
+    const agri = { key: 'agricultural', label: 'Agricultural loans', description: 'For farmers', form: 'business' }
+    expect((await admin.put('/settings/loanTypes', { types: [...types, agri] })).status).toBe(200)
+
+    // A product can only join a type on its own form.
+    const microloan = buildProducts().find((product) => product.id === 'business-microloan')
+    const { steps, requiredDocuments, ...editable } = microloan
+    expect((await admin.put('/settings/products', { 'business-microloan': { ...editable, loanType: 'personal' } })).body.message).toMatch(/only belong to a loan type that uses that form/)
+    const moved = await admin.put('/settings/products', { 'business-microloan': { ...editable, loanType: 'agricultural' } })
+    expect(moved.body.products['business-microloan'].loanType).toBe('agricultural')
+
+    // A type with products stays; a form can't be changed once saved.
+    expect((await admin.put('/settings/loanTypes', { types })).body.message).toMatch(/“Agricultural loans” still has 1 product/)
+    const reformed = await admin.put('/settings/loanTypes', { types: [...types, { ...agri, form: 'personal' }] })
+    expect(reformed.body.loanTypes.types.find((type) => type.key === 'agricultural').form).toBe('business')
+    // Applicants are told the types with the products.
+    expect((await applicant.get('/products')).body.loanTypes.map((type) => type.key)).toEqual(['personal', 'business', 'agricultural'])
+
+    await admin.put('/settings/products', { 'business-microloan': { ...editable, loanType: 'business' } })
+    const emptied = await admin.put('/settings/loanTypes', { types })
+    expect(emptied.status).toBe(200)
+    expect(emptied.body.loanTypes.types).toHaveLength(2)
+    expect((await admin.put('/settings/loanTypes', { types: [] })).body.message).toMatch(/at least one/)
+  })
+
   it('offers an added product, files only its documents and enforces its collateral', async () => {
     const created = await admin.put('/settings/products', { 'civil-servant': civilServant })
     expect(created.status).toBe(200)
@@ -112,8 +171,12 @@ describe('loan products in the workspace', () => {
 
     const { token, body } = await prepareDraft('civil@example.com')
     body.data.personalInfo.email = 'civil@example.com'
-    body.loanData = { amount: 10000, tenure: 6, productId: 'civil-servant' }
+    body.loanData = { amount: 10000, tenure: 6, productId: 'civil-servant', income: 20000 }
     const submit = (changes = {}) => applicant.post('/applications', { ...body, submissionKey: crypto.randomUUID(), ...changes }, { authorization: `Bearer ${token}` })
+
+    // Qualifying needs the income stated; the instalment must fit what it leaves (K800 net pay: K320 a month).
+    expect((await submit({ loanData: { ...body.loanData, income: undefined } })).body.code).toBe('not_eligible')
+    expect((await submit({ loanData: { ...body.loanData, income: 800 } })).body.message).toMatch(/more than your budget of K320/)
 
     // Its own document hasn't been uploaded yet.
     expect((await submit()).body.code).toBe('missing_documents')
@@ -144,6 +207,7 @@ describe('loan products in the workspace', () => {
     expect(detail.documents.map((document) => document.slot).sort()).toEqual(['custom.employer-letter', 'nrcCopy', 'payslips'])
     expect(detail.documents.find((document) => document.slot === 'custom.employer-letter')).toMatchObject({ docType: 'custom', label: 'Employer confirmation letter' })
     const facts = (await waitFor(async () => (await officer.get(`/applications/${response.body.id}`)).body.prescreen)).facts
+    expect(facts.stated_income).toBe(20000)
     expect(facts.collateral_value).toBe(25000)
     expect(facts.collateral_cover).toBe(2.5)
     expect(facts.collateral_lending_value).toBe(12250)
@@ -174,6 +238,39 @@ describe('loan products in the workspace', () => {
     // Switched off: no longer offered to applicants.
     await admin.put('/settings/products', { 'civil-servant': { ...civilServant, enabled: false } })
     expect((await applicant.get('/products')).body.products.map((product) => product.id)).not.toContain('civil-servant')
+  })
+})
+
+describe('deleting loan products', () => {
+  const admin = client(handler)
+  const officer = client(handler)
+
+  beforeAll(async () => {
+    await admin.post('/auth/demo', { role: 'admin' })
+    await officer.post('/auth/demo', { role: 'loan_officer' })
+  })
+
+  it('removes a product nobody applied for, defaults and all', async () => {
+    const deleted = await admin.del('/settings/products/education-loan')
+    expect(deleted.body).toMatchObject({ kept: false, applications: 0 })
+    expect(buildProducts(deleted.body.products).map((product) => product.id)).not.toContain('education-loan')
+    expect((await admin.del('/settings/products/education-loan')).status).toBe(404)
+  })
+
+  it('keeps one applications were made under, for them only', async () => {
+    const deleted = await admin.del('/settings/products/civil-servant')
+    expect(deleted.body).toMatchObject({ kept: true, applications: 1 })
+    expect(buildProducts(deleted.body.products).find((product) => product.id === 'civil-servant')).toMatchObject({ deleted: true, enabled: false })
+    // Its application still names it; applicants can't choose it; it can't be edited back.
+    const list = (await officer.get('/applications?product=civil-servant&status=')).body
+    expect(list.applications[0].productName).toBe('Civil Servant Loan')
+    expect(list.products.find((product) => product.id === 'civil-servant')).toMatchObject({ deleted: true })
+    expect((await client(handler).get('/products')).body.products.map((product) => product.id)).not.toContain('civil-servant')
+    expect((await admin.put('/settings/products', { 'civil-servant': { ...civilServant, enabled: true } })).body.message).toMatch(/was deleted/)
+  })
+
+  it('is for administrators only', async () => {
+    expect((await officer.del('/settings/products/medical-loan')).status).toBe(403)
   })
 })
 
@@ -229,5 +326,56 @@ describe('why a rule couldn’t be checked', () => {
     expect(details.net_monthly_pay).toMatchObject({ why: 'No payslip was uploaded.', action: 'ask_applicant' })
     expect(details.location_distance_km).toMatchObject({ fix: 'Check the address with the applicant.', action: 'ask_applicant' })
     expect(factReasons(application, [statement], facts, { aiOn: true }).average_monthly_credits).toMatch(/invoice\)\. Ask the applicant/)
+  })
+})
+
+describe('the repayment schedule in the offer', () => {
+  it('falls due a month after payout, month-ends kept, and adds up to the total', async () => {
+    const { repaymentSchedule, priceLoan } = await import('../src/config/loanProducts.js')
+    const personal = buildProducts()[0]
+    const rows = repaymentSchedule(10000, 6, personal, new Date('2026-01-31T10:00:00Z'))
+    expect(rows.map((row) => row.due.toISOString().slice(0, 10))).toEqual(['2026-02-28', '2026-03-31', '2026-04-30', '2026-05-31', '2026-06-30', '2026-07-31'])
+    const total = rows.reduce((sum, row) => sum + row.amount, 0)
+    expect(Math.round(total * 100) / 100).toBe(priceLoan(10000, 6, personal).total)
+    expect(rows.at(-1).balance).toBe(0)
+    const { MERGE_FIELDS } = await import('../src/config/templates.js')
+    expect(MERGE_FIELDS.map((field) => field.key)).toEqual(expect.arrayContaining(['repayment_schedule', 'first_repayment_date']))
+  })
+})
+
+describe('guarantors', () => {
+  const admin = client(handler)
+  const applicant = client(handler)
+  const person = { name: 'Mutale Chanda', nrc: '234567/89/1', phone: '+260 971 234 569', email: '', relationship: 'Sibling', address: 'Roma, Lusaka' }
+
+  it('are checked as the product asks', async () => {
+    const { guarantorErrors, describeGuarantors } = await import('../src/config/guarantors.js')
+    const required = { guarantors: { requirement: 'required' } }
+    expect(guarantorErrors(required, {}).guarantors).toMatch(/needs a guarantor/)
+    expect(guarantorErrors(required, { guarantors: [{ ...person, nrc: '2345' }] })['guarantors.0.nrc']).toMatch(/123456\/78\/9/)
+    expect(guarantorErrors(required, { guarantors: [person] })).toEqual({})
+    expect(guarantorErrors({ guarantors: { requirement: 'none' } }, {})).toEqual({})
+    expect(describeGuarantors({ guarantors: [person] })).toBe('Mutale Chanda (NRC 234567/89/1, sibling)')
+  })
+
+  it('are required on submission where the product says so, and filed clean', async () => {
+    await admin.post('/auth/demo', { role: 'admin' })
+    const personal = buildProducts((await admin.get('/settings')).body.settings.products).find((product) => product.id === 'personal')
+    const { steps, requiredDocuments, ...editable } = personal
+    expect((await admin.put('/settings/products', { personal: { ...editable, guarantors: { requirement: 'required' } } })).status).toBe(200)
+
+    const { token, body } = await prepareDraft('guaranteed@example.com')
+    body.data.personalInfo.email = 'guaranteed@example.com'
+    const submit = () => applicant.post('/applications', { ...body, submissionKey: crypto.randomUUID() }, { authorization: `Bearer ${token}` })
+    expect((await submit()).body.code).toBe('invalid_guarantors')
+    body.data.guarantors = [person, { name: '', nrc: '', phone: '', relationship: '', address: '' }]
+    const filed = await submit()
+    expect(filed.status, JSON.stringify(filed.body)).toBe(200)
+    const officer = client(handler)
+    await officer.post('/auth/demo', { role: 'loan_officer' })
+    const { application } = (await officer.get(`/applications/${filed.body.id}`)).body
+    expect(application.data.guarantors).toEqual([{ ...person, phone: '971234569' }])
+
+    await admin.put('/settings/products', { personal: { ...editable, guarantors: { requirement: 'none' } } })
   })
 })

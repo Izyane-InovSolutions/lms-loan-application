@@ -23,7 +23,7 @@ const DESCRIPTIONS = {
   sales_manager: 'Every application: follow the team’s pipeline, bring customers in and work cases.',
   rm: 'Applications from your customers and the agents who report to you.',
   dsa: 'Applications you referred or filled in for customers.',
-  legal_officer: 'Every application. Open one and use its Legal review to verify the collateral and documents.',
+  legal_officer: 'Every application. Open a secured one and use its Collateral tab to verify the collateral and its proof documents.',
 }
 
 // For roles an admin added, by what their scope lets them see.
@@ -317,7 +317,7 @@ export function ApplicationsPage() {
               {(result.products || [{ id: 'personal', name: LOAN_TYPE_LABELS.personal }, { id: 'business', name: LOAN_TYPE_LABELS.business }]).map((product) => (
                 <option key={product.id} value={product.id}>
                   {product.name}
-                  {product.enabled === false ? ' (off)' : ''}
+                  {product.deleted ? ' (deleted)' : product.enabled === false ? ' (off)' : ''}
                 </option>
               ))}
             </Select>

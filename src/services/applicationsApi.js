@@ -10,6 +10,10 @@ const client = axios.create({ baseURL: '/api/v1' })
 export const submitApplication = (draftToken, body) =>
   client.post('/applications', body, { headers: { Authorization: `Bearer ${draftToken}` }, timeout: 120000 }).then((r) => r.data)
 
+/** "We'll match you": the products of a loan type the applicant qualifies for, from their draft's documents. */
+export const matchLoanProducts = (draftToken, body) =>
+  client.post('/match', body, { headers: draftToken ? { Authorization: `Bearer ${draftToken}` } : {}, timeout: 30000 }).then((r) => r.data)
+
 /** Form values from the applicant's previous application of this type, or null. */
 export const fetchPrefill = (email, type) =>
   client.get('/prefill', { params: { email, type } }).then((r) => r.data.formState)

@@ -7,7 +7,7 @@ import { Select } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import { api } from '../api'
 import { Field, FormError, Panel } from '../components'
-import { SaveBar, SecretField, useSettingGroup } from './SettingsPage'
+import { SaveBar, SecretField, Toggle, useSettingGroup } from './SettingsPage'
 
 const PROVIDERS = [
   { value: 'environment', label: 'Server environment (CRB_* variables)' },
@@ -126,6 +126,14 @@ export function CrbTab({ settings, integrations, notify, onSaved }) {
               <p className="text-xs text-muted-foreground">A custom certificate authority, if the bureau needs one, is set on the server with CRB_CA_FILE.</p>
             </>
           ) : null}
+
+          <Toggle
+            id="crb-auto-pull"
+            label="Pull a report as each application arrives"
+            description="Part of pre-screening: when the applicant consented, the report is pulled straight after they submit and the policy rules run on its score. Off: an officer runs the check from the case. Each pull is an enquiry at the bureau."
+            checked={value.autoPull !== false}
+            onChange={(autoPull) => connection.set({ autoPull })}
+          />
 
           {test ? (
             <p role="status" className={cn('flex items-start gap-2 rounded-md p-3 text-sm', test.ok ? 'bg-success/10 text-success' : 'bg-destructive/10 text-destructive')}>
