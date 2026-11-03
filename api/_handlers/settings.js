@@ -24,7 +24,7 @@ import { getZraConfig } from '../_lib/zra/config.js'
 
 const LEGACY_WORKFLOW_KEYS = ['workflow', 'offers', 'stages', 'lms']
 import { BRAND_NAME_MAX } from '../../src/config/branding.js'
-import { APPLICANT_FORMS, BUILT_IN_PRODUCT_IDS, DOCUMENT_CATALOGUE, INTEREST_TYPES, LOAN_PURPOSES, LOAN_TYPE_KEY_PATTERN, PRODUCT_ID_PATTERN, STANDARD_PRODUCTS, buildLoanTypes, buildProducts, defaultDocuments, liveProducts } from '../../src/config/loanProducts.js'
+import { APPLICANT_FORMS, BUILT_IN_PRODUCT_IDS, DOCUMENT_CATALOGUE, INTEREST_TYPES, LOAN_PURPOSES, LOAN_TYPE_KEY_PATTERN, PRODUCT_ID_PATTERN, STANDARD_PRODUCTS, buildLoanTypes, buildProducts, defaultDocuments, liveProducts, subcategoryOf } from '../../src/config/loanProducts.js'
 import { COLLATERAL_CODE_PATTERN, COLLATERAL_REQUIREMENTS, buildCollateralCatalog } from '../../src/config/collateral.js'
 import { GUARANTOR_REQUIREMENTS } from '../../src/config/guarantors.js'
 import { isHexColour, normaliseTheme } from '../../src/config/theme.js'
@@ -98,14 +98,22 @@ const validateProduct = (id, value, current, collateralTypes, loanTypes) => {
   // The loan type it belongs to: one that uses the same application form.
   const loanTypeKey = value.loanType ?? current?.loanType ?? STANDARD_PRODUCTS[id]?.loanType ?? form
   const loanType = loanTypes.find((type) => type.key === loanTypeKey)
-  if (!loanType) throw new Error(`${label}: choose the loan type it belongs to.`)
-  if (loanType.form !== form) throw new Error(`${label} uses the ${APPLICANT_FORMS[form].label.toLowerCase()} form, so it can only belong to a loan type that uses that form.`)
+  if (!loanType) throw new Error(`${label}: choose the loan category it belongs to.`)
+  if (loanType.form !== form) throw new Error(`${label} uses the ${APPLICANT_FORMS[form].label.toLowerCase()} form, so it can only belong to a loan category that uses that form.`)
+  // Its sub category in that loan category: one the category has, else (left unchosen) its first.
+  // Moved to another category, a sub category it doesn't have gives way to that category's first.
+  const moved = loanType.key !== (current?.loanType ?? STANDARD_PRODUCTS[id]?.loanType ?? form)
+  const hasSub = (key) => loanType.subcategories.some((entry) => entry.key === key)
+  const subcategoryKey = value.subcategory ?? (moved ? null : current?.subcategory ?? STANDARD_PRODUCTS[id]?.subcategory) ?? null
+  if (value.subcategory && !moved && !hasSub(value.subcategory)) throw new Error(`${label}: choose one of the sub categories of ${loanType.label}.`)
+  const subcategory = subcategoryOf({ loanType: loanType.key, subcategory: subcategoryKey }, loanTypes).key
   const requirement = Object.keys(COLLATERAL_REQUIREMENTS).includes(value.collateral?.requirement) ? value.collateral.requirement : 'none'
   const known = new Set(collateralTypes.map((type) => type.key))
   return {
     ...validatePricing(id, value, label),
     form,
     loanType: loanType.key,
+    subcategory,
     name,
     // What it's for (LOAN_PURPOSES of its form), or null for general purpose; the interest type it is sold as.
     purpose: LOAN_PURPOSES[form].some((entry) => entry.key === value.purpose) ? value.purpose : null,
@@ -151,30 +159,51 @@ const validateProducts = async (value) => {
 }
 
 /**
- * The loan types. A type keeps the application form it was made with; one left out is
- * deleted, which is refused while any product (on or off) still belongs to it.
+ * The loan categories and their sub categories. A category keeps the application form it was
+ * made with; one left out is deleted, which is refused while any product (on or off) still
+ * belongs to it. The same goes for a sub category, and every category keeps at least one.
  */
 const validateLoanTypes = async (value) => {
   const stored = buildLoanTypes(await getSetting('loanTypes'))
-  const products = buildProducts(await getSetting('products'))
+  const products = liveProducts(buildProducts(await getSetting('products')))
   const keys = new Set()
   const types = (Array.isArray(value?.types) ? value.types : []).slice(0, 30).map((entry) => {
     const key = text(entry?.key, 40)
-    if (!LOAN_TYPE_KEY_PATTERN.test(key)) throw new Error(`"${key}" can’t be a loan type key: use lower-case letters, numbers and dashes.`)
-    if (keys.has(key)) throw new Error(`The loan type "${key}" is listed twice.`)
+    if (!LOAN_TYPE_KEY_PATTERN.test(key)) throw new Error(`"${key}" can’t be a loan category key: use lower-case letters, numbers and dashes.`)
+    if (keys.has(key)) throw new Error(`The loan category "${key}" is listed twice.`)
     keys.add(key)
     const label = text(entry.label, 60)
-    if (label.length < 2) throw new Error('Every loan type needs a name.')
+    if (label.length < 2) throw new Error('Every loan category needs a name.')
     const existing = stored.find((type) => type.key === key)
     const form = existing ? existing.form : entry.form
     if (!APPLICANT_FORMS[form]) throw new Error(`Choose the application form “${label}” uses.`)
-    return { key, label, description: text(entry.description, 300), form }
+    const subKeys = new Set()
+    // Left out of the request: kept as they are (a new category: the default ones), never emptied by omission.
+    const given = Array.isArray(entry.subcategories) ? entry.subcategories : existing?.subcategories || buildLoanTypes({ types: [{ key, label, form }] })[0].subcategories
+    const subcategories = given.slice(0, 20).map((sub) => {
+      const subKey = text(sub?.key, 40)
+      if (!LOAN_TYPE_KEY_PATTERN.test(subKey)) throw new Error(`"${subKey}" can’t be a sub category key: use lower-case letters, numbers and dashes.`)
+      if (subKeys.has(subKey)) throw new Error(`${label}: the sub category "${subKey}" is listed twice.`)
+      subKeys.add(subKey)
+      const subLabel = text(sub.label, 60)
+      if (subLabel.length < 2) throw new Error(`${label}: every sub category needs a name.`)
+      return { key: subKey, label: subLabel, description: text(sub.description, 300) }
+    })
+    if (!subcategories.length) throw new Error(`${label}: keep at least one sub category.`)
+    if (existing) {
+      for (const sub of existing.subcategories) {
+        if (subKeys.has(sub.key)) continue
+        const count = products.filter((product) => product.loanType === key && subcategoryOf(product, stored)?.key === sub.key).length
+        if (count) throw new Error(`“${sub.label}” still has ${count} ${count === 1 ? 'product' : 'products'}. Move ${count === 1 ? 'it' : 'them'} to another sub category first.`)
+      }
+    }
+    return { key, label, description: text(entry.description, 300), form, subcategories }
   })
-  if (!types.length) throw new Error('Keep at least one loan type.')
+  if (!types.length) throw new Error('Keep at least one loan category.')
   for (const type of stored) {
     if (keys.has(type.key)) continue
-    const count = liveProducts(products).filter((product) => product.loanType === type.key).length
-    if (count) throw new Error(`“${type.label}” still has ${count} ${count === 1 ? 'product' : 'products'}. Move ${count === 1 ? 'it' : 'them'} to another loan type first.`)
+    const count = products.filter((product) => product.loanType === type.key).length
+    if (count) throw new Error(`“${type.label}” still has ${count} ${count === 1 ? 'product' : 'products'}. Move ${count === 1 ? 'it' : 'them'} to another loan category first.`)
   }
   return { types }
 }

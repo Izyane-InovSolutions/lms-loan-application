@@ -160,25 +160,60 @@ const collateralRules = ({ minCoverage, ...rules } = {}) => ({
 })
 
 /**
- * Loan types: how loans are grouped for applicants, first by who borrows (Settings → Loan
- * products → Loan types). Applicants choose a type, then one of its products. Each type
- * uses one of the two application forms, fixed once made, and every product belongs to a
- * type that uses its own form. A type is deleted only once no product belongs to it.
- *   { key, label, description, form }
+ * Loan categories (stored as loan types): how loans are grouped for applicants, first by who
+ * borrows (Settings → Loan products → Loan categories), then by sub category. Applicants choose
+ * a category, then a sub category, then one of its products. Each category uses one of the two
+ * application forms, fixed once made, and every product belongs to a category that uses its
+ * own form, and to one of that category's sub categories. A category or sub category is deleted
+ * only once no product belongs to it.
+ *   { key, label, description, form, subcategories: [{ key, label, description }] }
  */
+export const DEFAULT_SUBCATEGORIES = {
+  personal: [
+    { key: 'asset', label: 'Asset loans', description: 'To buy an asset you own — a vehicle or a home — usually pledged against the loan.' },
+    { key: 'non-asset', label: 'Non-asset loans', description: 'For needs like school fees, medical costs or bills, with nothing bought to pledge.' },
+  ],
+  business: [
+    { key: 'asset-finance', label: 'Asset & investment finance', description: 'Equipment, vehicles, premises and longer-term investment in the business.' },
+    { key: 'working-capital', label: 'Working capital', description: 'Stock, wages, orders and the day-to-day cash flow of the business.' },
+  ],
+}
+
 export const DEFAULT_LOAN_TYPES = [
-  { key: 'personal', label: 'Personal loans', description: 'Borrowed by an individual for personal, family or household needs.', form: 'personal' },
-  { key: 'business', label: 'Business loans', description: 'Borrowed for business expenses, investment or growth.', form: 'business' },
+  { key: 'personal', label: 'Personal loans', description: 'Borrowed by an individual for personal, family or household needs.', form: 'personal', subcategories: DEFAULT_SUBCATEGORIES.personal },
+  { key: 'business', label: 'Business loans', description: 'Borrowed for business expenses, investment or growth.', form: 'business', subcategories: DEFAULT_SUBCATEGORIES.business },
 ]
 
-/** A loan type key: lower-case letters, digits and dashes. */
+/** A loan category or sub category key: lower-case letters, digits and dashes. */
 export const LOAN_TYPE_KEY_PATTERN = /^[a-z][a-z0-9-]{1,39}$/
 
-/** The workspace's loan types as stored (the defaults until any are saved), each on a known form. */
+// A category saved before sub categories: the defaults for the two standard ones, else one general sub category.
+const subcategoriesFor = (type) => {
+  if (Array.isArray(type.subcategories) && type.subcategories.length) return type.subcategories.map(({ key, label, description }) => ({ key, label, description: description || '' }))
+  return DEFAULT_SUBCATEGORIES[type.key] || [{ key: 'general', label: type.label, description: type.description || '' }]
+}
+
+/** The workspace's loan categories as stored (the defaults until any are saved), each on a known form, with its sub categories. */
 export const buildLoanTypes = (stored) =>
   (Array.isArray(stored?.types) ? stored.types : DEFAULT_LOAN_TYPES)
     .filter((type) => type && APPLICANT_FORMS[type.form])
-    .map(({ key, label, description, form }) => ({ key, label, description: description || '', form }))
+    .map((type) => ({ key: type.key, label: type.label, description: type.description || '', form: type.form, subcategories: subcategoriesFor(type) }))
+
+// The sub category each standard purpose belongs to in the default categories.
+const PURPOSE_SUBCATEGORY = {
+  vehicle: 'asset',
+  home: 'asset',
+  business_term: 'asset-finance',
+  asset_finance: 'asset-finance',
+  commercial_property: 'asset-finance',
+}
+
+/** A product's sub category: its own, if its category still has it, else the category's first. Null for an unknown category. */
+export const subcategoryOf = (product, loanTypes) => {
+  const type = loanTypes.find((entry) => entry.key === product?.loanType)
+  if (!type) return null
+  return type.subcategories.find((entry) => entry.key === product.subcategory) || type.subcategories[0]
+}
 
 /**
  * What a loan is for, by who borrows (its application form). A product names one, or none
@@ -232,6 +267,7 @@ const BUILT_IN_PRODUCTS = {
     description: 'Borrow against your salary for school fees, medical costs, home improvements or any personal need. Repay over a tenure you choose.',
     documents: defaultDocuments('personal'),
     collateral: DEFAULT_COLLATERAL_RULES,
+    subcategory: 'non-asset',
   },
   business: {
     id: 'business',
@@ -242,6 +278,7 @@ const BUILT_IN_PRODUCTS = {
     documents: defaultDocuments('business'),
     // The business form always asked what was pledged; it stays asked, now itemised.
     collateral: { ...DEFAULT_COLLATERAL_RULES, requirement: 'optional' },
+    subcategory: 'working-capital',
   },
 }
 
@@ -276,7 +313,7 @@ const STANDARD = [
 export const FORMER_STANDARD_MIN_INCOME = Object.fromEntries(STANDARD.map((entry) => [entry[2], entry[9]]))
 
 export const STANDARD_PRODUCTS = Object.fromEntries(
-  STANDARD.map(([form, purpose, id, name, tagline, [minAmount, maxAmount, exampleAmount], [minTenure, maxTenure, defaultTenure], rate, collateral, minIncome]) => [
+  STANDARD.map(([form, purpose, id, name, tagline, [minAmount, maxAmount, exampleAmount], [minTenure, maxTenure, defaultTenure], rate, collateral]) => [
     id,
     {
       form,
@@ -298,6 +335,7 @@ export const STANDARD_PRODUCTS = Object.fromEntries(
       // Who qualifies by income is the policy's (Policy rules → "Not eligible for…" net pay bands).
       eligibility: { ...DEFAULT_ELIGIBILITY[form], minIncome: null },
       loanType: form,
+      subcategory: PURPOSE_SUBCATEGORY[purpose] || (form === 'personal' ? 'non-asset' : 'working-capital'),
       // After the built-in two, before anything a workspace adds from today.
       createdAt: '2026-11-01T00:00:00.000Z',
     },
@@ -320,6 +358,7 @@ export const productDefaults = (form) => ({
   purpose: null,
   interestType: 'fixed',
   eligibility: DEFAULT_ELIGIBILITY[form],
+  subcategory: null,
 })
 
 /** The derived fields every screen reads: the form's steps, and the documents' names for marketing copy. */
@@ -338,6 +377,8 @@ const finish = (product) => {
     ...product,
     // The loan type it belongs to: the built-in type of its form until one is chosen.
     loanType: product.loanType || product.form,
+    // Its sub category in that loan type (subcategoryOf falls back to the type's first).
+    subcategory: product.subcategory || null,
     // Whether applicants name guarantors (src/config/guarantors.js).
     guarantors: { requirement: 'none', ...(product.guarantors || {}) },
     // Deleted, but applications were made under it: kept so they still read, never offered.
