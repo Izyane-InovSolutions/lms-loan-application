@@ -197,7 +197,7 @@ function Sidebar({ user, demoEnabled, theme, onToggleTheme }) {
   )
 }
 
-const DEMO_ORDER = ['admin', 'loan_officer', 'sales_manager', 'rm', 'dsa']
+const DEMO_ORDER = ['admin', 'loan_officer', 'sales_manager', 'rm', 'dsa', 'legal_officer']
 
 /**
  * Only in demo mode: switch the signed-in role in place, so a walkthrough can show what
@@ -255,5 +255,5 @@ function DemoSwitcher({ currentRole }) {
   )
 }
 
-const SHORT_ROLE = { admin: 'Admin', loan_officer: 'Officer', sales_manager: 'Sales', rm: 'RM', dsa: 'DSA' }
+const SHORT_ROLE = { admin: 'Admin', loan_officer: 'Officer', sales_manager: 'Sales', rm: 'RM', dsa: 'DSA', legal_officer: 'Legal' }
 const shortRole = (role) => SHORT_ROLE[role] || roleLabel(role)

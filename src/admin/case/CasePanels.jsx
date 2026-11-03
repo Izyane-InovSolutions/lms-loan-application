@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { AlertTriangle, Check, CircleDashed, Loader2, MapPin, Send, ShieldAlert, ShieldCheck } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -59,8 +59,12 @@ const MANUAL_FIGURES = {
  * from (read by the AI, or entered by an officer) or, when unknown, why. Officers can
  * enter a figure the AI couldn't read, or correct one it misread; the rules run again.
  */
-export function AffordabilityPanel({ application, prescreen, onSaveFigures }) {
+/** `editRequest` changing (a count) opens the figures for editing: the summary's "Enter the figure". */
+export function AffordabilityPanel({ application, prescreen, onSaveFigures, editRequest = 0 }) {
   const [editing, setEditing] = useState(false)
+  useEffect(() => {
+    if (editRequest && onSaveFigures) setEditing(true)
+  }, [editRequest])
   if (!prescreen) return null
   const notes = prescreen.facts?._notes || { reasons: {}, sources: {} }
   // Why a figure is unknown, unless a rule that couldn't be checked already says so in the summary.

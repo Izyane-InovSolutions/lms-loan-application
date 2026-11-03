@@ -1,4 +1,4 @@
-import { and, desc, eq } from 'drizzle-orm'
+import { and, desc, eq, gt, not, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
 import kv from '../_lib/kv.js'
 import { getDb, schema } from '../_lib/db/client.js'
@@ -58,7 +58,16 @@ const listDrafts = async (req) => {
     .orderBy(desc(applicationDrafts.lastSavedAt))
     .limit(200)
   const now = Date.now()
-  return { drafts: rows.map(toItem).filter((item) => new Date(item.expiresAt).getTime() > now) }
+  // Customers' own unfinished applications that aren't listed (Help with finishing was off
+  // when they saved): counted for workspace-wide viewers, never named.
+  const [{ hidden }] =
+    viewer.scope === 'all'
+      ? await db
+          .select({ hidden: sql`count(*)::int` })
+          .from(applicationDrafts)
+          .where(and(not(scopeDrafts(viewer)), gt(applicationDrafts.expiresAt, new Date())))
+      : [{ hidden: 0 }]
+  return { drafts: rows.map(toItem).filter((item) => new Date(item.expiresAt).getTime() > now), privateCount: hidden }
 }
 
 /** One draft, with what has been entered so far, for a follow-up call. */

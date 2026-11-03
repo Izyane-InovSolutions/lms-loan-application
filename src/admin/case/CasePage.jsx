@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import {
   AlertTriangle,
   ArrowLeft,
@@ -42,6 +42,7 @@ import {
 } from './CasePanels'
 import { CaseSummary, expectedForSlot } from './CaseSummary'
 import { sectionsFor } from './fields'
+import { LegalReview } from './LegalReview'
 
 const withinAssignmentRange = (person, amount) =>
   Number(amount) >= (person.approvalMin ?? 0) && (person.approvalMax == null || Number(amount) <= person.approvalMax)
@@ -51,12 +52,16 @@ const CRB_FRESH_HOURS = 24
 export function CasePage() {
   const { id } = useParams()
   const { user } = useAuth()
+  const navigate = useNavigate()
   const notify = useToast()
   const [state, setState] = useState({ status: 'loading' })
-  const [tab, setTab] = useState('analysis')
+  // Someone who only checks collateral and documents (a legal officer) starts on that.
+  const [tab, setTab] = useState(() => (hasPermission(user, 'legal.verify') && !hasPermission(user, 'cases.work') ? 'legal' : 'analysis'))
   const [documentId, setDocumentId] = useState(null)
   const tabs = useRef(null)
   const [dialog, setDialog] = useState(null)
+  // Counted up by the summary's "Enter the figure", which opens the figures for editing.
+  const [figureRequest, setFigureRequest] = useState(0)
   const [officers, setOfficers] = useState([])
 
   const load = useCallback(async () => {
@@ -89,6 +94,7 @@ export function CasePage() {
       disburse: hasPermission(user, 'cases.disburse'),
       record: hasPermission(user, 'offers.record'),
       note: hasPermission(user, 'applications.note'),
+      verify: hasPermission(user, 'legal.verify'),
     }),
     [user]
   )
@@ -172,7 +178,7 @@ export function CasePage() {
     )
   }
 
-  const { application, documents, events, prescreen, appraisals, consents, locations, crbReports, lmsConfigured, crbProvider, offersRequireSignature, signatures, stageDocuments, workflow, product, collateralTypes } = state
+  const { application, documents, events, prescreen, appraisals, consents, locations, crbReports, lmsConfigured, crbProvider, offersRequireSignature, signatures, stageDocuments, workflow, product, collateralCatalog } = state
   const eligibleOfficers = officers.filter((officer) => withinAssignmentRange(officer, application.amount))
   const canTake = withinAssignmentRange(user, application.amount)
   const lastRecommendation = appraisals.find((appraisal) => appraisal.kind === 'recommendation')
@@ -226,7 +232,7 @@ export function CasePage() {
           canTake={canTake}
           hasEligibleOfficers={eligibleOfficers.length > 0}
           onOpen={setDialog}
-          onClaim={(action) => act('transition', { actionId: action.id }, action.label === 'Start review' ? 'Review started' : `Moved to ${action.toLabel}`)}
+          onClaim={(action) => act('transition', { actionId: action.id }, action.id === 'start_review' ? `${action.toLabel} started` : `Moved to ${action.toLabel}`)}
           onTake={() => act('assign', { officerId: user.id }, 'The case is yours')}
           onTakeHere={() => act('take', {}, 'The case is yours at this stage')}
           onShowWorkflow={() => showTab('workflow')}
@@ -256,6 +262,7 @@ export function CasePage() {
             ['analysis', 'AI Analysis'],
             ['details', 'Details'],
             ['documents', `Documents (${documents.length})`],
+            ['legal', 'Legal review'],
             ['workflow', 'Workflow'],
             ['timeline', 'Timeline'],
           ].map(([value, label]) => (
@@ -290,18 +297,35 @@ export function CasePage() {
                 showTab('documents')
               }}
               onOpenDetails={() => showTab('details')}
+              // The buttons on rules it couldn't check, where this person may take the step.
+              actions={{
+                enter_figure: may.work
+                  ? () => {
+                      setFigureRequest((count) => count + 1)
+                      scrollToPanel('case-figures')
+                    }
+                  : null,
+                ask_applicant: may.work && workflow?.state?.askApplicant && application.status !== 'info_requested' ? () => setDialog({ type: 'request_info' }) : null,
+                run_crb: may.work && crbProvider ? () => scrollToPanel('case-crb') : null,
+                rerun: may.work ? () => post('/prescreen', {}, 'Policy rules run again') : null,
+                settings: user?.role === 'admin' ? () => navigate('/admin/settings?tab=crb') : null,
+              }}
             />
             <div className="grid items-start gap-4 lg:grid-cols-2">
-              <AffordabilityPanel application={application} prescreen={prescreen} onSaveFigures={may.work ? (values) => post('/figures', values, 'Figures saved; the rules ran again') : null} />
-              <CrbPanel
-                reports={crbReports}
-                provider={crbProvider}
-                hasConsent={hasCrbConsent}
-                canRun={may.work}
-                pulling={crbPull.status === 'pulling'}
-                error={crbPull.status === 'error' ? crbPull.message : null}
-                onRun={() => pullCrb('Credit report added')}
-              />
+              <div id="case-figures" className="scroll-mt-4">
+                <AffordabilityPanel application={application} prescreen={prescreen} editRequest={figureRequest} onSaveFigures={may.work ? (values) => post('/figures', values, 'Figures saved; the rules ran again') : null} />
+              </div>
+              <div id="case-crb" className="scroll-mt-4">
+                <CrbPanel
+                  reports={crbReports}
+                  provider={crbProvider}
+                  hasConsent={hasCrbConsent}
+                  canRun={may.work}
+                  pulling={crbPull.status === 'pulling'}
+                  error={crbPull.status === 'error' ? crbPull.message : null}
+                  onRun={() => pullCrb('Credit report added')}
+                />
+              </div>
             </div>
           </div>
         ) : null}
@@ -310,7 +334,7 @@ export function CasePage() {
         {tab === 'details' ? (
           <Details
             application={application}
-            collateralTypes={collateralTypes}
+            collateralCatalog={collateralCatalog}
             cards={consents.length ? [<ConsentPanel key="consent" consents={consents} />] : []}
             wide={<LocationPanel points={locations} facts={prescreen?.facts} onLogVisit={may.note ? (position) => post('/visits', position, 'Visit logged') : null} />}
           />
@@ -331,6 +355,24 @@ export function CasePage() {
               <SignaturesPanel signatures={signatures} applicationId={application.id} />
             </div>
           </div>
+        ) : null}
+
+        {/* Collateral and documents, as checked by the legal officer. */}
+        {tab === 'legal' ? (
+          <LegalReview
+            application={application}
+            documents={documents}
+            collateralCatalog={collateralCatalog}
+            canVerify={may.verify}
+            holdsApproval={Boolean(workflow?.state?.legalReview)}
+            onVerify={(target, itemId, status, note) =>
+              post('/verifications', { target, id: itemId, status, note }, status === 'verified' ? 'Marked verified' : status === 'issue' ? 'Issue recorded' : 'Check cleared')
+            }
+            onOpenDocument={(value) => {
+              setDocumentId(value)
+              showTab('documents')
+            }}
+          />
         ) : null}
 
         {/* Where the case is: its stages and checks, the decisions on it, and the hand-off to the LMS. */}
@@ -472,6 +514,9 @@ function AcceptOfferDialog({ open, onOpenChange, application, user, act, require
   )
 }
 
+/** Brings a panel on the assessment tab into view (after the render that opens it). */
+const scrollToPanel = (id) => requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+
 const uploadStaffDocument = async (id, form, setState, notify) => {
   const response = await fetch(`/api/v1/applications/${id}/documents`, { method: 'POST', body: form, credentials: 'same-origin' })
   const body = await response.json().catch(() => ({}))
@@ -545,6 +590,9 @@ function CaseActions({ application, workflow, may, canTake, hasEligibleOfficers,
   const groups = groupActions((workflow?.actions || []).filter((action) => !(stepHere && action.kind === 'move')))
   // Required documents not yet back hold the case here (the same words the server uses).
   const hints = state?.documentsOutstanding?.length && !waiting ? [`Waiting for signed documents: ${state.documentsOutstanding.join(', ')}.`] : []
+  // Approval held for the legal review, while declining or sending back stays open: say why it's missing.
+  const legalHold = (workflow?.actions || []).find((action) => action.kind === 'approve' && action.blocked && state?.legalReview && !state.legalReview.complete)
+  if (legalHold && !waiting) hints.push(legalHold.blocked)
 
   const buttons = groups.map((group) => {
     const usable = group.actions.filter((action) => !action.blocked)
@@ -874,8 +922,8 @@ function CaseDialogs({ dialog, onClose, application, product, lastRecommendation
  * The applicant's answers, then `cards` (more half-width panels) and `wide` (one
  * full-width panel). Cards in a row share its height; an odd last card spans the row.
  */
-function Details({ application, collateralTypes, cards = [], wide = null }) {
-  const sections = useMemo(() => sectionsFor(application, collateralTypes).filter((section) => section.rows.some(([, value]) => value)), [application, collateralTypes])
+function Details({ application, collateralCatalog, cards = [], wide = null }) {
+  const sections = useMemo(() => sectionsFor(application, collateralCatalog).filter((section) => section.rows.some(([, value]) => value)), [application, collateralCatalog])
   const all = [
     ...sections.map((section) => (
       <Panel key={section.title} title={section.title}>

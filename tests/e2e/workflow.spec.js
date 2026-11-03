@@ -33,29 +33,29 @@ test('an admin builds the workflow in the editor, and cases follow it', async ({
   // A new state, set up in its panel: who works on it and where it sends cases.
   await page.getByRole('button', { name: 'Add state' }).click()
   const panel = page.getByRole('dialog')
-  await panel.getByLabel('Name', { exact: true }).fill('Underwriting')
+  await panel.getByLabel('Name', { exact: true }).fill('Credit check')
   await panel.getByLabel('Sales manager').check()
   await panel.getByLabel('Show as a step on the case').check()
   await panel.getByRole('button', { name: 'Add an action' }).click()
   await panel.getByLabel('Action name').fill('Send to approval')
-  await panel.getByLabel('Goes to').selectOption({ label: 'Awaiting approval' })
-  await page.keyboard.press('Escape')
-  await expect(panel).toBeHidden()
-
-  // Dragging its grip puts it before "Awaiting approval".
-  await drag(page, page.locator('article[aria-label="Underwriting"] [title="Drag to reorder"]'), page.locator('article[aria-label="Awaiting approval"]'))
-  const order = await page.locator('article h3').allTextContents()
-  expect(order.indexOf('Underwriting')).toBe(order.indexOf('Awaiting approval') - 1)
-
-  // Review now recommends to underwriting.
-  await page.getByRole('button', { name: 'Edit In review' }).click()
   await panel.getByLabel('Goes to').selectOption({ label: 'Underwriting' })
   await page.keyboard.press('Escape')
   await expect(panel).toBeHidden()
 
+  // Dragging its grip puts it before "Underwriting".
+  await drag(page, page.locator('article[aria-label="Credit check"] [title="Drag to reorder"]'), page.locator('article[aria-label="Underwriting"]'))
+  const order = await page.locator('article h3').allTextContents()
+  expect(order.indexOf('Credit check')).toBe(order.indexOf('Underwriting') - 1)
+
+  // Review now recommends to underwriting.
+  await page.getByRole('button', { name: 'Edit Appraisal' }).click()
+  await panel.getByLabel('Goes to').selectOption({ label: 'Credit check' })
+  await page.keyboard.press('Escape')
+  await expect(panel).toBeHidden()
+
   // Dragging the + onto "Declined" gives underwriting a Reject.
-  await drag(page, page.getByRole('button', { name: 'Add an action to Underwriting' }), page.locator('article[aria-label="Declined"]'))
-  await expect(page.locator('article[aria-label="Underwriting"]').getByRole('button', { name: /Reject/ })).toBeVisible()
+  await drag(page, page.getByRole('button', { name: 'Add an action to Credit check' }), page.locator('article[aria-label="Declined"]'))
+  await expect(page.locator('article[aria-label="Credit check"]').getByRole('button', { name: /Reject/ })).toBeVisible()
 
   await page.getByRole('tab', { name: 'Tree preview' }).click()
   await expect(page.getByText('Send to approval')).toBeVisible()
@@ -71,7 +71,7 @@ test('an admin builds the workflow in the editor, and cases follow it', async ({
   await expect(page.getByText(/cases? moved/)).toBeVisible()
 
   await page.goto('/admin/pipeline')
-  await expect(page.getByRole('heading', { name: 'Underwriting' })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Credit check' })).toBeVisible()
 
   // An officer recommends a case in review; it goes to the sales managers' queue.
   const officer = await browser.newPage()
@@ -90,15 +90,15 @@ test('an admin builds the workflow in the editor, and cases follow it', async ({
   await signInAs(manager, 'Sales manager')
   await manager.goto('/admin/applications?assigned=queue')
   await manager.locator('tbody tr', { hasText: target.reference }).locator('a').first().click()
-  await expect(manager.getByText('Underwriting').first()).toBeVisible()
+  await expect(manager.getByText('Credit check').first()).toBeVisible()
   await manager.getByRole('button', { name: 'Take the case' }).click()
   await expect(manager.getByText('The case is yours at this stage')).toBeVisible()
   // A recorded step: the case says what's next, which opens the Workflow tab where its Stages panel marks it done.
-  await manager.getByRole('button', { name: 'Next: Underwriting' }).click()
+  await manager.getByRole('button', { name: 'Next: Credit check' }).click()
   await manager.getByRole('button', { name: 'Mark as done' }).click()
   await manager.getByRole('dialog').getByRole('button', { name: 'Mark as done' }).click()
-  await expect(manager.getByText('Underwriting done')).toBeVisible()
-  await expect(manager.getByText('Awaiting approval').first()).toBeVisible()
+  await expect(manager.getByText('Credit check done')).toBeVisible()
+  await expect(manager.getByText('Underwriting').first()).toBeVisible()
 })
 
 test('in the list view, an admin drags a step into the path and turns another off', async ({ page }) => {
@@ -109,28 +109,28 @@ test('in the list view, an admin drags a step into the path and turns another of
   const steps = page.getByRole('region', { name: 'Steps' })
   const row = (name) => steps.locator(`li[aria-label="${name}"]`)
 
-  // A new step lands at the end, unconnected; dragged above Underwriting, it joins the path.
+  // A new step lands at the end, unconnected; dragged above Credit check, it joins the path.
   await page.getByRole('button', { name: 'Add state' }).click()
   const panel = page.getByRole('dialog')
   await panel.getByLabel('Name', { exact: true }).fill('Compliance')
   await page.keyboard.press('Escape')
   await expect(panel).toBeHidden()
   await expect(page.getByText('“Compliance” can’t be reached from the start.')).toBeVisible()
-  const target = row('Underwriting')
+  const target = row('Credit check')
   const box = await target.boundingBox()
   // The top quarter of the row: dropped before it.
   await drag(page, row('Compliance').locator('[title="Drag to move"]'), { boundingBox: async () => ({ ...box, height: box.height / 2 }) })
   const order = await steps.locator('li h3').allTextContents()
-  expect(order.indexOf('Compliance')).toBe(order.indexOf('Underwriting') - 1)
-  await expect(row('In review')).toContainText(/Recommend\s*Compliance/)
-  await expect(row('Compliance')).toContainText('Send to Underwriting')
+  expect(order.indexOf('Compliance')).toBe(order.indexOf('Credit check') - 1)
+  await expect(row('Appraisal')).toContainText(/Recommend\s*Compliance/)
+  await expect(row('Compliance')).toContainText('Send to Credit check')
   await expect(page.getByText(/things? needs? fixing/)).toBeHidden()
 
-  // Underwriting off: cases pass straight through, and it keeps its setup.
-  await page.getByRole('switch', { name: 'Disable Underwriting' }).click()
-  await expect(row('Underwriting')).toContainText('Off: cases pass straight through to “Awaiting approval”')
+  // Credit check off: cases pass straight through, and it keeps its setup.
+  await page.getByRole('switch', { name: 'Disable Credit check' }).click()
+  await expect(row('Credit check')).toContainText('Off: cases pass straight through to “Underwriting”')
   await page.getByRole('tab', { name: 'Flow' }).click()
-  await expect(page.locator('article[aria-label="Underwriting"]')).toContainText('Off: cases pass straight through')
+  await expect(page.locator('article[aria-label="Credit check"]')).toContainText('Off: cases pass straight through')
   await page.screenshot({ path: 'test-results/workflow-list-flow.png', fullPage: true })
   await page.getByRole('tab', { name: 'List' }).click()
   await page.screenshot({ path: 'test-results/workflow-list.png', fullPage: true })
@@ -138,5 +138,5 @@ test('in the list view, an admin drags a step into the path and turns another of
   await page.getByRole('button', { name: 'Save workflow' }).click()
   await expect(page.getByText(/Workflow published/)).toBeVisible()
   const { current } = await (await page.request.get('/api/v1/workflow')).json()
-  expect(current.states.find((state) => state.label === 'Underwriting')).toMatchObject({ disabled: true, roles: ['sales_manager'] })
+  expect(current.states.find((state) => state.label === 'Credit check')).toMatchObject({ disabled: true, roles: ['sales_manager'] })
 })

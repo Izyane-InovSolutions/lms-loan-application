@@ -2,7 +2,7 @@ import { eq } from 'drizzle-orm'
 import { getDb, schema } from './db/client.js'
 import { decryptSecret, encryptSecret, isEncrypted } from './secrets.js'
 import { DEFAULT_PRICING } from '../../src/config/loanProducts.js'
-import { DEFAULT_COLLATERAL_TYPES } from '../../src/config/collateral.js'
+import { DEFAULT_COLLATERAL_CATALOG } from '../../src/config/collateral.js'
 import { AI_FIELDS, AI_SECRET_FIELDS } from '../../src/config/aiProviders.js'
 import { DEFAULT_STAGES_CONFIG } from '../../src/config/stages.js'
 import { DEFAULT_BRAND_NAME } from '../../src/config/branding.js'
@@ -100,6 +100,9 @@ export const SETTING_DEFAULTS = {
     requireSecondApproval: true,
     // Days an open case may sit before it is flagged as overdue in the queue.
     slaDays: 3,
+    // Nothing is approved until a legal officer has verified every collateral item and
+    // document, with no issue left open (src/config/legalReview.js).
+    requireLegalReview: true,
     // Note: how much each person may finally approve is now a per-user limit band on their
     // team profile (users.approvalMin / approvalMax), not a workflow-wide setting.
   },
@@ -129,8 +132,9 @@ export const SETTING_DEFAULTS = {
    * collateral rules. Only what differs from the defaults needs to be stored.
    */
   products: DEFAULT_PRICING,
-  // The kinds of collateral the lender accepts (src/config/collateral.js); products choose from these.
-  collateral: { types: DEFAULT_COLLATERAL_TYPES },
+  // The collateral the lender accepts (src/config/collateral.js): types, with their haircut
+  // and loan-to-value, and the items applicants pick from. Products choose types from these.
+  collateral: DEFAULT_COLLATERAL_CATALOG,
   /*
    * How long closed applications are kept before they and their documents are deleted.
    * null keeps them indefinitely. Approved and paid-out loans are kept by default: they

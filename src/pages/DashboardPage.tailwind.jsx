@@ -27,7 +27,7 @@ import { readReferral } from '../lib/referral'
 import { isAssistedFlagSet, clearAssistedFlag } from '../lib/assisted'
 import { useProductCatalog } from '../hooks/useProducts'
 import { describeInterest, getProduct, priceLoan } from '../config/loanProducts'
-import { collateralErrors, MAX_COLLATERAL_ITEMS } from '../config/collateral'
+import { asksForCollateral, collateralErrors, collateralRequirement, MAX_COLLATERAL_ITEMS } from '../config/collateral'
 import { EMPLOYMENT_OPTIONS, businessPeople, employerField, isValidPassportNumber, isZambian, positionsFor, presentDocuments } from '../config/applicantRules'
 import { useApplicationDraft } from '../hooks/useApplicationDraft'
 import { useDocumentAnalysis } from '../hooks/useDocumentAnalysis'
@@ -99,7 +99,7 @@ function DashboardPage() {
   // the draft layer restores the answers. The product's form (personal or business)
   // decides the steps, the questions and the checks; the product its name, pricing,
   // documents and collateral.
-  const { products, collateralTypes, loaded: productsLoaded } = useProductCatalog()
+  const { products, collateralCatalog, loaded: productsLoaded } = useProductCatalog()
   const routeProduct = products.find((entry) => entry.id === typeParam)
   const fallbackForm = typeParam === 'business' || location.state?.type === 'business' ? 'business' : 'personal'
   const product =
@@ -115,7 +115,7 @@ function DashboardPage() {
   const selectedLoanType = product.form
   // Collateral is pledged on the loan terms step, so its name says so when the product asks for it.
   const stepTitles = STEP_TITLES[selectedLoanType].map((title) =>
-    title === 'Loan Terms' && product.collateral?.requirement && product.collateral.requirement !== 'none' ? 'Loan & Collateral' : title
+    title === 'Loan Terms' && asksForCollateral(product) ? 'Loan & Collateral' : title
   )
   const currentStep = stepIndex(selectedLoanType, stepParam)
 
@@ -430,7 +430,8 @@ function DashboardPage() {
   // The form's answers and documents for the product's form.
   const activeData = selectedLoanType === 'personal' ? personalData : businessData
   const setActiveData = selectedLoanType === 'personal' ? setPersonalData : setBusinessData
-  const collateralAsked = Boolean(product.collateral?.requirement) && product.collateral.requirement !== 'none'
+  // Asked for at the amount chosen: a product can require it only from a certain amount up.
+  const collateralAsked = collateralRequirement(product, loanData.amount) !== 'none'
   const collateralRows = collateralAsked ? activeData.collateral?.items || [] : []
 
   // What each built-in document should agree with on the form (the server checks the same
@@ -624,7 +625,7 @@ function DashboardPage() {
     setActiveData((prev) => {
       const items = prev.collateral?.items || []
       if (items.length >= MAX_COLLATERAL_ITEMS) return prev
-      return { ...prev, collateral: { ...(prev.collateral || {}), items: [...items, { type: '', description: '', value: '' }] } }
+      return { ...prev, collateral: { ...(prev.collateral || {}), items: [...items, { code: '', description: '', value: '' }] } }
     })
   }
 
@@ -818,7 +819,7 @@ function DashboardPage() {
 
     // Loan terms: the collateral the product asks for, and each proof attached.
     if (currentStep === 3 && collateralAsked) {
-      Object.entries(collateralErrors(product, activeData, loanData.amount, collateralTypes)).forEach(([key, message]) => recordError(key, message))
+      Object.entries(collateralErrors(product, activeData, loanData.amount, collateralCatalog)).forEach(([key, message]) => recordError(key, message))
       collateralRows.forEach((_, index) => {
         const file = readDocument(activeData.documents, `collateral.${index}`)
         if (file) recordError(`documents.collateral.${index}`, validatePassportFile(file))
@@ -1364,7 +1365,7 @@ function DashboardPage() {
                 addCollateralItem={addCollateralItem}
                 addDirector={addDirector}
                 addDirectorUpload={addDirectorUpload}
-                collateralTypes={collateralTypes}
+                collateralCatalog={collateralCatalog}
                 allowCrb={allowCrb}
                 analysisFor={analysisFor}
                 applicantEmail={applicantEmail}

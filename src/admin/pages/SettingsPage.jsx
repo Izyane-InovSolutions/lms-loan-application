@@ -336,6 +336,13 @@ function WorkflowTab({ settings, notify }) {
               }
             />
           </Field>
+          <Toggle
+            id="require-legal-review"
+            label="Legal sign-off before approval"
+            description="A case can't be approved until a legal officer has verified every collateral item and document on its Legal review, with no issue left open."
+            checked={workflow.value.requireLegalReview !== false}
+            onChange={(requireLegalReview) => workflow.set({ requireLegalReview })}
+          />
           <p className="text-sm text-muted-foreground">
             How much each person may approve is now set per user on the{" "}
             <Link to="/admin/users" className="text-primary hover:underline">

@@ -13,9 +13,10 @@ import { signatureFor } from './signing.js'
 import { outstandingDocuments } from './stageDocuments.js'
 import { listDocumentKinds } from './templates.js'
 import { priceLoan, productFor } from '../../src/config/loanProducts.js'
-import { getProducts } from './products.js'
+import { getCollateralCatalog, getProducts } from './products.js'
+import { describeOutstanding, legalReviewComplete, legalReviewOutstanding } from '../../src/config/legalReview.js'
 
-const { applications, appraisals, users } = schema
+const { applications, applicationDocuments, appraisals, users } = schema
 
 /*
  * The workflow engine. A case follows the workflow version it started on
@@ -385,6 +386,13 @@ const decision = async (tx, viewer, application, action, input, rationale, setti
     }
   }
 
+  // Legal sign-off first, when the workspace asks for it: every collateral item and document verified.
+  if (settings.workflow.requireLegalReview !== false) {
+    const documents = await tx.select().from(applicationDocuments).where(eq(applicationDocuments.applicationId, application.id))
+    const outstanding = legalReviewOutstanding(application, documents, settings.collateralCatalog)
+    if (!legalReviewComplete(outstanding)) fail(409, `The legal review isn’t complete: ${describeOutstanding(outstanding)}.`, 'legal_review_incomplete')
+  }
+
   const approved = terms(application, { amount: input.amount ?? recommendation?.amount, tenure: input.tenure ?? recommendation?.tenure }, settings)
   const min = viewer.approvalMin ?? 0
   const max = viewer.approvalMax ?? null
@@ -560,6 +568,7 @@ const loadSettings = async () => ({
   workflow: await getSetting('workflow'),
   offers: await getSetting('offers'),
   products: await getProducts(),
+  collateralCatalog: await getCollateralCatalog(),
   // Read here, not in the transaction: the names of documents a state still waits for.
   documentKinds: await listDocumentKinds({ includeRetired: true }),
 })
@@ -666,7 +675,7 @@ export const caseWorkflow = locate
 // ---------------------------------------------------------------------------
 
 /** Why `viewer` can't take `action` here, or null when they can (the server checks again on the day). */
-const blockedReason = (viewer, application, state, action, recommendation, roleName, outstanding) => {
+const blockedReason = (viewer, application, state, action, recommendation, roleName, outstanding, legal) => {
   if (application.status === 'info_requested') return 'Waiting on the applicant.'
   if (viewer.role !== 'admin') {
     const roles = state.roles || []
@@ -678,7 +687,17 @@ const blockedReason = (viewer, application, state, action, recommendation, roleN
   }
   // A recommendation may still be to decline, so it stays open; the server holds an approval.
   if (outstanding.length && action.kind !== 'recommend' && awaitsDocuments(action)) return `Waiting for signed documents: ${outstanding.join(', ')}.`
+  // Declining or sending back stays open; only approval waits for the legal review.
+  if (action.kind === 'approve' && legal && !legal.complete) return `Approval waits for legal sign-off: ${legal.summary}.`
   return null
+}
+
+/** Where the legal review stands, when approval waits for it (Settings → Credit workflow); else null. */
+const legalReviewFor = async (application) => {
+  if ((await getSetting('workflow')).requireLegalReview === false) return null
+  const documents = await (await getDb()).select().from(applicationDocuments).where(eq(applicationDocuments.applicationId, application.id))
+  const outstanding = legalReviewOutstanding(application, documents, await getCollateralCatalog())
+  return { complete: legalReviewComplete(outstanding), summary: describeOutstanding(outstanding) }
 }
 
 /**
@@ -695,6 +714,7 @@ export const workflowView = async (viewer, application, { recommendation = null 
   const stepStates = analysis.order.map((id) => stateById(definition, id)).filter((entry) => entry?.trackProgress && appliesTo(entry, product))
   const outstanding = state.type === 'final' ? [] : await outstandingDocuments(await getDb(), application, state, await listDocumentKinds({ includeRetired: true }), definition)
   const currentStretch = new Set([state.id, ...laterStates(definition, state.id, product)])
+  const legal = state.type === 'final' ? null : await legalReviewFor(application)
   return {
     version: flow.version,
     legacy: flow.legacy,
@@ -713,6 +733,8 @@ export const workflowView = async (viewer, application, { recommendation = null 
       onAcceptLabel: state.type === 'offer' ? resolveState(definition, state.offer?.onAccept, product)?.label || null : null,
       // Required documents not yet signed or received, which hold the case here.
       documentsOutstanding: outstanding,
+      // Whether approval waits for the legal review here, and what is left of it (null: it doesn't).
+      legalReview: legal,
     },
     phase,
     worksHere: worksOn(viewer, state),
@@ -745,7 +767,7 @@ export const workflowView = async (viewer, application, { recommendation = null 
               claim: Boolean(action.options?.claim),
               requireNote: Boolean(action.options?.requireNote),
               checks: action.options?.checks || [],
-              blocked: blockedReason(viewer, application, state, action, recommendation, roleName, outstanding),
+              blocked: blockedReason(viewer, application, state, action, recommendation, roleName, outstanding, legal),
             }
           }),
   }

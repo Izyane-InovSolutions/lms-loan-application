@@ -1,7 +1,7 @@
 import { generateJson } from './index.js'
 import { DOCUMENT_SPECS } from './documents.js'
 import { priceLoan } from '../../../src/config/loanProducts.js'
-import { collateralItems } from '../../../src/config/collateral.js'
+import { collateralItems, lendingValue } from '../../../src/config/collateral.js'
 import { positionLabel } from '../../../src/config/applicantRules.js'
 
 /*
@@ -175,7 +175,7 @@ Base the assessment only on:
 - Consistency between the form and the documents (formMismatches are computed checks you can rely on).
 - Authenticity concerns raised by document analysis.
 - Whether the stated loan purpose fits the product.
-- Collateral pledged (type and the applicant's stated value), and whether any collateral proof documents support it. Stated values are the applicant's estimates, not valuations.
+- Collateral pledged (type, the applicant's stated value and, when given, its lending value after the lender's haircut and loan-to-value), and whether any collateral proof documents support it. Stated values are the applicant's estimates, not valuations.
 When a figure is missing, say so in missingInformation and do not assume a value.
 For each flag, list in documents the refs of the documents it is based on.
 score rests on the same basis: a fired decline rule or a serious authenticity concern keeps it below 40.
@@ -197,8 +197,11 @@ export const prescreenApplication = async ({ loanType, applicant, loan, document
   const input = {
     product: loanType === 'personal' ? 'Personal loan' : 'Business loan',
     applicant: pickApplicant(loanType, applicant),
-    // Kinds and stated values only: descriptions carry plates and plot numbers the model doesn't need.
-    collateral: collateralItems(applicant).slice(0, 5).map((item) => ({ type: clip(item.type), statedValue: Number(item.value) || null })),
+    // Kinds and values only: descriptions carry plates and plot numbers the model doesn't need.
+    // Lending value once filed (haircut and loan-to-value stamped on submission).
+    collateral: collateralItems(applicant)
+      .slice(0, 5)
+      .map((item) => ({ type: clip(item.name || item.type), statedValue: Number(item.value) || null, lendingValue: item.haircut === undefined ? null : lendingValue(item) })),
     metrics,
     documents: pickedDocuments,
     // Only concerns and unevaluated rules, as plain statements; identifiers never reach the model.

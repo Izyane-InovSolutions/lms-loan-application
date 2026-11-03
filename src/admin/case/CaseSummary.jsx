@@ -92,7 +92,7 @@ const RATIO_OF = {
   loan_to_turnover: 'annual_turnover',
   loan_to_order: 'order_value',
 }
-const FROM_FORM = ['amount', 'tenure', 'monthly_instalment', 'applicant_age', 'age_at_maturity', 'business_age_months', 'directors_count', 'collateral_value', 'collateral_cover']
+const FROM_FORM = ['amount', 'tenure', 'monthly_instalment', 'applicant_age', 'age_at_maturity', 'business_age_months', 'directors_count', 'collateral_value', 'collateral_cover', 'collateral_lending_value', 'collateral_lending_cover']
 const FROM_LOCATION = ['location_provided', 'location_distance_km', 'address_found']
 
 /** What a rule's figure rests on: the documents it came from, or the form, location or bureau. */
@@ -120,10 +120,10 @@ const EVIDENCE_ICONS = {
   entered: UserCheck,
 }
 
-function Evidence({ items, onOpenDocument, onOpenDetails }) {
+function Evidence({ items, onOpenDocument, onOpenDetails, className = 'mt-1.5' }) {
   if (!items.length) return null
   return (
-    <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+    <div className={cn('flex flex-wrap items-center gap-1.5', className)}>
       <span className="text-[11px] text-muted-foreground">Based on</span>
       {items.map((item) => {
         const chip = 'inline-flex max-w-full items-center gap-1 rounded-full border bg-background px-2 py-0.5 text-[11px] font-medium text-foreground'
@@ -237,7 +237,10 @@ function Overview({ icon, title, items, empty, extra, onMore }) {
             return (
               <li key={item.key} className="flex gap-2 text-sm">
                 <Icon className={cn('mt-0.5 size-4 shrink-0', OVERVIEW_TONES[item.tone])} aria-hidden="true" />
-                <span className="line-clamp-2 text-foreground">{item.text}</span>
+                <span className="min-w-0">
+                  <span className="line-clamp-2 text-foreground">{item.text}</span>
+                  {item.detail ? <span className="mt-0.5 line-clamp-1 block text-xs text-muted-foreground">{item.detail}</span> : null}
+                </span>
               </li>
             )
           })}
@@ -284,11 +287,89 @@ const ruleDetail = (result) =>
     : `${FACTS[result.fact]?.label}: ${formatFact(result.fact, result.actual)} (rule: ${describeCondition(result).replace(`${FACTS[result.fact]?.label} `, '')})${result.source ? `. ${result.source}.` : ''}`
 
 /**
+ * A rule's reason in parts: why it couldn't be checked, what to do, and the button for it.
+ * Prescreens from before the parts were stored have one sentence, shown as the why.
+ */
+const reasonParts = (result) =>
+  result.reasonDetail || { why: result.reason || `${FACTS[result.fact]?.label || 'This figure'} isn’t known for this application.`, fix: '', action: null }
+
+const ACTION_LABELS = { enter_figure: 'Enter the figure', ask_applicant: 'Ask the applicant', run_crb: 'Go to credit check', rerun: 'Run the rules again', settings: 'Open settings' }
+
+/**
+ * The rules that couldn't run: one card per reason (rules held up by the same missing
+ * figure share it), each with the rules, why, and what to do (with its button).
+ */
+function UncheckedRules({ results, evidence, actions, onOpenDocument, onOpenDetails }) {
+  const groups = []
+  for (const result of results) {
+    const parts = reasonParts(result)
+    const key = `${parts.why}|${parts.fix}`
+    const group = groups.find((entry) => entry.key === key)
+    if (group) group.results.push(result)
+    else groups.push({ key, ...parts, results: [result] })
+  }
+  return (
+    <div className="space-y-2">
+      <p className="text-xs font-medium text-foreground">
+        Couldn’t check {results.length} {results.length === 1 ? 'rule' : 'rules'}
+        <span className="font-normal text-muted-foreground">: a figure each needs isn’t known yet. Until it is, the rule can’t pass or fail.</span>
+      </p>
+      <ol className="space-y-2">
+        {groups.map(({ key, why, fix, action, results: held }) => {
+          const run = action ? actions[action] : null
+          // Each piece of evidence once, though several rules rest on it.
+          const items = held.flatMap(evidence).filter((item, index, list) => list.findIndex((other) => (other.document?.id || other.label) === (item.document?.id || item.label)) === index)
+          return (
+            <li key={key} className="rounded-lg border border-warning/40 bg-warning/5 p-3 text-sm">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <ul className="min-w-0 space-y-1">
+                  {held.map((result) => (
+                    <li key={result.id} className="flex items-start gap-2 font-medium text-foreground">
+                      <CircleDashed className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
+                      <span>{describeCondition(result)}</span>
+                    </li>
+                  ))}
+                </ul>
+                <span className="shrink-0 rounded-full bg-warning/15 px-2 py-0.5 text-[11px] font-medium text-warning">
+                  Couldn’t check{held.length > 1 ? ` ${held.length} rules` : ''}
+                </span>
+              </div>
+              <dl className="mt-2 grid gap-x-3 gap-y-1.5 pl-6 text-xs sm:grid-cols-[6rem_minmax(0,1fr)]">
+                <dt className="font-medium text-muted-foreground">Why</dt>
+                <dd className="text-foreground">{why}</dd>
+                {fix ? (
+                  <>
+                    <dt className="font-medium text-muted-foreground">What to do</dt>
+                    <dd className="text-foreground">{fix}</dd>
+                  </>
+                ) : null}
+              </dl>
+              {run || items.length ? (
+                <div className="mt-2 flex flex-wrap items-center gap-2 pl-6">
+                  {run ? (
+                    <Button type="button" size="sm" variant="outline" className="h-7 text-xs" onClick={run}>
+                      {ACTION_LABELS[action]}
+                    </Button>
+                  ) : null}
+                  <Evidence items={items} onOpenDocument={onOpenDocument} onOpenDetails={onOpenDetails} className="" />
+                </div>
+              ) : null}
+            </li>
+          )
+        })}
+      </ol>
+    </div>
+  )
+}
+
+/**
  * @param showAi  whether this person sees the AI review (credit staff)
  * @param onOpenDocument  opens one document in the Documents tab
  * @param onOpenDetails   opens the application form (Details tab)
+ * @param actions  what an unchecked rule's button does, by the action its reason names
+ *                 (enter_figure, ask_applicant, run_crb, rerun, settings); missing: no button
  */
-export function CaseSummary({ application, documents: allDocuments, prescreen, zra, showAi, canRerun, onRerun, onOpenDocument, onOpenDetails }) {
+export function CaseSummary({ application, documents: allDocuments, prescreen, zra, showAi, canRerun, onRerun, onOpenDocument, onOpenDetails, actions = {} }) {
   const [busy, setBusy] = useState(false)
   // The detailed report's open tab, or null while it is folded away.
   const [report, setReport] = useState(null)
@@ -422,6 +503,7 @@ export function CaseSummary({ application, documents: allDocuments, prescreen, z
               ...unknown.map((result) => ({
                 key: result.id,
                 text: `Couldn’t check: ${describeCondition(result)}`,
+                detail: reasonParts(result).why,
                 tone: 'unknown',
               })),
             ]}
@@ -503,18 +585,7 @@ export function CaseSummary({ application, documents: allDocuments, prescreen, z
                     <p className="text-sm text-muted-foreground">No rule raised a concern.</p>
                   )}
                   {unknown.length ? (
-                    <ul className="space-y-3">
-                      {unknown.map((result) => (
-                        <li key={result.id} className="flex gap-2.5 text-sm">
-                          <CircleDashed className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
-                          <div className="min-w-0">
-                            <p className="text-foreground">Couldn’t check: {describeCondition(result)}</p>
-                            <p className="text-xs text-muted-foreground">{result.reason || `${FACTS[result.fact]?.label || 'This figure'} isn’t known for this application.`}</p>
-                            <Evidence items={evidence(result)} onOpenDocument={onOpenDocument} onOpenDetails={onOpenDetails} />
-                          </div>
-                        </li>
-                      ))}
-                    </ul>
+                    <UncheckedRules results={unknown} evidence={evidence} actions={actions} onOpenDocument={onOpenDocument} onOpenDetails={onOpenDetails} />
                   ) : null}
                   {passed.length ? (
                     <details className="text-sm">

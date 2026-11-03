@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, lt, ne } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, lt, ne, sql } from 'drizzle-orm'
 import { getDb, schema } from '../_lib/db/client.js'
 import { appOrigin, clientIp as clientIpOf, fail, text } from '../_lib/http.js'
 import { requirePermission, requireUser } from '../_lib/rbac.js'
@@ -27,7 +27,8 @@ import { creditStaffIds, followerIds, notifyUsers } from '../_lib/notify.js'
 import { textCustomer } from '../_lib/sms.js'
 import { WITHDRAWABLE_STATUSES, requestableSlots } from '../../src/config/applications.js'
 import { analyzeCaseUpload } from '../_lib/ai/documents.js'
-import { getApplicationProduct } from '../_lib/products.js'
+import { getApplicationProduct, getCollateralCatalog } from '../_lib/products.js'
+import { collateralItems, itemLabel } from '../../src/config/collateral.js'
 import { ensureOfferDocuments } from '../_lib/offerDocuments.js'
 import { issueStageDocuments } from '../_lib/stageDocuments.js'
 import { FACTS, evaluateRules, flattenPolicies, rulesToPolicies, validatePolicies } from '../../src/config/creditRules.js'
@@ -129,6 +130,65 @@ const act = async (req, res, { params }) => {
   if (result.notify) notifyCustomer(req, updated, result.notify)
   // Whichever state the workflow marks for it (Workflow editor) hands the loan to the LMS.
   if (result.handToLms) await handToLms(updated, viewer)
+  return loadCase(application.id, viewer)
+}
+
+const VERIFICATION_STATUSES = { verified: 'Verified', issue: 'Raised an issue with', clear: 'Cleared the legal check on' }
+
+/**
+ * Legal review (legal.verify): marks one pledged collateral item or one document verified,
+ * records an issue with it (a note is needed), or clears it. Body: { target: 'collateral' |
+ * 'document', id: item index | document id, status: 'verified' | 'issue' | 'clear', note }.
+ * Stored in applications.verifications; a newer copy of a document starts unchecked.
+ */
+const verify = async (req, res, { params }) => {
+  const viewer = await requireUser(req, { permission: 'legal.verify' })
+  const application = await findVisibleApplication(viewer, params.id)
+  const { target, status } = req.body || {}
+  const note = text(req.body?.note, 500)
+  if (!VERIFICATION_STATUSES[status]) fail(400, 'Choose verified, issue or clear.', 'invalid_input')
+  if (status === 'issue' && note.length < 3) fail(400, 'Say what the issue is.', 'note_required')
+  const db = await getDb()
+
+  let key
+  let label
+  if (target === 'collateral') {
+    const items = collateralItems(application.data)
+    const index = Number(req.body?.id)
+    if (!Number.isInteger(index) || !items[index]) fail(404, 'That collateral item isn’t on this application.', 'not_found')
+    key = String(index)
+    label = `collateral item ${index + 1} (${itemLabel(items[index], await getCollateralCatalog())})`
+  } else if (target === 'document') {
+    const id = String(req.body?.id || '')
+    if (!/^[0-9a-f-]{36}$/i.test(id)) fail(404, 'That document isn’t on this application.', 'not_found')
+    const [document] = await db
+      .select({ id: applicationDocuments.id, label: applicationDocuments.label })
+      .from(applicationDocuments)
+      .where(and(eq(applicationDocuments.id, id), eq(applicationDocuments.applicationId, application.id)))
+      .limit(1)
+    if (!document) fail(404, 'That document isn’t on this application.', 'not_found')
+    key = document.id
+    label = `the ${document.label.toLowerCase()}`
+  } else {
+    fail(400, 'Choose a collateral item or a document.', 'invalid_input')
+  }
+
+  const group = target === 'collateral' ? 'collateral' : 'documents'
+  const check = { status, note: note || null, by: viewer.id, byName: viewer.name, at: new Date().toISOString() }
+  // One statement, so two people checking different items at once don't overwrite each other.
+  const value =
+    status === 'clear'
+      ? sql`${applications.verifications} #- ${`{${group},${key}}`}::text[]`
+      : sql`jsonb_set(${applications.verifications} || jsonb_build_object(${group}::text, coalesce(${applications.verifications} -> ${group}, '{}'::jsonb)), ${`{${group},${key}}`}::text[], ${JSON.stringify(check)}::jsonb)`
+  await db.update(applications).set({ verifications: value, updatedAt: new Date() }).where(eq(applications.id, application.id))
+  await addEvent(db, {
+    applicationId: application.id,
+    actor: viewer,
+    type: 'verification',
+    message: `${VERIFICATION_STATUSES[status]} ${label}${note ? `: ${note}` : ''}`,
+    detail: { target, key, status },
+  })
+  await recordAudit({ req, actor: viewer, action: `application.verification_${status}`, entityType: 'application', entityId: application.id, detail: { reference: application.reference, target, key } })
   return loadCase(application.id, viewer)
 }
 
@@ -672,6 +732,7 @@ const previewFacts = async (req, res, { params }) => {
 export const workflowRoutes = [
   ['POST', '/applications/:id/actions', act],
   ['POST', '/applications/:id/documents', addStaffDocument],
+  ['POST', '/applications/:id/verifications', verify],
   ['POST', '/applications/:id/prescreen', rerunPrescreen],
   ['POST', '/applications/:id/figures', setFigures],
   ['GET', '/applications/:id/facts', previewFacts],

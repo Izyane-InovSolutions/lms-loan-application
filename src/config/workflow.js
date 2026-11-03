@@ -449,6 +449,15 @@ export const categoryOf = (analysis, stateId, { infoRequested = false } = {}) =>
 
 const PHASE_PERMISSIONS = { review: 'cases.work', approval: 'cases.decide', closing: 'cases.disburse' }
 
+/** What the workflow made from the settings calls its stages, unless renamed (Settings → Stages labels). */
+export const DEFAULT_STAGE_NAMES = {
+  submitted: 'Pre-screening',
+  in_review: 'Appraisal',
+  pending_approval: 'Underwriting',
+  offer: 'Offer Issuance',
+  booking: 'Loan Booking',
+}
+
 /**
  * The workflow the old settings describe — Settings → Credit workflow (four-eyes), offers
  * (acceptance), the LMS moment, and the stages in each phase — so turning the workflow on
@@ -467,10 +476,12 @@ export const legacyToWorkflow = ({ workflow = {}, offers = {}, lms = {}, stages 
   const fourEyes = workflow.requireSecondApproval !== false
   const requiredToApprove = (stages.checklist || DEFAULT_CHECKLIST).filter((check) => check.requiredToApprove).map((check) => check.key)
 
-  const reviewName = name('in_review')
-  const approvalName = name('pending_approval')
+  // The stages a case moves through, by default: Pre-screening, Appraisal, Underwriting,
+  // Offer Issuance, Loan Booking (Draft, before them, is the unfinished application).
+  const reviewName = name('in_review', DEFAULT_STAGE_NAMES.in_review)
+  const approvalName = name('pending_approval', DEFAULT_STAGE_NAMES.pending_approval)
   const closingStatus = requireAcceptance ? 'accepted' : 'approved'
-  const closingName = requireAcceptance ? name('accepted') : name('approved', 'Approved')
+  const closingName = requireAcceptance ? name('accepted', DEFAULT_STAGE_NAMES.booking) : name('approved', DEFAULT_STAGE_NAMES.booking)
   const readyId = requireAcceptance ? 'accepted' : 'approved'
   const afterDecision = requireAcceptance ? 'approved' : closing[0]?.id || readyId
 
@@ -494,14 +505,14 @@ export const legacyToWorkflow = ({ workflow = {}, offers = {}, lms = {}, stages 
   const states = [
     {
       id: 'submitted',
-      label: name('submitted', 'New'),
+      label: name('submitted', DEFAULT_STAGE_NAMES.submitted),
       type: 'work',
       roles: [],
       products: [],
       askApplicant: true,
       handToLms: lms.syncOn === 'submit',
       legacyStatus: 'submitted',
-      actions: [{ id: 'start_review', label: 'Start review', kind: 'move', to: review[0]?.id || 'in_review', options: { claim: true } }],
+      actions: [{ id: 'start_review', label: `Start ${reviewName.toLowerCase()}`, kind: 'move', to: review[0]?.id || 'in_review', options: { claim: true } }],
     },
     ...review.map((stage, index) => stageState(stage, reviewName, 'in_review', review[index + 1]?.id || 'in_review', PHASE_PERMISSIONS.review)),
     {
@@ -541,7 +552,7 @@ export const legacyToWorkflow = ({ workflow = {}, offers = {}, lms = {}, stages 
         ]
       : []),
     ...(requireAcceptance
-      ? [{ id: 'approved', label: name('approved', 'Offer made'), type: 'offer', roles: [], products: [], legacyStatus: 'approved', offer: { onAccept: closing[0]?.id || readyId }, actions: [] }]
+      ? [{ id: 'approved', label: name('approved', DEFAULT_STAGE_NAMES.offer), type: 'offer', roles: [], products: [], legacyStatus: 'approved', offer: { onAccept: closing[0]?.id || readyId }, actions: [] }]
       : []),
     ...closing.map((stage, index) => stageState(stage, closingName, closingStatus, closing[index + 1]?.id || readyId, PHASE_PERMISSIONS.closing)),
     {

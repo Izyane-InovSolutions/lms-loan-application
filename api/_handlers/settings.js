@@ -25,7 +25,7 @@ import { getZraConfig } from '../_lib/zra/config.js'
 const LEGACY_WORKFLOW_KEYS = ['workflow', 'offers', 'stages', 'lms']
 import { BRAND_NAME_MAX } from '../../src/config/branding.js'
 import { APPLICANT_FORMS, BUILT_IN_PRODUCT_IDS, DOCUMENT_CATALOGUE, PRODUCT_ID_PATTERN, buildProducts, defaultDocuments } from '../../src/config/loanProducts.js'
-import { COLLATERAL_REQUIREMENTS } from '../../src/config/collateral.js'
+import { COLLATERAL_CODE_PATTERN, COLLATERAL_REQUIREMENTS, buildCollateralCatalog } from '../../src/config/collateral.js'
 import { isHexColour, normaliseTheme } from '../../src/config/theme.js'
 
 /*
@@ -96,7 +96,6 @@ const validateProduct = (id, value, current, collateralTypes) => {
   const label = name
   const requirement = Object.keys(COLLATERAL_REQUIREMENTS).includes(value.collateral?.requirement) ? value.collateral.requirement : 'none'
   const known = new Set(collateralTypes.map((type) => type.key))
-  const coverage = value.collateral?.minCoverage
   return {
     ...validatePricing(id, value, label),
     form,
@@ -108,7 +107,8 @@ const validateProduct = (id, value, current, collateralTypes) => {
     collateral: {
       requirement,
       types: (Array.isArray(value.collateral?.types) ? value.collateral.types : []).filter((key, index, list) => known.has(key) && list.indexOf(key) === index),
-      minCoverage: requirement === 'none' || coverage === null || coverage === '' || coverage === undefined ? null : number(coverage, { min: 0.1, max: 10, label: `${label}: minimum collateral cover` }),
+      requiredFrom: requirement === 'amount' ? number(value.collateral?.requiredFrom, { min: 1, label: `${label}: the amount collateral is required from` }) : null,
+      mustCover: ['required', 'amount'].includes(requirement) && Boolean(value.collateral?.mustCover),
     },
     // Added products keep the time they were made, which orders them after the built-in ones.
     ...(builtIn ? {} : { createdAt: current?.createdAt || new Date().toISOString() }),
@@ -117,7 +117,7 @@ const validateProduct = (id, value, current, collateralTypes) => {
 
 const validateProducts = async (value) => {
   const stored = await getSetting('products')
-  const { types } = await getSetting('collateral')
+  const { types } = buildCollateralCatalog(await getSetting('collateral'))
   const products = {}
   for (const [id, entry] of Object.entries(value || {})) {
     if (!BUILT_IN_PRODUCT_IDS.includes(id) && !PRODUCT_ID_PATTERN.test(id)) throw new Error(`"${id}" can’t be a product id: use lower-case letters, numbers and dashes.`)
@@ -127,33 +127,69 @@ const validateProducts = async (value) => {
   return products
 }
 
-/** Whether any application pledged collateral of this type. */
-const collateralTypeInUse = async (key) => {
+/** Whether any application pledged collateral matching this ({ type } or { code }). */
+const collateralInUse = async (match) => {
   const db = await getDb()
   const [row] = await db
     .select({ id: schema.applications.id })
     .from(schema.applications)
-    .where(sql`${schema.applications.data} -> 'collateral' -> 'items' @> ${JSON.stringify([{ type: key }])}::jsonb`)
+    .where(sql`${schema.applications.data} -> 'collateral' -> 'items' @> ${JSON.stringify([match])}::jsonb`)
     .limit(1)
   return Boolean(row)
 }
 
-/** The collateral types. One left out is deleted, unless applications already name it: then it is switched off, so they still read. */
-const validateCollateralTypes = async (value) => {
-  const { types: stored } = await getSetting('collateral')
-  const seen = new Set()
+// A haircut or loan-to-value as a fraction (the screen sends 30% as 0.3); said back in percent.
+const share = (value, label, { min, max }) => {
+  const parsed = Number(value)
+  if (value === '' || value === null || !Number.isFinite(parsed) || parsed < min || parsed > max) throw new Error(`${label} must be from ${Math.round(min * 100)}% to ${Math.round(max * 100)}%.`)
+  return parsed
+}
+
+/**
+ * The collateral types and items. One left out is deleted, unless applications already
+ * name it: then it is switched off, so they still read. A type can't go while items use it.
+ */
+const validateCollateral = async (value) => {
+  const stored = buildCollateralCatalog(await getSetting('collateral'))
+  const typeKeys = new Set()
   const types = (Array.isArray(value?.types) ? value.types : []).slice(0, 40).map((entry) => {
     const key = text(entry?.key, 40)
     if (!/^[a-z][a-z0-9_]{1,39}$/.test(key)) throw new Error(`"${key}" can’t be a collateral type key: use lower-case letters, numbers and underscores.`)
-    if (seen.has(key)) throw new Error(`The collateral type "${key}" is listed twice.`)
-    seen.add(key)
+    if (typeKeys.has(key)) throw new Error(`The collateral type "${key}" is listed twice.`)
+    typeKeys.add(key)
     const label = text(entry.label, 60)
     if (label.length < 2) throw new Error('Every collateral type needs a name.')
-    return { key, label, description: text(entry.description, 200), retired: Boolean(entry.retired) }
+    return {
+      key,
+      label,
+      haircut: share(entry.haircut, `${label}: the haircut`, { min: 0, max: 0.99 }),
+      ltv: share(entry.ltv, `${label}: the loan-to-value ratio`, { min: 0.01, max: 1 }),
+      retired: Boolean(entry.retired),
+    }
   })
-  for (const type of stored) if (!seen.has(type.key) && (await collateralTypeInUse(type.key))) types.push({ ...type, retired: true })
+  for (const type of stored.types) {
+    if (typeKeys.has(type.key) || !(await collateralInUse({ type: type.key }))) continue
+    types.push({ ...type, retired: true })
+    typeKeys.add(type.key)
+  }
   if (!types.some((type) => !type.retired)) throw new Error('Keep at least one collateral type active.')
-  return { types }
+
+  const codes = new Set()
+  const items = (Array.isArray(value?.items) ? value.items : stored.items).slice(0, 200).map((entry) => {
+    const code = text(entry?.code, 20).toUpperCase()
+    if (!COLLATERAL_CODE_PATTERN.test(code)) throw new Error(`"${code}" can’t be a collateral code: use 2 to 20 capital letters, numbers and dashes.`)
+    if (codes.has(code)) throw new Error(`The collateral code "${code}" is used twice.`)
+    codes.add(code)
+    const name = text(entry.name, 80)
+    if (name.length < 2) throw new Error(`Collateral ${code} needs a name.`)
+    if (!typeKeys.has(entry.type)) {
+      const deleted = stored.types.find((type) => type.key === entry.type)
+      throw new Error(deleted ? `${code} still uses the type “${deleted.label}”. Move it to another type, or delete it, first.` : `Choose a collateral type for ${code}.`)
+    }
+    return { code, type: entry.type, name, retired: Boolean(entry.retired) }
+  })
+  for (const item of stored.items) if (!codes.has(item.code) && typeKeys.has(item.type) && (await collateralInUse({ code: item.code }))) items.push({ ...item, retired: true })
+  return { types, items }
 }
 
 // A single leading slash: "//host/…" is a protocol-relative URL and would leave the LMS host.
@@ -313,6 +349,7 @@ const VALIDATORS = {
   },
   workflow: (value) => ({
     requireSecondApproval: Boolean(value.requireSecondApproval),
+    requireLegalReview: value.requireLegalReview !== false,
     slaDays: number(value.slaDays, { min: 1, max: 60, integer: true, label: 'The target days' }),
   }),
   offers: (value) => ({
@@ -322,7 +359,7 @@ const VALIDATORS = {
   }),
   prescreen: (value) => ({ autoDecline: Boolean(value.autoDecline) }),
   products: validateProducts,
-  collateral: validateCollateralTypes,
+  collateral: validateCollateral,
   retention: (value) => ({
     declinedDays: optionalDays(value.declinedDays, 'Declined applications'),
     withdrawnDays: optionalDays(value.withdrawnDays, 'Withdrawn applications'),

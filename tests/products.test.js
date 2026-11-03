@@ -7,7 +7,7 @@ vi.mock('../api/_lib/kv.js', () => ({ default: kv }))
 const { default: handler } = await import('../api/v1/[...path].js')
 const { putBlob } = await import('../api/_lib/blob.js')
 const { buildProducts, productDefaults } = await import('../src/config/loanProducts.js')
-const { collateralErrors } = await import('../src/config/collateral.js')
+const { collateralErrors, collateralRequirement } = await import('../src/config/collateral.js')
 const { describeSlot, requiredSlots } = await import('../src/config/applications.js')
 
 const prepareDraft = draftPreparer(kv, putBlob)
@@ -21,7 +21,7 @@ const waitFor = async (check, attempts = 50) => {
   throw new Error('Timed out waiting')
 }
 
-// A personal-form product that asks for an NRC and a letter of its own, and wants a vehicle worth 120% of the loan.
+// A personal-form product that asks for an NRC and a letter of its own, and wants a vehicle whose lending value covers the loan.
 const civilServant = {
   ...productDefaults('personal'),
   name: 'Civil Servant Loan',
@@ -32,7 +32,7 @@ const civilServant = {
     { slot: 'custom.employer-letter', label: 'Employer confirmation letter', description: 'A letter from your ministry confirming your post.', required: true },
     { slot: 'payslips', label: 'Latest payslip', required: false },
   ],
-  collateral: { requirement: 'required', types: ['motor_vehicle'], minCoverage: 1.2 },
+  collateral: { requirement: 'required', types: ['motor_vehicle'], mustCover: true },
 }
 
 describe('product and collateral rules', () => {
@@ -47,11 +47,24 @@ describe('product and collateral rules', () => {
 
   it('checks pledged collateral against the product', () => {
     const product = { collateral: civilServant.collateral }
+    const pledge = (code, value) => ({ collateral: { items: [{ code, description: 'Toyota Hilux', value }] } })
     expect(collateralErrors(product, {}, 10000).collateral).toMatch(/needs collateral/)
-    expect(collateralErrors(product, { collateral: { items: [{ type: 'stock', description: 'Shop stock', value: 20000 }] } }, 10000)['collateral.items.0.type']).toBeTruthy()
-    expect(collateralErrors(product, { collateral: { items: [{ type: 'motor_vehicle', description: 'Toyota Hilux', value: 11000 }] } }, 10000).collateral).toMatch(/K12,000/)
-    expect(collateralErrors(product, { collateral: { items: [{ type: 'motor_vehicle', description: 'Toyota Hilux', value: 12000 }] } }, 10000)).toEqual({})
+    // A stock item isn't of a type this product accepts.
+    expect(collateralErrors(product, pledge('ST-INV', 20000), 10000)['collateral.items.0.code']).toBeTruthy()
+    // A vehicle: 30% haircut, 70% LTV, so K20,000 lends K9,800.
+    expect(collateralErrors(product, pledge('MV-CAR', 20000), 10000).collateral).toMatch(/K9,800/)
+    expect(collateralErrors(product, pledge('MV-CAR', 21000), 10000)).toEqual({})
     expect(collateralErrors({ collateral: { requirement: 'none' } }, {}, 10000)).toEqual({})
+  })
+
+  it('asks for collateral from an amount up when the product says so', () => {
+    const product = { collateral: { requirement: 'amount', requiredFrom: 50000, types: [] } }
+    expect(collateralRequirement(product, 49999)).toBe('none')
+    expect(collateralRequirement(product, 50000)).toBe('required')
+    expect(collateralErrors(product, {}, 10000)).toEqual({})
+    expect(collateralErrors(product, {}, 60000).collateral).toMatch(/needs collateral/)
+    // Rules saved with a minimum cover read as "must cover the loan".
+    expect(buildProducts({ personal: { collateral: { requirement: 'required', types: [], minCoverage: 1.2 } } })[0].collateral).toMatchObject({ mustCover: true, requiredFrom: null })
   })
 })
 
@@ -68,11 +81,24 @@ describe('loan products in the workspace', () => {
     expect((await admin.put('/settings/products', { 'civil-servant': { ...civilServant, documents: [{ slot: 'pacraCertificate', label: 'PACRA' }] } })).body.message).toMatch(/unknown document/)
     expect((await admin.put('/settings/products', { personal: { ...productDefaults('personal'), name: 'Personal Loan', enabled: false }, business: { ...productDefaults('business'), name: 'Business Loan', enabled: false } })).body.message).toMatch(/at least one/)
 
-    // A type left out that no application uses is deleted.
-    const saved = await admin.put('/settings/collateral', { types: [{ key: 'motor_vehicle', label: 'Motor vehicle', description: '' }, { key: 'livestock', label: 'Livestock', description: 'Cattle or goats' }] })
+    // A type left out that no application uses is deleted, unless an item still uses it.
+    const types = [
+      { key: 'motor_vehicle', label: 'Motor vehicle', haircut: 0.3, ltv: 0.7 },
+      { key: 'livestock', label: 'Livestock', haircut: 0.2, ltv: 0.5 },
+    ]
+    const items = [
+      { code: 'mv-car', type: 'motor_vehicle', name: 'Passenger vehicle' },
+      { code: 'LS-CAT', type: 'livestock', name: 'Cattle' },
+    ]
+    expect((await admin.put('/settings/collateral', { types })).body.message).toMatch(/LB-RES still uses the type/)
+    expect((await admin.put('/settings/collateral', { types: [{ ...types[0], haircut: 1.5 }], items: items.slice(0, 1) })).body.message).toMatch(/haircut must be from 0% to 99%/)
+    expect((await admin.put('/settings/collateral', { types, items: [...items, { code: 'LS-CAT', type: 'livestock', name: 'Goats' }] })).body.message).toMatch(/used twice/)
+    const saved = await admin.put('/settings/collateral', { types, items })
     expect(saved.status).toBe(200)
     expect(saved.body.collateral.types.map((type) => type.key)).toEqual(['motor_vehicle', 'livestock'])
-    expect((await admin.put('/settings/collateral', { types: [] })).body.message).toMatch(/at least one/)
+    expect(saved.body.collateral.items.map((item) => item.code)).toEqual(['MV-CAR', 'LS-CAT'])
+    expect((await admin.put('/settings/collateral', { types: [], items: [] })).body.message).toMatch(/at least one/)
+    expect((await admin.put('/settings/products', { 'civil-servant': { ...civilServant, collateral: { requirement: 'amount', types: [] } } })).body.message).toMatch(/amount collateral is required from/)
   })
 
   it('offers an added product, files only its documents and enforces its collateral', async () => {
@@ -98,11 +124,11 @@ describe('loan products in the workspace', () => {
     await kv.set('draft:civil@example.com', draft)
     body.data.documents.custom = { 'employer-letter': { __draftFile__: path } }
 
-    // Collateral: required, of an accepted type, worth 120% of the loan.
+    // Collateral: required, an item of an accepted type, lending at least the loan (vehicle: 30% haircut, 70% LTV).
     expect((await submit()).body.code).toBe('invalid_collateral')
-    body.data.collateral = { items: [{ type: 'motor_vehicle', description: 'Toyota Corolla ABC 1234', value: 9000 }] }
-    expect((await submit()).body.message).toMatch(/K12,000/)
-    body.data.collateral.items[0].value = 15000
+    body.data.collateral = { items: [{ code: 'MV-CAR', description: 'Toyota Corolla ABC 1234', value: 9000 }] }
+    expect((await submit()).body.message).toMatch(/K4,410/)
+    body.data.collateral.items[0].value = 25000
 
     // A product that's off, or one used with the wrong form, can't be applied for.
     expect((await submit({ loanType: 'business' })).body.code).toBe('product_unavailable')
@@ -118,13 +144,28 @@ describe('loan products in the workspace', () => {
     expect(detail.documents.map((document) => document.slot).sort()).toEqual(['custom.employer-letter', 'nrcCopy', 'payslips'])
     expect(detail.documents.find((document) => document.slot === 'custom.employer-letter')).toMatchObject({ docType: 'custom', label: 'Employer confirmation letter' })
     const facts = (await waitFor(async () => (await officer.get(`/applications/${response.body.id}`)).body.prescreen)).facts
-    expect(facts.collateral_value).toBe(15000)
-    expect(facts.collateral_cover).toBe(1.5)
+    expect(facts.collateral_value).toBe(25000)
+    expect(facts.collateral_cover).toBe(2.5)
+    expect(facts.collateral_lending_value).toBe(12250)
+    expect(facts.collateral_lending_cover).toBe(1.225)
+    // Filed with its item's name and today's haircut and LTV, so later changes don't revalue it.
+    expect(detail.application.data.collateral.items[0]).toMatchObject({ code: 'MV-CAR', type: 'motor_vehicle', name: 'Passenger vehicle', haircut: 0.3, ltv: 0.7, value: 25000 })
 
-    // Now an application names it, deleting the type only switches it off.
-    const kept = await admin.put('/settings/collateral', { types: [{ key: 'livestock', label: 'Livestock', description: '' }] })
+    // Now an application names them, deleting the type and its item only switches them off.
+    const kept = await admin.put('/settings/collateral', { types: [{ key: 'livestock', label: 'Livestock', haircut: 0.2, ltv: 0.5 }], items: [{ code: 'LS-CAT', type: 'livestock', name: 'Cattle' }] })
+    expect(kept.status).toBe(200)
     expect(kept.body.collateral.types.find((type) => type.key === 'motor_vehicle')).toMatchObject({ retired: true })
-    await admin.put('/settings/collateral', { types: [{ key: 'motor_vehicle', label: 'Motor vehicle', description: '' }, { key: 'livestock', label: 'Livestock', description: '' }] })
+    expect(kept.body.collateral.items.find((item) => item.code === 'MV-CAR')).toMatchObject({ retired: true })
+    await admin.put('/settings/collateral', {
+      types: [
+        { key: 'motor_vehicle', label: 'Motor vehicle', haircut: 0.3, ltv: 0.7 },
+        { key: 'livestock', label: 'Livestock', haircut: 0.2, ltv: 0.5 },
+      ],
+      items: [
+        { code: 'MV-CAR', type: 'motor_vehicle', name: 'Passenger vehicle' },
+        { code: 'LS-CAT', type: 'livestock', name: 'Cattle' },
+      ],
+    })
 
     const list = (await officer.get('/applications?product=civil-servant&status=')).body
     expect(list.applications.map((row) => row.id)).toEqual([response.body.id])
@@ -170,5 +211,23 @@ describe('applicants who aren’t Zambian', () => {
 
     expect(positionsFor('Partnership')).toEqual(['Partner', 'Manager', 'Other'])
     expect(positionLabel({ applicantPosition: 'Other', applicantPositionOther: 'Finance manager' })).toBe('Finance manager')
+  })
+})
+
+describe('why a rule couldn’t be checked', () => {
+  it('says why, what to do, and which button does it, and still reads as one sentence', async () => {
+    const { factReasonDetails, factReasons } = await import('../api/_lib/prescreen/reasons.js')
+    const application = { loanType: 'personal', data: { employmentInfo: { occupation: 'Employed' } }, submittedAt: new Date().toISOString() }
+    const statement = { docType: 'bankStatements', aiAnalysis: { matchesExpectedType: false, detectedType: 'invoice' } }
+    const facts = { average_monthly_credits: null, instalment_to_credits: null, net_monthly_pay: null, debt_to_income: null }
+    const details = factReasonDetails(application, [statement], facts, { aiOn: true, distance: { why: 'The address couldn’t be found.', fix: 'Check the address with the applicant.', action: 'ask_applicant' } })
+
+    expect(details.average_monthly_credits).toMatchObject({ why: expect.stringContaining('(it looks like an invoice)'), action: 'ask_applicant' })
+    expect(details.average_monthly_credits.fix).toMatch(/^Ask the applicant for the right document/)
+    // A ratio carries the same fix as the figure under it.
+    expect(details.instalment_to_credits).toMatchObject({ why: expect.stringMatching(/^The instalment can’t be compared/), action: 'ask_applicant' })
+    expect(details.net_monthly_pay).toMatchObject({ why: 'No payslip was uploaded.', action: 'ask_applicant' })
+    expect(details.location_distance_km).toMatchObject({ fix: 'Check the address with the applicant.', action: 'ask_applicant' })
+    expect(factReasons(application, [statement], facts, { aiOn: true }).average_monthly_credits).toMatch(/invoice\)\. Ask the applicant/)
   })
 })

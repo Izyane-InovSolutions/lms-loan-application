@@ -3,7 +3,7 @@
  * steps so an officer reads it in the order the applicant filled it in.
  */
 
-import { collateralItems, collateralValue, typeLabel } from '@/config/collateral'
+import { collateralItems, collateralLendingValue, collateralValue, describeTerms, itemLabel, lendingValue, pledgeTerms } from '@/config/collateral'
 import { employerField, positionLabel } from '@/config/applicantRules'
 import { formatKwacha } from '@/config/loanProducts'
 
@@ -88,23 +88,34 @@ export const businessSections = (data) => {
   ]
 }
 
-/** What was pledged, one row per item, then the total and how it compares with the loan. */
-export const collateralSection = (application, types) => {
+/** What was pledged, one row per item with what can be lent against it, then the totals and how they compare with the loan. */
+export const collateralSection = (application, catalog) => {
   const items = collateralItems(application.data)
   if (!items.length) return []
   const total = collateralValue(items)
+  const lending = collateralLendingValue(items, catalog)
+  const ofLoan = (value) => (application.amount ? ` (${Math.round((value / application.amount) * 100)}% of the loan)` : '')
   return [
     {
       title: 'Collateral',
       rows: [
-        ...items.map((item) => [typeLabel(item.type, types), `${String(item.description || '').trim()}${Number(item.value) > 0 ? `, est. ${formatKwacha(item.value)}` : ''}`]),
-        ['Total pledged', `${formatKwacha(total)}${application.amount ? ` (${Math.round((total / application.amount) * 100)}% of the loan)` : ''}`],
+        ...items.map((item) => [
+          `${itemLabel(item, catalog)}${item.code ? ` · ${item.code}` : ''}`,
+          [
+            String(item.description || '').trim(),
+            Number(item.value) > 0 ? `est. ${formatKwacha(item.value)}, lending value ${formatKwacha(lendingValue(item, catalog))} (${describeTerms(pledgeTerms(item, catalog))})` : '',
+          ]
+            .filter(Boolean)
+            .join(', '),
+        ]),
+        ['Total pledged', `${formatKwacha(total)}${ofLoan(total)}`],
+        ['Total lending value', `${formatKwacha(lending)}${ofLoan(lending)}`],
       ],
     },
   ]
 }
 
-export const sectionsFor = (application, types) => [
+export const sectionsFor = (application, catalog) => [
   ...(application.loanType === 'personal' ? personalSections(application.data) : businessSections(application.data)),
-  ...collateralSection(application, types),
+  ...collateralSection(application, catalog),
 ]

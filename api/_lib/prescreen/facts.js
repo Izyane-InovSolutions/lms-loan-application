@@ -1,5 +1,5 @@
 import { findFormMismatches } from '../../../src/utils/documentChecks.js'
-import { collateralItems, collateralValue } from '../../../src/config/collateral.js'
+import { collateralItems, collateralLendingValue, collateralValue } from '../../../src/config/collateral.js'
 
 /*
  * The numbers the credit rules test, computed here from the application and the server's
@@ -104,6 +104,9 @@ export const computeFacts = (application, documents, extras = {}) => {
   const pledged = collateralItems(data)
   facts.collateral_value = pledged.length ? collateralValue(pledged) : null
   facts.collateral_cover = ratio(facts.collateral_value, application.amount)
+  // What can be lent against it: after each item's haircut and loan-to-value, stamped on submission.
+  facts.collateral_lending_value = pledged.length ? collateralLendingValue(pledged) : null
+  facts.collateral_lending_cover = ratio(facts.collateral_lending_value, application.amount)
 
   const analysed = documents.filter((document) => document.aiAnalysis)
   facts.documents_wrong_type = analysed.filter((document) => document.aiAnalysis.matchesExpectedType === false).length
