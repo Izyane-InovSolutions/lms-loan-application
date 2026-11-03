@@ -556,6 +556,9 @@ export function WizardStep(props) {
     const noneFit = ready && !results.some((result) => result.status === 'eligible')
     const shared = results.length > 1 && results.every((result) => result.reasons.length) ? results[0].reasons.filter((reason) => results.every((result) => result.reasons.includes(reason))) : []
     const problems = ready ? match.documentProblems || [] : []
+    // Only the loans open to them are listed: those they qualify for, those held back only by a
+    // document they may continue past, and those still waiting on their income figure.
+    const open = results.filter((result) => result.status !== 'ineligible' || result.canContinue)
     const setFigure = (field) => (event) => setLoanData((prev) => ({ ...prev, [field]: event.target.value.replace(/[^0-9]/g, '') }))
     return (
       <>
@@ -629,8 +632,9 @@ export function WizardStep(props) {
                     ) : null}
                   </div>
                 ) : null}
-                <ul className="divide-y rounded-md border">
-                  {match.products.map((result) => {
+                {open.length ? null : <p className="text-sm text-muted-foreground">None of our loans are open to you on these figures yet.</p>}
+                <ul className={open.length ? 'divide-y rounded-md border' : 'hidden'}>
+                  {open.map((result) => {
                     const chosen = !choosingProduct && result.id === product.id
                     return (
                       <li key={result.id} className={chosen ? 'bg-primary/5 p-3' : 'p-3'}>

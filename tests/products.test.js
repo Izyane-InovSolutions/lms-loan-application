@@ -6,7 +6,7 @@ vi.mock('../api/_lib/kv.js', () => ({ default: kv }))
 
 const { default: handler } = await import('../api/v1/[...path].js')
 const { putBlob } = await import('../api/_lib/blob.js')
-const { STANDARD_PRODUCTS, buildProducts, productDefaults } = await import('../src/config/loanProducts.js')
+const { STANDARD_PRODUCTS, buildLoanTypes, buildProducts, productDefaults, subcategoryOf } = await import('../src/config/loanProducts.js')
 const { affordabilityError, eligibilityFor, productTags } = await import('../src/config/eligibility.js')
 const { collateralErrors, collateralRequirement } = await import('../src/config/collateral.js')
 const { describeSlot, requiredSlots } = await import('../src/config/applications.js')
@@ -142,7 +142,7 @@ describe('loan products in the workspace', () => {
     // A product can only join a type on its own form.
     const microloan = buildProducts().find((product) => product.id === 'business-microloan')
     const { steps, requiredDocuments, ...editable } = microloan
-    expect((await admin.put('/settings/products', { 'business-microloan': { ...editable, loanType: 'personal' } })).body.message).toMatch(/only belong to a loan type that uses that form/)
+    expect((await admin.put('/settings/products', { 'business-microloan': { ...editable, loanType: 'personal' } })).body.message).toMatch(/only belong to a loan category that uses that form/)
     const moved = await admin.put('/settings/products', { 'business-microloan': { ...editable, loanType: 'agricultural' } })
     expect(moved.body.products['business-microloan'].loanType).toBe('agricultural')
 
@@ -158,6 +158,32 @@ describe('loan products in the workspace', () => {
     expect(emptied.status).toBe(200)
     expect(emptied.body.loanTypes.types).toHaveLength(2)
     expect((await admin.put('/settings/loanTypes', { types: [] })).body.message).toMatch(/at least one/)
+  })
+
+  it('splits each loan category into sub categories, which products belong to', async () => {
+    const types = (await admin.get('/settings')).body.settings.loanTypes.types
+    expect(buildLoanTypes({ types }).find((type) => type.key === 'personal').subcategories.map((sub) => sub.key)).toEqual(['asset', 'non-asset'])
+    const loanTypes = buildLoanTypes({ types })
+    const all = buildProducts()
+    expect(subcategoryOf(all.find((product) => product.id === 'vehicle-loan'), loanTypes).key).toBe('asset')
+    expect(subcategoryOf(all.find((product) => product.id === 'medical-loan'), loanTypes).key).toBe('non-asset')
+    expect(subcategoryOf(all.find((product) => product.id === 'commercial-property-loan'), loanTypes).key).toBe('asset-finance')
+
+    // A product moves to another sub category of its category, never one it doesn't have.
+    const { steps, requiredDocuments, ...medical } = all.find((product) => product.id === 'medical-loan')
+    expect((await admin.put('/settings/products', { 'medical-loan': { ...medical, subcategory: 'working-capital' } })).body.message).toMatch(/sub categories of Personal loans/)
+    const salary = types.map((type) => (type.key === 'personal' ? { ...type, subcategories: [...type.subcategories, { key: 'salary-advance', label: 'Salary advance', description: '' }] } : type))
+    expect((await admin.put('/settings/loanTypes', { types: salary })).status).toBe(200)
+    expect((await admin.put('/settings/products', { 'medical-loan': { ...medical, subcategory: 'salary-advance' } })).body.products['medical-loan'].subcategory).toBe('salary-advance')
+
+    // A sub category with products stays; every category keeps one.
+    expect((await admin.put('/settings/loanTypes', { types })).body.message).toMatch(/“Salary advance” still has 1 product/)
+    await admin.put('/settings/products', { 'medical-loan': { ...medical, subcategory: 'non-asset' } })
+    const none = types.map((type) => (type.key === 'business' ? { ...type, subcategories: [] } : type))
+    expect((await admin.put('/settings/loanTypes', { types: none })).body.message).toMatch(/keep at least one sub category/)
+    expect((await admin.put('/settings/loanTypes', { types })).status).toBe(200)
+    // Applicants get the sub categories with the categories.
+    expect((await applicant.get('/products')).body.loanTypes[0].subcategories.map((sub) => sub.label)).toEqual(['Asset loans', 'Non-asset loans'])
   })
 
   it('offers an added product, files only its documents and enforces its collateral', async () => {
