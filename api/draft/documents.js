@@ -4,6 +4,8 @@ import kv from '../_lib/kv.js'
 import { indexDraft } from '../_lib/drafts.js'
 import { putBlob } from '../_lib/blob.js'
 import { checkUpload } from '../_lib/fileChecks.js'
+import { slotFromDraftPath } from '../../src/config/applications.js'
+import { acceptsPhotos } from '../../src/utils/documentSlots.js'
 
 const DRAFT_TTL_SECONDS = 7 * 24 * 60 * 60
 // Vercel caps a function's request body at 4.5 MB and rejects anything larger before
@@ -57,10 +59,13 @@ export default async function handler(req, res) {
   const buffer = await fs.readFile(file.filepath)
   await fs.unlink(file.filepath).catch(() => {})
 
-  // The contents decide what the file is: photos are allowed only in photo slots.
+  // The contents decide what the file is: photos are allowed only where the form offers
+  // them (passport photos, collateral proofs and a product's own documents, documentSlots.js).
+  const slot = slotFromDraftPath(fieldKey) || ''
+  const photosAllowed = /passportPhoto$/.test(fieldKey) || acceptsPhotos(slot)
   let contentType
   try {
-    contentType = await checkUpload(buffer, { allowed: /passportPhoto$/.test(fieldKey) ? undefined : ['application/pdf'] })
+    contentType = await checkUpload(buffer, { allowed: photosAllowed ? undefined : ['application/pdf'] })
   } catch (error) {
     return res.status(error.status || 400).json({ code: error.code, message: error.message })
   }

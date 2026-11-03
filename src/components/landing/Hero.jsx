@@ -5,7 +5,8 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { DRAFT_RETENTION_DAYS, formatKwacha, priceLoan } from '@/config/loanProducts'
-import { useProduct, useProducts } from '@/hooks/useProducts'
+import { useProduct, useProductCatalog } from '@/hooks/useProducts'
+import { offeredLoanTypes } from '@/components/landing/LoanProducts'
 import heroImage from '@/assets/hero1.png'
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -16,11 +17,12 @@ const ASSURANCES = [
   { icon: ScanFace, label: 'Identity check runs on your device' },
 ]
 
-export function Hero({ onApply, onCheckStatus }) {
+export function Hero({ onChooseType, onCheckStatus }) {
   const personal = useProduct('personal')
   const business = useProduct('business')
-  // The first two products the workspace offers get a button each (the built-in ones, unless switched off).
-  const featured = useProducts().slice(0, 2)
+  // Choosing who borrows opens the loan finder on that type (LoanProducts): a button for each of the first two offered.
+  const catalog = useProductCatalog()
+  const typeButtons = offeredLoanTypes(catalog.loanTypes, catalog.products).slice(0, 2)
   const example = personal.exampleAmount
   const examplePrice = priceLoan(example, personal.defaultTenure, personal)
 
@@ -61,9 +63,9 @@ export function Hero({ onApply, onCheckStatus }) {
           </p>
 
           <div className="mt-9 flex flex-col gap-3 sm:flex-row">
-            {featured.map((product, index) => (
-              <Button key={product.id} size="lg" variant={index === 0 ? 'default' : 'outline'} className="flex-1" onClick={() => onApply(product.id)}>
-                Apply for a {product.name.toLowerCase()}
+            {typeButtons.map((type, index) => (
+              <Button key={type.key} size="lg" variant={index === 0 ? 'default' : 'outline'} className="flex-1" onClick={() => onChooseType(type.key)}>
+                Find {type.label.toLowerCase()}
                 {index === 0 ? <ArrowRight /> : null}
               </Button>
             ))}

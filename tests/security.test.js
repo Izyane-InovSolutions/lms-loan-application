@@ -36,7 +36,7 @@ const personal = (email, firstName = 'Mutale') => ({
   currentStep: 1,
   personalData: { personalInfo: { firstName, surname: 'Phiri', email } },
   businessData: {},
-  loanData: { amount: 8000, tenure: 6 },
+  loanData: { amount: 8000, tenure: 6, income: 20000 },
 })
 const bearer = (token) => ({ authorization: `Bearer ${token}` })
 const lastCode = (email) => sentCodes.filter((entry) => entry.email === email).at(-1)?.code

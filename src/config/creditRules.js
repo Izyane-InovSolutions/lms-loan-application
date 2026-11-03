@@ -36,8 +36,11 @@ export const FACTS = {
   location_distance_km: { label: 'Distance from stated address', unit: 'km', loanTypes: ['personal', 'business'] },
   address_found: { label: 'Home address found on the map', unit: 'boolean', yes: 'Home address was found on the map', no: 'Home address wasn’t found on the map', loanTypes: ['personal', 'business'] },
   crb_score: { label: 'Credit bureau score', unit: 'score', loanTypes: ['personal', 'business'] },
+  stated_income: { label: 'Income stated when qualifying (net pay or monthly revenue)', unit: 'kwacha', loanTypes: ['personal', 'business'] },
+  income_vs_stated: { label: 'Income found ÷ income stated (payslip net pay, or bank credits for a business)', unit: 'ratio', loanTypes: ['personal', 'business'] },
   collateral_value: { label: 'Collateral pledged (estimated value)', unit: 'kwacha', loanTypes: ['personal', 'business'] },
   collateral_cover: { label: 'Collateral ÷ loan amount', unit: 'ratio', loanTypes: ['personal', 'business'] },
+  collateral_unvalued: { label: 'Collateral items not yet valued', unit: 'count', loanTypes: ['personal', 'business'] },
   collateral_lending_value: { label: 'Collateral lending value (after haircut and LTV)', unit: 'kwacha', loanTypes: ['personal', 'business'] },
   collateral_lending_cover: { label: 'Collateral lending value ÷ loan amount', unit: 'ratio', loanTypes: ['personal', 'business'] },
 }
@@ -52,11 +55,21 @@ export const OPERATORS = {
   missing: { label: 'is unknown', symbol: '?', noValue: true },
 }
 
+/**
+ * What a rule does when it fires. The first three judge the case (the credit outcome); "not
+ * eligible" decides which loans the applicant qualifies for instead: when it fires, the
+ * products it names (`products`, by id) are ruled out — on the website's loan finder, for
+ * "we'll match you", and on submission (src/config/productEligibility.js) — with its message,
+ * which the applicant reads. It never changes the credit outcome.
+ */
 export const OUTCOMES = {
   decline: { label: 'Decline', rank: 3 },
   refer: { label: 'Refer to officer', rank: 2 },
   warn: { label: 'Warn', rank: 1 },
+  not_eligible: { label: 'Not eligible for…', rank: 0, eligibility: true },
 }
+
+export const isEligibilityRule = (entry) => Boolean(OUTCOMES[entry?.outcome]?.eligibility)
 
 let seed = 0
 const rule = (fact, operator, value, outcome, message, extra = {}) => ({
@@ -75,10 +88,30 @@ const rule = (fact, operator, value, outcome, message, extra = {}) => ({
  * The starting policy. The thresholds are placeholders to be replaced with the lender's
  * own figures in Rules — they are deliberately conservative (refer rather than decline).
  */
+// Net pay bands: which personal loans a salary qualifies for. The applicant reads the message.
+const notEligible = (fact, below, products, message, extra = {}) => rule(fact, 'lt', below, 'not_eligible', message, { products, ...extra })
+const NET_PAY_BANDS = [
+  notEligible('net_monthly_pay', 1500, ['medical-loan'], 'Needs net pay of at least K1,500 a month.'),
+  notEligible('net_monthly_pay', 2000, ['unsecured-personal-loan', 'education-loan'], 'Needs net pay of at least K2,000 a month.'),
+  notEligible('net_monthly_pay', 3000, ['debt-consolidation-loan', 'personal-line-of-credit'], 'Needs net pay of at least K3,000 a month.'),
+  notEligible('net_monthly_pay', 5000, ['vehicle-loan'], 'Needs net pay of at least K5,000 a month.'),
+  notEligible('net_monthly_pay', 10000, ['home-loan'], 'Needs net pay of at least K10,000 a month.'),
+]
+// And which business loans a business's monthly revenue (average monthly bank credits) qualifies for.
+const business = { loanTypes: ['business'] }
+const REVENUE_BANDS = [
+  notEligible('average_monthly_credits', 2000, ['business-microloan'], 'Needs monthly revenue of at least K2,000.', business),
+  notEligible('average_monthly_credits', 20000, ['working-capital-loan'], 'Needs monthly revenue of at least K20,000.', business),
+  notEligible('average_monthly_credits', 30000, ['business-line-of-credit', 'inventory-invoice-finance'], 'Needs monthly revenue of at least K30,000.', business),
+  notEligible('average_monthly_credits', 50000, ['business-term-loan', 'asset-finance-loan'], 'Needs monthly revenue of at least K50,000.', business),
+  notEligible('average_monthly_credits', 100000, ['commercial-property-loan'], 'Needs monthly revenue of at least K100,000.', business),
+]
+
 export const DEFAULT_RULES = [
   rule('debt_to_income', 'gt', 0.4, 'refer', 'The instalment is more than 40% of net pay.'),
   rule('net_monthly_pay', 'missing', null, 'refer', 'Net pay could not be read from the payslips, so affordability is unverified.'),
   rule('instalment_to_credits', 'gt', 0.5, 'warn', 'The instalment is more than half of average monthly bank credits.'),
+  rule('income_vs_stated', 'lt', 0.9, 'refer', 'The documents show at least 10% less income than the applicant stated when they qualified.'),
   rule('applicant_age', 'lt', 18, 'decline', 'The applicant is under 18.'),
   rule('age_at_maturity', 'gt', 65, 'refer', 'The loan runs past the usual retirement age.'),
   rule('business_age_months', 'lt', 12, 'refer', 'The business has traded for less than a year.'),
@@ -93,6 +126,8 @@ export const DEFAULT_RULES = [
   rule('location_distance_km', 'gt', 50, 'warn', 'The applicant was more than 50 km from their stated address.'),
   rule('address_found', 'eq', false, 'refer', 'The home address the applicant typed couldn’t be found on the map. Check it with them.'),
   rule('crb_score', 'lt', 500, 'refer', 'The credit bureau score is below 500.', { enabled: false }),
+  ...NET_PAY_BANDS,
+  ...REVENUE_BANDS,
 ]
 
 const compare = (operator, actual, expected) => {
@@ -122,7 +157,8 @@ const compare = (operator, actual, expected) => {
  */
 export const evaluateRules = (rules, facts, loanType) => {
   const results = (rules || [])
-    .filter((entry) => entry.enabled && (!entry.loanTypes?.length || entry.loanTypes.includes(loanType)))
+    // Eligibility rules decide which loans the applicant may have, not how the case is judged.
+    .filter((entry) => entry.enabled && !isEligibilityRule(entry) && (!entry.loanTypes?.length || entry.loanTypes.includes(loanType)))
     .map((entry) => {
       const actual = facts[entry.fact]
       const unknown = actual === null || actual === undefined || Number.isNaN(actual)
@@ -307,12 +343,17 @@ export const validatePolicies = (policies) => {
           if (!Number.isFinite(value)) throw new Error(`${ruleWhere}: enter a number to compare with.`)
         }
       }
+      const eligibility = isEligibilityRule(entry)
       const message = String(entry.message || '').trim().slice(0, 300)
-      if (!message) throw new Error(`${ruleWhere}: say what the concern is, for the officer.`)
+      if (!message) throw new Error(eligibility ? `${ruleWhere}: say what the applicant needs, for when they don’t qualify.` : `${ruleWhere}: say what the concern is, for the officer.`)
+      // Which loans it rules out: one or more product ids.
+      const products = eligibility ? [...new Set((Array.isArray(entry.products) ? entry.products : []).map(String).filter((key) => /^[a-z][a-z0-9-]{1,39}$/.test(key)))].slice(0, 50) : null
+      if (eligibility && !products.length) throw new Error(`${ruleWhere}: choose the loans it rules out.`)
+      if (eligibility && OPERATORS[entry.operator].noValue) throw new Error(`${ruleWhere}: a figure that isn’t known can’t rule a loan out; compare it with a value.`)
       let ruleId = String(entry.id || '').slice(0, 40) || `${id}r${ruleIndex + 1}`
       while (ruleIds.has(ruleId)) ruleId = `${ruleId}x`
       ruleIds.add(ruleId)
-      return { id: ruleId, fact: entry.fact, operator: entry.operator, value, outcome: entry.outcome, message, enabled: entry.enabled !== false }
+      return { id: ruleId, fact: entry.fact, operator: entry.operator, value, outcome: entry.outcome, message, ...(eligibility ? { products } : {}), enabled: entry.enabled !== false }
     })
     return { id, name, product, enabled: policy.enabled !== false, rules }
   })

@@ -121,7 +121,18 @@ export const channelLabel = (channel) => CHANNELS[channel] || roleLabel(channel)
 export const DOCUMENT_SLOTS = Object.fromEntries(Object.keys(DOCUMENT_CATALOGUE).map((form) => [form, defaultDocuments(form)]))
 
 const DIRECTOR_SLOT = /^director\.(\d+)\.(nrc|passportPhoto)$/
-const COLLATERAL_SLOT = /^collateral\.(\d+)$/
+// A collateral item's proof file: collateral.0.1 (item 1, its second file), or collateral.0 from before several were allowed.
+const COLLATERAL_SLOT = /^collateral\.(\d+)(?:\.(\d+))?$/
+
+// The lender's own valuation report for a collateral item (Appraisal): valuation.0.
+const VALUATION_SLOT = /^valuation\.(\d+)$/
+export const isValuationSlot = (slot) => VALUATION_SLOT.test(slot)
+
+/** Whether `slot` is a proof file of one of the `pledged` collateral items. */
+export const isCollateralProofSlot = (slot, pledged) => {
+  const match = COLLATERAL_SLOT.exec(slot)
+  return Boolean(match) && Number(match[1]) < pledged
+}
 
 // Helpers take a product, or (older callers, and applications from before products) a form name.
 const asProduct = (product) => (typeof product === 'string' ? getProduct(product) || getProduct('personal') : product || getProduct('personal'))
@@ -135,8 +146,13 @@ export const describeSlot = (product, slot) => {
       ? { slot, label: `Director ${number} NRC`, required: true, docType: 'directorNrc' }
       : { slot, label: `Director ${number} passport photo`, required: true, docType: 'directorPassportPhoto' }
   }
+  const valuation = VALUATION_SLOT.exec(slot)
+  if (valuation) return { slot, label: `Collateral ${Number(valuation[1]) + 1} valuation report`, required: false, docType: 'valuation' }
   const collateral = COLLATERAL_SLOT.exec(slot)
-  if (collateral) return { slot, label: `Collateral ${Number(collateral[1]) + 1} proof`, required: false, docType: 'collateral' }
+  if (collateral) {
+    const file = collateral[2] === undefined ? '' : ` ${Number(collateral[2]) + 1}`
+    return { slot, label: `Collateral ${Number(collateral[1]) + 1} proof${file}`, required: false, docType: 'collateral' }
+  }
   if (slot === PASSPORT_DOCUMENT.slot) {
     const nrc = asProduct(product).documents.find((entry) => entry.slot === 'nrcCopy')
     return { slot, label: PASSPORT_DOCUMENT.label, required: Boolean(nrc?.required), docType: PASSPORT_DOCUMENT.docType, description: PASSPORT_DOCUMENT.description }

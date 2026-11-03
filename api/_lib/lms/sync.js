@@ -4,11 +4,12 @@ import { readBlob } from '../blob.js'
 import { addEvent } from '../applications.js'
 import { systemTransition } from '../workflow.js'
 import { getSetting } from '../settings.js'
-import { getLms, LmsError } from './index.js'
+import { getLms, getLmsConfig, LmsError } from './index.js'
 import { creditStaffIds, notifyUsers } from '../notify.js'
 import { buildPersonalPayload, buildBusinessPayload } from '../../../src/utils/loanPayloadMapper.js'
 import { currentDocuments } from '../../../src/config/applications.js'
-import { describeCollateral } from '../../../src/config/collateral.js'
+import { appraisedItems, describeCollateral, itemLabel, lendingValue, pledgeTerms, typeLabel } from '../../../src/config/collateral.js'
+import { guarantorsOf } from '../../../src/config/guarantors.js'
 import { getCollateralCatalog } from '../products.js'
 
 const { applications, applicationDocuments, prescreens } = schema
@@ -46,15 +47,51 @@ const EXTRA_SLOT = /^(custom|collateral)\./
  * in the form's document list under their own names, and itemised collateral fills
  * collateral_pledged (the business form's free text, on applications from before).
  */
-const addProductExtras = (payload, application, documents, fileUrls, collateralCatalog) => {
+const addProductExtras = (payload, application, documents, fileUrls, collateralCatalog, { sendSecurity = false } = {}) => {
   const list = application.loanType === 'personal' ? payload.documents : payload.business_documents
   for (const document of documents) {
     if (EXTRA_SLOT.test(document.slot) && fileUrls[document.slot]) list.push({ document_for: application.loanType === 'personal' ? 'Personal' : 'Applicant', document_name: document.label, file: fileUrls[document.slot] })
   }
   const collateral = describeCollateral(application.data, collateralCatalog)
   if (collateral) payload.collateral_pledged = collateral
+  if (sendSecurity) Object.assign(payload, securityLists(application, collateralCatalog))
   return payload
 }
+
+/**
+ * The loan's security as lists, for an LMS method made to accept them (Settings → LMS
+ * connection, sendSecurity): each collateral item with its valuation, lending terms and
+ * value, and each guarantor. Amounts in kwacha; dates as YYYY-MM-DD.
+ */
+export const securityLists = (application, collateralCatalog) => ({
+  collateral_items: appraisedItems(application.data, application.valuations).map((item, index) => {
+    const valuation = application.valuations?.[index] || {}
+    const { haircut, ltv } = pledgeTerms(item, collateralCatalog)
+    return {
+      collateral_code: item.code || '',
+      collateral_type: typeLabel(item.type, collateralCatalog),
+      collateral_name: itemLabel(item, collateralCatalog),
+      description: String(item.description || '').trim(),
+      stated_value: Number(item.statedValue) || 0,
+      market_value: Number(valuation.marketValue) || null,
+      forced_sale_value: Number(valuation.forcedSaleValue) || null,
+      valuer: valuation.valuer || '',
+      valued_on: valuation.valuedOn || null,
+      inspected_on: valuation.inspectedOn || null,
+      haircut_percent: Math.round(haircut * 10000) / 100,
+      loan_to_value_percent: Math.round(ltv * 10000) / 100,
+      lending_value: lendingValue(item, collateralCatalog),
+    }
+  }),
+  guarantors: guarantorsOf(application.data).map((person) => ({
+    full_name: person.name,
+    nrc: person.nrc,
+    phone: person.phone,
+    email: person.email || '',
+    relationship: person.relationship,
+    address: person.address,
+  })),
+})
 
 /**
  * Hands one application to the LMS. Safe to call repeatedly:
@@ -111,7 +148,7 @@ export const syncApplicationToLms = async (applicationId, { actor = null } = {})
       fileUrls[document.slot] = document.lmsFileUrl
     }
 
-    const payload = addProductExtras(buildPayload(claimed, fileUrls), claimed, documents, fileUrls, await getCollateralCatalog())
+    const payload = addProductExtras(buildPayload(claimed, fileUrls), claimed, documents, fileUrls, await getCollateralCatalog(), { sendSecurity: Boolean((await getLmsConfig())?.sendSecurity) })
     if (lms.referenceField) payload[lms.referenceField] = claimed.reference
     const { sendPrescreen } = await getSetting('lms')
     if (sendPrescreen) {

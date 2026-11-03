@@ -1,5 +1,5 @@
 import { findFormMismatches } from '../../../src/utils/documentChecks.js'
-import { collateralItems, collateralLendingValue, collateralValue } from '../../../src/config/collateral.js'
+import { appraisedItems, collateralItems, collateralLendingValue, collateralValue } from '../../../src/config/collateral.js'
 
 /*
  * The numbers the credit rules test, computed here from the application and the server's
@@ -100,12 +100,20 @@ export const computeFacts = (application, documents, extras = {}) => {
     facts.directors_count = data?.directorInfo?.directors?.length ?? null
   }
 
+  // What they said they earn when they qualified (net pay, or a business's monthly revenue),
+  // against what the payslips or bank statements show: below 1 means they earn less than stated.
+  facts.stated_income = Number(data?.eligibility?.income) > 0 ? Number(data.eligibility.income) : null
+  facts.income_vs_stated = ratio(loanType === 'personal' ? facts.net_monthly_pay : facts.average_monthly_credits, facts.stated_income)
+
   // What the applicant says the pledged collateral is worth (none pledged: unknown, not zero cover).
   const pledged = collateralItems(data)
   facts.collateral_value = pledged.length ? collateralValue(pledged) : null
   facts.collateral_cover = ratio(facts.collateral_value, application.amount)
-  // What can be lent against it: after each item's haircut and loan-to-value, stamped on submission.
-  facts.collateral_lending_value = pledged.length ? collateralLendingValue(pledged) : null
+  // What can be lent against it: after each item's haircut and loan-to-value (stamped on
+  // submission), on the valuer's market value once the item is appraised, else the estimate.
+  const appraised = appraisedItems(data, application.valuations)
+  facts.collateral_lending_value = pledged.length ? collateralLendingValue(appraised) : null
+  facts.collateral_unvalued = pledged.length ? appraised.filter((item) => !item.valued).length : null
   facts.collateral_lending_cover = ratio(facts.collateral_lending_value, application.amount)
 
   const analysed = documents.filter((document) => document.aiAnalysis)

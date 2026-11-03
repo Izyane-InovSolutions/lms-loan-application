@@ -3,6 +3,10 @@ import {
   Briefcase,
   Building2,
   Calculator,
+  Eye,
+  FileText,
+  Loader2,
+  Paperclip,
   Fingerprint,
   FolderOpen,
   Home,
@@ -22,7 +26,9 @@ import dayjs from 'dayjs'
 import { aiFailureMessage, isRetryableAiFailure } from '../../services/aiApi'
 import { COLLATERAL_REQUIREMENTS, MAX_COLLATERAL_ITEMS, acceptedItems, collateralLendingValue, collateralRequirement, collateralValue, describeTerms, itemLabel, lendingValue, pledgeTerms, typeLabel } from '@/config/collateral'
 import { formatKwacha } from '@/config/loanProducts'
-import { acceptsPhotos, readDocument } from '@/utils/documentSlots'
+import { INCOME_LABELS, compareIncome } from '@/config/eligibility'
+import { GUARANTOR_REQUIREMENTS, MAX_GUARANTORS, RELATIONSHIPS, asksForGuarantors, guarantorsOf } from '@/config/guarantors'
+import { acceptsPhotos, collateralProofs, readDocument } from '@/utils/documentSlots'
 import { EMPLOYMENT_OPTIONS, businessPeople, employerField, idField, positionLabel, positionsFor, presentDocuments } from '@/config/applicantRules'
 
 import { Button } from '@/components/ui/button'
@@ -81,6 +87,11 @@ const datePickerSlotProps = (id) => ({
 export function WizardStep(props) {
   const {
     addCollateralItem,
+    addGuarantor,
+    updateGuarantor,
+    removeGuarantor,
+    addCollateralProofs,
+    removeCollateralProofFile,
     addDirector,
     addDirectorUpload,
     allowCrb,
@@ -91,6 +102,14 @@ export function WizardStep(props) {
     collateralCatalog,
     consentCode,
     consentCodeState,
+    eligibility,
+    matchType,
+    match,
+    choosingProduct,
+    offeredProducts,
+    onChooseProduct,
+    missingDocuments,
+    documentIncome,
     currentStep,
     getUploadStatus,
     goToStep,
@@ -282,9 +301,9 @@ export function WizardStep(props) {
 
   // The product's documents, in the order it lists them, each where its file lives (utils/documentSlots.js).
   const productAttachments = presentDocuments(product, activeData).filter((document) => !document.skipped).map((document) => ({ key: document.slot, label: document.label, file: readDocument(activeData.documents, document.slot) }))
-  const collateralAttachments = collateralItems
-    .map((item, index) => ({ key: `collateral-${index}`, label: `Collateral ${index + 1} proof`, file: readDocument(activeData.documents, `collateral.${index}`) }))
-    .filter((attachment) => attachment.file)
+  const collateralAttachments = collateralItems.flatMap((item, index) =>
+    collateralProofs(activeData.documents, index).map(({ slot, file }, position) => ({ key: slot, label: `Collateral ${index + 1} proof ${position + 1}`, file }))
+  )
 
   const personalAttachments = [...productAttachments, ...collateralAttachments]
 
@@ -452,18 +471,7 @@ export function WizardStep(props) {
                     >
                       {(field) => <Input {...field} inputMode="numeric" value={item.value || ''} placeholder="e.g. 150000" onChange={(event) => updateCollateralItem(index, 'value', event.target.value)} />}
                     </FormField>
-                    <div className="md:col-span-3">
-                      {renderUploadField(
-                        'Proof of ownership or value',
-                        `collateral.${index}`,
-                        readDocument(activeData.documents, `collateral.${index}`),
-                        false,
-                        'application/pdf,image/*',
-                        `documents.collateral.${index}`,
-                        false,
-                        'For example a title deed, white book, valuation or invoice.'
-                      )}
-                    </div>
+                    <div className="md:col-span-3">{renderCollateralProofs(index)}</div>
                   </div>
                 </div>
               )
@@ -483,86 +491,449 @@ export function WizardStep(props) {
     )
   }
 
-  const renderLoanTerms = () => (
-    <div className="grid gap-6 xl:grid-cols-[1.35fr_1fr]">
-      <div className="grid content-start gap-6">
-        <FieldGroup title="Choose your loan" description="Drag the slider or type an exact amount." icon={Wallet} columns={2}>
-          <div className="md:col-span-2">
-            <p className="text-sm text-muted-foreground">Loan amount</p>
-            <p className="mt-1 text-4xl font-bold tracking-tight text-foreground">
-              K{loanData.amount.toLocaleString()}
+  /**
+   * The income they typed against what their documents show (the payslip's net pay, or a
+   * business's monthly bank credits): agreed, or flagged with the figure to use instead.
+   * Never blocking — the officer sees the same comparison on the case.
+   */
+  const renderIncomeCheck = () => {
+    const check = compareIncome(loanData.income, documentIncome)
+    if (!check) return null
+    const source = selectedLoanType === 'personal' ? 'payslip' : 'bank statements'
+    return check.differs ? (
+      <div role="status" className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-warning/40 bg-warning/10 px-4 py-3 text-sm md:col-span-2">
+        <span>
+          Your {source} {selectedLoanType === 'personal' ? 'shows' : 'show'} <span className="font-semibold">{formatKwacha(check.found)}</span>, but you entered{' '}
+          <span className="font-semibold">{formatKwacha(check.stated)}</span>. An officer will compare them before deciding.
+        </span>
+        <Button type="button" variant="outline" size="sm" onClick={() => setLoanData((prev) => ({ ...prev, income: String(Math.floor(check.found)) }))}>
+          Use {formatKwacha(Math.floor(check.found))}
+        </Button>
+      </div>
+    ) : (
+      <p className="text-sm text-success md:col-span-2">Matches your {source} ({formatKwacha(check.found)}).</p>
+    )
+  }
+
+  /** What they earn (from the loan finder, or entered here): it sets what they qualify for and the largest amount. */
+  const renderIncome = () => {
+    const words = INCOME_LABELS[selectedLoanType]
+    const setFigure = (field) => (event) => setLoanData((prev) => ({ ...prev, [field]: event.target.value.replace(/[^0-9]/g, '') }))
+    return (
+      <FieldGroup title="What you earn" description="This decides what you qualify for. We check it against your documents." icon={Wallet} columns={2}>
+        <FormField name="loanData.income" label={`${words.label} (K)`} required error={validationErrors['loanData.income']} hint={words.hint}>
+          {(field) => <Input {...field} inputMode="numeric" value={loanData.income || ''} placeholder="e.g. 12000" onChange={setFigure('income')} />}
+        </FormField>
+        <FormField name="loanData.commitments" label="Other loan repayments a month (K)" hint="What you already repay on other loans. Leave blank if none.">
+          {(field) => <Input {...field} inputMode="numeric" value={loanData.commitments || ''} placeholder="0" onChange={setFigure('commitments')} />}
+        </FormField>
+        {renderIncomeCheck()}
+        {eligibility?.status === 'eligible' ? (
+          <p className="text-sm text-foreground md:col-span-2">
+            You qualify for up to <span className="font-semibold">{formatKwacha(eligibility.maxAmount)}</span>, with repayments of up to {formatKwacha(eligibility.budget)} a month.
+          </p>
+        ) : eligibility?.status === 'ineligible' ? (
+          <p className="text-sm font-medium text-destructive md:col-span-2">{eligibility.reason}</p>
+        ) : null}
+      </FieldGroup>
+    )
+  }
+
+  /**
+   * "We'll match you": the loan type's products the applicant qualifies for, from their
+   * documents (the server runs the product eligibility rules), to choose one from; with
+   * what the terms are worked out on — the income the documents show, or the one they type
+   * when the documents gave none — and any document the chosen product still needs.
+   */
+  const renderMatch = () => {
+    const words = INCOME_LABELS[selectedLoanType]
+    const ready = match.status === 'ready' || match.status === 'refreshing'
+    const income = ready ? match.income : null
+    const nameOf = (id) => offeredProducts.find((entry) => entry.id === id)?.name || id
+    // A reason every loan shares (someone else's name on a payslip, say) is said once, above
+    // the list, with the document to replace; each loan then shows only its own.
+    const results = ready ? match.products : []
+    const noneFit = ready && !results.some((result) => result.status === 'eligible')
+    const shared = results.length > 1 && results.every((result) => result.reasons.length) ? results[0].reasons.filter((reason) => results.every((result) => result.reasons.includes(reason))) : []
+    const problems = ready ? match.documentProblems || [] : []
+    const setFigure = (field) => (event) => setLoanData((prev) => ({ ...prev, [field]: event.target.value.replace(/[^0-9]/g, '') }))
+    return (
+      <>
+        <FieldGroup
+          title={choosingProduct ? 'The loans you qualify for' : 'Your matched loan'}
+          description={choosingProduct ? 'Worked out from the documents you uploaded and your answers. Choose one to set the amount and tenure.' : 'You can still switch to another loan you qualify for.'}
+          icon={Wallet}
+          columns={2}
+        >
+          {income?.source === 'documents' ? (
+            <p className="text-sm text-foreground md:col-span-2">
+              {words.label} from your {selectedLoanType === 'personal' ? 'payslips' : 'bank statements'}: <span className="font-semibold">{formatKwacha(income.income)}</span>
             </p>
-            <input
-              type="range"
-              min={minAmount}
-              max={maxAmount}
-              step="100"
-              value={loanData.amount}
-              onChange={(event) => setLoanData((prev) => ({ ...prev, amount: Number(event.target.value) }))}
-              aria-label="Loan amount"
-              className="mt-5 w-full accent-primary"
-            />
-            <div className="mt-2 flex justify-between text-xs font-medium text-muted-foreground">
-              <span>K{minAmount.toLocaleString()}</span>
-              <span>K{maxAmount.toLocaleString()}</span>
-            </div>
+          ) : (
+            <FormField
+              name="loanData.statedIncome"
+              label={`${words.label} (K)`}
+              required
+              error={validationErrors['loanData.income']}
+              hint={ready ? `We couldn’t read it from your documents, so we’ll use this and check it later. ${words.hint}` : words.hint}
+            >
+              {(field) => <Input {...field} inputMode="numeric" value={loanData.statedIncome || ''} placeholder="e.g. 12000" onChange={setFigure('statedIncome')} />}
+            </FormField>
+          )}
+          <FormField name="loanData.commitments" label="Other loan repayments a month (K)" hint="What you already repay on other loans. Leave blank if none.">
+            {(field) => <Input {...field} inputMode="numeric" value={loanData.commitments || ''} placeholder="0" onChange={setFigure('commitments')} />}
+          </FormField>
+
+          <div className="space-y-2 md:col-span-2" aria-live="polite">
+            {validationErrors['loanData.product'] ? (
+              <p id="field-loanData.product" tabIndex={-1} role="alert" className="text-sm font-medium text-destructive">
+                {validationErrors['loanData.product']}
+              </p>
+            ) : null}
+            {match.status === 'loading' || match.status === 'idle' ? (
+              <p className="text-sm text-muted-foreground">Checking which loans you qualify for…</p>
+            ) : match.status === 'error' ? (
+              <p className="text-sm text-destructive">{match.message}</p>
+            ) : (
+              <>
+                {noneFit || shared.length || problems.length ? (
+                  <div className="space-y-2 rounded-md border border-warning/40 bg-warning/10 p-3 text-sm">
+                    <p className="font-medium text-foreground">{noneFit ? 'None of our loans fit yet' : 'Worth putting right'}</p>
+                    {noneFit && results.some((result) => result.canContinue) ? (
+                      <p className="text-muted-foreground">Replace the document below, or choose “Continue anyway” on a loan: an officer will look at the issue before deciding.</p>
+                    ) : null}
+                    {shared.length ? (
+                      <ul className="list-disc space-y-0.5 pl-5 text-foreground">
+                        {shared.map((reason) => (
+                          <li key={reason}>{reason}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {problems.length ? (
+                      <ul className="space-y-1">
+                        {problems.map((entry) => (
+                          <li key={entry.slot}>
+                            <span className="font-medium text-foreground">{entry.label}:</span> <span className="text-muted-foreground">{entry.problems.join(' ')}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {problems.length ? (
+                      <Button type="button" variant="outline" size="sm" onClick={() => goToStep(2)}>
+                        Replace {problems.length === 1 ? 'the document' : 'the documents'}
+                      </Button>
+                    ) : noneFit ? (
+                      <Button type="button" variant="outline" size="sm" onClick={() => goToStep(0)}>
+                        Check your answers
+                      </Button>
+                    ) : null}
+                  </div>
+                ) : null}
+                <ul className="divide-y rounded-md border">
+                  {match.products.map((result) => {
+                    const chosen = !choosingProduct && result.id === product.id
+                    return (
+                      <li key={result.id} className={chosen ? 'bg-primary/5 p-3' : 'p-3'}>
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className="font-medium text-foreground">{nameOf(result.id)}</p>
+                            {result.status === 'eligible' ? (
+                              <p className="text-sm text-success">
+                                You qualify for up to {formatKwacha(result.maxAmount)}, repaying up to {formatKwacha(result.budget)} a month.
+                              </p>
+                            ) : result.status === 'ineligible' ? (
+                              <p className="text-sm text-muted-foreground">{result.reasons.filter((reason) => !shared.includes(reason)).join(' ') || 'See above.'}</p>
+                            ) : (
+                              <p className="text-sm text-muted-foreground">Enter your {words.short} to check this one.</p>
+                            )}
+                            {result.unchecked.length ? <p className="mt-0.5 text-xs text-muted-foreground">Checked later: {result.unchecked.join('; ')}.</p> : null}
+                          </div>
+                          {result.status === 'eligible' ? (
+                            <Button type="button" size="sm" variant={chosen ? 'secondary' : 'default'} disabled={chosen} onClick={() => onChooseProduct(result.id)}>
+                              {chosen ? 'Chosen' : 'Choose'}
+                            </Button>
+                          ) : result.canContinue ? (
+                            <div className="flex flex-col items-end gap-1">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant={chosen ? 'secondary' : 'outline'}
+                                disabled={chosen}
+                                onClick={() => onChooseProduct(result.id, { acceptDocumentIssues: true })}
+                              >
+                                {chosen ? 'Chosen' : 'Continue anyway'}
+                              </Button>
+                              <span className="max-w-[14rem] text-right text-xs text-muted-foreground">Up to {formatKwacha(result.maxAmount)}. An officer reviews the document issue first.</span>
+                            </div>
+                          ) : null}
+                        </div>
+                      </li>
+                    )
+                  })}
+                </ul>
+              </>
+            )}
           </div>
-
-          {renderField('Enter amount', loanData.amount, (value) => {
-            const amount = Number(value.replace(/[^0-9]/g, '') || 0)
-            const constrained = Math.min(Math.max(amount, minAmount), maxAmount)
-            setLoanData((prev) => ({ ...prev, amount: constrained }))
-          }, 'number', `Between ${minAmount} and ${maxAmount}`, { min: minAmount, max: maxAmount }, true)}
-
-          {renderField('Tenure (months)', loanData.tenure, (value) => {
-            const tenure = Number(value)
-            if (tenure >= minTenure && tenure <= maxTenure) {
-              setLoanData((prev) => ({ ...prev, tenure }))
-            }
-          }, 'number', `${minTenure} to ${maxTenure}`, { min: minTenure, max: maxTenure }, true)}
         </FieldGroup>
 
-        {collateralRule !== 'none' ? (
-          renderCollateral()
-        ) : collateralFrom ? (
-          <p className="flex items-start gap-2 rounded-md bg-accent/60 px-4 py-3 text-sm text-accent-foreground">
-            <Landmark className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-            <span>No collateral is needed for this amount. Loans of {formatKwacha(collateralFrom)} or more need it.</span>
+        {missingDocuments.length ? (
+          <div id="field-documents.missing" tabIndex={-1} className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-warning/40 bg-warning/10 px-4 py-3 text-sm">
+            <span>
+              The {product.name} also needs: <span className="font-medium">{missingDocuments.map((document) => document.label).join(', ')}</span>.
+            </span>
+            <Button type="button" variant="outline" size="sm" onClick={() => goToStep(2)}>
+              Add {missingDocuments.length === 1 ? 'it' : 'them'}
+            </Button>
+          </div>
+        ) : null}
+      </>
+    )
+  }
+
+  /**
+   * A pledged item's proof files: as many PDFs and photos as it takes (title deed, white
+   * book, valuation, photos of the asset), each checked on its own and verified by the
+   * lender's legal officer. Optional.
+   */
+  const renderCollateralProofs = (index) => {
+    const proofs = collateralProofs(activeData.documents, index)
+    const error = validationErrors[`documents.collateral.${index}`]
+    const inputId = `collateral-proofs-${index}`
+    return (
+      <div className="space-y-2" id={`field-documents.collateral.${index}`} tabIndex={-1}>
+        <div>
+          <p className="text-sm font-medium text-foreground">
+            Proof of ownership or value <span className="font-normal text-muted-foreground">(optional)</span>
+          </p>
+          <p className="text-xs text-muted-foreground">Add every document and photo that shows it is yours and what it is worth: a title deed, white book, valuation, invoice, photos. PDFs or photos.</p>
+        </div>
+        {proofs.length ? (
+          <ul className="divide-y rounded-md border bg-card">
+            {proofs.map(({ slot, file }, position) => {
+              const check = analysisFor(slot)
+              return (
+                <li key={slot} className="flex flex-wrap items-center gap-3 px-3 py-2 text-sm">
+                  <FileText className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-foreground">{file.name}</span>
+                    <span className="block text-xs text-muted-foreground">
+                      {check?.status === 'analyzing' ? (
+                        <span className="inline-flex items-center gap-1">
+                          <Loader2 className="size-3 animate-spin" aria-hidden="true" />
+                          Checking…
+                        </span>
+                      ) : check?.notes?.length ? (
+                        check.notes.map((note) => note.message || note).join(' ')
+                      ) : (
+                        `${Math.max(1, Math.round(file.size / 1024))} KB`
+                      )}
+                    </span>
+                  </span>
+                  <Button type="button" variant="ghost" size="sm" className="h-8" onClick={() => setPreviewAttachment({ label: `Collateral ${index + 1} proof ${position + 1}`, file })}>
+                    <Eye />
+                    View
+                  </Button>
+                  <Button type="button" variant="ghost" size="sm" className="h-8 text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => removeCollateralProofFile(slot)} aria-label={`Remove ${file.name}`}>
+                    <Trash2 />
+                  </Button>
+                </li>
+              )
+            })}
+          </ul>
+        ) : null}
+        <label
+          htmlFor={inputId}
+          className="inline-flex cursor-pointer items-center gap-2 rounded-md border border-dashed border-input px-3 py-2 text-sm font-medium text-foreground hover:bg-muted/40 focus-within:ring-2 focus-within:ring-ring"
+        >
+          <Paperclip className="size-4" aria-hidden="true" />
+          {proofs.length ? 'Add more files' : 'Add files'}
+          <input id={inputId} type="file" multiple accept="application/pdf,image/*" className="sr-only" onChange={(event) => addCollateralProofs(index, event)} />
+        </label>
+        {error ? (
+          <p role="alert" className="text-sm text-destructive">
+            {error}
           </p>
         ) : null}
       </div>
+    )
+  }
 
-      <div className="xl:sticky xl:top-8 xl:self-start">
-        <div className="rounded-lg border bg-card p-6 shadow-soft">
-          <div className="flex items-center gap-3 border-b border-border pb-4">
+  /** The guarantors the product asks for: a row each (name, NRC, phone, relationship, address), up to MAX_GUARANTORS. */
+  const renderGuarantors = () => {
+    const people = activeData.guarantors || []
+    const required = product.guarantors?.requirement === 'required'
+    const field = (index, key, label, props = {}) => (
+      <FormField name={`guarantors.${index}.${key}`} label={label} required={key !== 'email'} error={validationErrors[`guarantors.${index}.${key}`]} hint={props.hint}>
+        {(input) => <Input {...input} value={people[index]?.[key] || ''} placeholder={props.placeholder} inputMode={props.inputMode} onChange={(event) => updateGuarantor(index, key, event.target.value)} />}
+      </FormField>
+    )
+    return (
+      <fieldset className="rounded-lg border bg-card p-5 shadow-soft sm:p-6">
+        <legend className="sr-only">Guarantors</legend>
+        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border pb-4">
+          <div className="flex items-start gap-3">
             <span className="grid size-9 shrink-0 place-items-center rounded-md bg-accent text-accent-foreground">
-              <Calculator className="size-4" aria-hidden="true" />
+              <Users className="size-4" aria-hidden="true" />
             </span>
-            <h2 className="text-base font-semibold tracking-tight">Repayment summary</h2>
+            <div>
+              <h2 className="flex items-baseline gap-2 text-base font-semibold tracking-tight">
+                Guarantors
+                <span className={required ? 'text-xs font-medium text-destructive' : 'text-xs font-normal text-muted-foreground'}>{GUARANTOR_REQUIREMENTS[product.guarantors.requirement].label.toLowerCase()}</span>
+              </h2>
+              <p className="mt-1 text-sm text-muted-foreground">Someone who agrees to repay the loan if you can’t. We may contact them before we decide.</p>
+            </div>
           </div>
+          {people.length < MAX_GUARANTORS ? (
+            <Button type="button" variant="outline" size="sm" onClick={addGuarantor}>
+              <Plus />
+              {people.length ? 'Add another guarantor' : 'Add a guarantor'}
+            </Button>
+          ) : null}
+        </div>
+        {validationErrors.guarantors ? (
+          <p id="field-guarantors" tabIndex={-1} role="alert" className="mt-4 text-sm font-medium text-destructive">
+            {validationErrors.guarantors}
+          </p>
+        ) : null}
+        <div className="mt-5 space-y-4">
+          {people.length ? (
+            people.map((_, index) => (
+              <div key={index} className="rounded-md border border-border bg-secondary/40 p-4">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <Badge variant="secondary">Guarantor {index + 1}</Badge>
+                  <Button type="button" variant="ghost" size="sm" onClick={() => removeGuarantor(index)} className="h-8 text-destructive hover:bg-destructive/10 hover:text-destructive">
+                    <Trash2 />
+                    Remove
+                  </Button>
+                </div>
+                <div className="grid gap-5 md:grid-cols-2">
+                  {field(index, 'name', 'Full name')}
+                  {field(index, 'nrc', 'NRC', { placeholder: '123456/78/9' })}
+                  {field(index, 'phone', 'Phone', { placeholder: '971234567', inputMode: 'numeric' })}
+                  {field(index, 'email', 'Email (optional)')}
+                  <FormField name={`guarantors.${index}.relationship`} label="How they know you" required error={validationErrors[`guarantors.${index}.relationship`]}>
+                    {(input) => (
+                      <Select {...input} value={people[index]?.relationship || ''} onChange={(event) => updateGuarantor(index, 'relationship', event.target.value)}>
+                        <option value="">Choose…</option>
+                        {RELATIONSHIPS.map((relationship) => (
+                          <option key={relationship} value={relationship}>
+                            {relationship}
+                          </option>
+                        ))}
+                      </Select>
+                    )}
+                  </FormField>
+                  {field(index, 'address', 'Where they live')}
+                </div>
+              </div>
+            ))
+          ) : (
+            <p className="text-sm text-muted-foreground">{required ? 'Add at least one guarantor.' : 'No guarantor added.'}</p>
+          )}
+        </div>
+      </fieldset>
+    )
+  }
 
-          <div className="mt-5 rounded-md bg-secondary/60 p-4 text-center">
-            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-              Monthly repayment
-            </p>
-            <p className="mt-1.5 text-3xl font-bold tracking-tight text-foreground">
-              K{monthlyRepayment.toFixed(2)}
-            </p>
-          </div>
+  const renderGuarantorSummary = () =>
+    asksForGuarantors(product)
+      ? renderSummarySection(
+          'Guarantors',
+          guarantorsOf(activeData).length
+            ? guarantorsOf(activeData).map((person, index) => renderSummaryRow(`Guarantor ${index + 1}`, [person.name, person.nrc, person.relationship].filter(Boolean).join(' · ')))
+            : [renderSummaryRow('Named', 'None')],
+          3
+        )
+      : null
 
-          <dl className="mt-5 space-y-0.5">
-            <SummaryRow label="Loan amount" value={`K${loanData.amount.toLocaleString()}`} />
-            <SummaryRow label="Tenure" value={`${loanData.tenure} months`} />
-            <SummaryRow label={interestLabel} value={`K${price.interest.toFixed(2)}`} />
-            <SummaryRow label="Facility fee" value={`K${price.fee.toFixed(2)}`} />
-          </dl>
+  const renderLoanTerms = () => (
+    <div className={choosingProduct ? 'grid gap-6' : 'grid gap-6 xl:grid-cols-[1.35fr_1fr]'}>
+      <div className="grid content-start gap-6">
+        {matchType ? renderMatch() : renderIncome()}
+        {choosingProduct ? null : (
+          <>
+            <FieldGroup title="Choose your loan" description="Drag the slider or type an exact amount." icon={Wallet} columns={2}>
+              <div className="md:col-span-2">
+                <p className="text-sm text-muted-foreground">Loan amount</p>
+                <p className="mt-1 text-4xl font-bold tracking-tight text-foreground">
+                  K{loanData.amount.toLocaleString()}
+                </p>
+                <input
+                  type="range"
+                  min={minAmount}
+                  max={maxAmount}
+                  step="100"
+                  value={loanData.amount}
+                  onChange={(event) => setLoanData((prev) => ({ ...prev, amount: Number(event.target.value) }))}
+                  aria-label="Loan amount"
+                  className="mt-5 w-full accent-primary"
+                />
+                <div className="mt-2 flex justify-between text-xs font-medium text-muted-foreground">
+                  <span>K{minAmount.toLocaleString()}</span>
+                  <span>K{maxAmount.toLocaleString()}</span>
+                </div>
+              </div>
 
-          <div className="mt-5 flex items-center justify-between gap-4 rounded-md bg-primary px-4 py-3.5 text-primary-foreground">
-            <span className="text-sm font-semibold">Total repayable</span>
-            <span className="text-lg font-bold tabular-nums">K{totalRepayable.toFixed(2)}</span>
+              {renderField('Enter amount', loanData.amount, (value) => {
+                const amount = Number(value.replace(/[^0-9]/g, '') || 0)
+                const constrained = Math.min(Math.max(amount, minAmount), maxAmount)
+                setLoanData((prev) => ({ ...prev, amount: constrained }))
+              }, 'number', `Between ${minAmount} and ${maxAmount}`, { min: minAmount, max: maxAmount }, true)}
+
+              {renderField('Tenure (months)', loanData.tenure, (value) => {
+                const tenure = Number(value)
+                if (tenure >= minTenure && tenure <= maxTenure) {
+                  setLoanData((prev) => ({ ...prev, tenure }))
+                }
+              }, 'number', `${minTenure} to ${maxTenure}`, { min: minTenure, max: maxTenure }, true)}
+            </FieldGroup>
+
+            {collateralRule !== 'none' ? (
+              renderCollateral()
+            ) : collateralFrom ? (
+              <p className="flex items-start gap-2 rounded-md bg-accent/60 px-4 py-3 text-sm text-accent-foreground">
+                <Landmark className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                <span>No collateral is needed for this amount. Loans of {formatKwacha(collateralFrom)} or more need it.</span>
+              </p>
+            ) : null}
+            {asksForGuarantors(product) ? renderGuarantors() : null}
+          </>
+        )}
+      </div>
+
+      {choosingProduct ? null : (
+        <div className="xl:sticky xl:top-8 xl:self-start">
+          <div className="rounded-lg border bg-card p-6 shadow-soft">
+            <div className="flex items-center gap-3 border-b border-border pb-4">
+              <span className="grid size-9 shrink-0 place-items-center rounded-md bg-accent text-accent-foreground">
+                <Calculator className="size-4" aria-hidden="true" />
+              </span>
+              <h2 className="text-base font-semibold tracking-tight">Repayment summary</h2>
+            </div>
+
+            <div className="mt-5 rounded-md bg-secondary/60 p-4 text-center">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                Monthly repayment
+              </p>
+              <p className="mt-1.5 text-3xl font-bold tracking-tight text-foreground">
+                K{monthlyRepayment.toFixed(2)}
+              </p>
+            </div>
+
+            <dl className="mt-5 space-y-0.5">
+              <SummaryRow label="Loan amount" value={`K${loanData.amount.toLocaleString()}`} />
+              <SummaryRow label="Tenure" value={`${loanData.tenure} months`} />
+              <SummaryRow label={interestLabel} value={`K${price.interest.toFixed(2)}`} />
+              <SummaryRow label="Facility fee" value={`K${price.fee.toFixed(2)}`} />
+            </dl>
+
+            <div className="mt-5 flex items-center justify-between gap-4 rounded-md bg-primary px-4 py-3.5 text-primary-foreground">
+              <span className="text-sm font-semibold">Total repayable</span>
+              <span className="text-lg font-bold tabular-nums">K{totalRepayable.toFixed(2)}</span>
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   )
 
@@ -633,6 +1004,7 @@ export function WizardStep(props) {
 
           {renderSummarySection('Loan terms', loanTermRows, 3)}
           {renderCollateralSummary()}
+          {renderGuarantorSummary()}
         </div>
       </ApplicationSummary>
     </div>
@@ -682,6 +1054,7 @@ export function WizardStep(props) {
 
           {renderSummarySection('Loan terms', loanTermRows, 3)}
           {renderCollateralSummary()}
+          {renderGuarantorSummary()}
         </div>
       </ApplicationSummary>
     </div>

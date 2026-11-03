@@ -307,6 +307,12 @@ export function StateDrawer({ definition, stateId, focusActionId, errors, docume
                 <Section title="Options">
                   <div className="space-y-3">
                     <Toggle label="Staff can ask the applicant for more" hint="Only before the decision. The case waits until they reply." checked={Boolean(state.askApplicant)} onChange={(value) => update({ askApplicant: value })} />
+                    <Toggle
+                      label="Collateral appraisal"
+                      hint="Only loans with collateral come here (others go straight past, by its Move action), and they move on once every item is valued."
+                      checked={Boolean(state.appraisal)}
+                      onChange={(value) => update({ appraisal: value })}
+                    />
                     <Toggle label="Hand the loan to the LMS when a case arrives" hint="Where an LMS is connected." checked={Boolean(state.handToLms)} onChange={(value) => update({ handToLms: value })} />
                     {state.type === 'work' ? (
                       <Toggle label="Show as a step on the case" hint="Listed under Stages with “Mark as done”, and who did it." checked={Boolean(state.trackProgress)} onChange={(value) => update({ trackProgress: value })} />

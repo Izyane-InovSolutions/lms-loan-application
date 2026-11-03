@@ -6,7 +6,9 @@ import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
-import { APPLICANT_FORMS, DOCUMENT_CATALOGUE, PRODUCT_ID_PATTERN, buildProducts, describeFee, describeInterest, formatKwacha, priceLoan, productDefaults } from '@/config/loanProducts'
+import { APPLICANT_FORMS, DOCUMENT_CATALOGUE, INTEREST_TYPES, LOAN_PURPOSES, LOAN_TYPE_KEY_PATTERN, PRODUCT_ID_PATTERN, buildLoanTypes, buildProducts, liveProducts, describeFee, describeInterest, formatKwacha, priceLoan, productDefaults, purposeOf } from '@/config/loanProducts'
+import { INCOME_LABELS, eligibilityFor, productTags } from '@/config/eligibility'
+import { GUARANTOR_REQUIREMENTS } from '@/config/guarantors'
 import { COLLATERAL_CODE_PATTERN, COLLATERAL_REQUIREMENTS, buildCollateralCatalog, describeRequirement } from '@/config/collateral'
 import { api } from '../api'
 import { Field, FormError, Panel } from '../components'
@@ -34,14 +36,18 @@ const editable = ({ steps, requiredDocuments, ...product }) => product
 export function ProductsTab({ settings, notify }) {
   const [section, setSection] = useState('products')
   const [stored, setStored] = useState(settings.products)
+  const [loanTypes, setLoanTypes] = useState(() => buildLoanTypes(settings.loanTypes))
   const [catalog, setCatalog] = useState(() => buildCollateralCatalog(settings.collateral))
-  const products = useMemo(() => buildProducts(stored), [stored])
+  const all = useMemo(() => buildProducts(stored), [stored])
+  // Deleted products are kept only for their applications: never listed or edited here.
+  const products = useMemo(() => liveProducts(all), [all])
   const types = catalog.types
 
   return (
     <div className="space-y-5">
       <div className="flex gap-1 border-b" role="tablist" aria-label="Loan products">
         {[
+          ['loanTypes', `Loan types (${loanTypes.length})`],
           ['products', `Products (${products.length})`],
           ['collateral', `Collateral types (${types.filter((type) => !type.retired).length})`],
           ['collateralItems', `Collateral items (${catalog.items.filter((item) => !item.retired).length})`],
@@ -61,14 +67,15 @@ export function ProductsTab({ settings, notify }) {
           </button>
         ))}
       </div>
-      {section === 'products' ? <Products products={products} types={types} onSaved={setStored} notify={notify} /> : null}
+      {section === 'loanTypes' ? <LoanTypes loanTypes={loanTypes} products={products} onSaved={setLoanTypes} notify={notify} /> : null}
+      {section === 'products' ? <Products products={products} takenIds={all.map((product) => product.id)} loanTypes={loanTypes} types={types} onSaved={setStored} notify={notify} /> : null}
       {section === 'collateral' ? <CollateralTypes catalog={catalog} onSaved={setCatalog} notify={notify} /> : null}
       {section === 'collateralItems' ? <CollateralItems catalog={catalog} onSaved={setCatalog} notify={notify} /> : null}
     </div>
   )
 }
 
-function Products({ products, types, onSaved, notify }) {
+function Products({ products, takenIds, loanTypes, types, onSaved, notify }) {
   const [selectedId, setSelectedId] = useState(products[0]?.id)
   const [adding, setAdding] = useState(false)
   const selected = products.find((product) => product.id === selectedId) || products[0]
@@ -80,46 +87,63 @@ function Products({ products, types, onSaved, notify }) {
     return response.products
   }
 
+  const remove = async (product) => {
+    const response = await api(`/settings/products/${product.id}`, { method: 'DELETE' })
+    onSaved(response.products)
+    setSelectedId(null)
+    notify(
+      response.kept
+        ? `${product.name} deleted. ${response.applications} ${response.applications === 1 ? 'application was' : 'applications were'} made under it, so it is kept for ${response.applications === 1 ? 'that one' : 'them'} only.`
+        : `${product.name} deleted`
+    )
+  }
+
   return (
     <div className="grid items-start gap-5 lg:grid-cols-[260px_minmax(0,1fr)]">
       <div className="space-y-2">
-        <ul className="space-y-1">
-          {products.map((product) => (
-            <li key={product.id}>
-              <button
-                type="button"
-                onClick={() => setSelectedId(product.id)}
-                className={cn(
-                  'flex w-full items-start gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                  selected?.id === product.id ? 'bg-card shadow-sm ring-1 ring-border' : 'hover:bg-card/60'
-                )}
-              >
-                <span className="min-w-0 flex-1">
-                  <span className="block truncate font-medium text-foreground">{product.name}</span>
-                  <span className="block text-xs text-muted-foreground">
-                    {APPLICANT_FORMS[product.form].label} form · {product.documents.length} documents
-                    {product.collateral.requirement !== 'none' ? ` · collateral ${describeRequirement(product).toLowerCase()}` : ''}
-                  </span>
-                </span>
-                <span className={cn('mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium', product.enabled ? 'bg-success/15 text-success' : 'bg-muted text-muted-foreground')}>
-                  {product.enabled ? 'Offered' : 'Off'}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
+        {loanTypes.map((loanType) => (
+          <div key={loanType.key} className="space-y-1">
+            <p className="px-3 pt-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{loanType.label}</p>
+            <ul className="space-y-1">
+              {products.filter((product) => product.loanType === loanType.key).map((product) => (
+                <li key={product.id}>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedId(product.id)}
+                    className={cn(
+                      'flex w-full items-start gap-2 rounded-md px-3 py-2 text-left text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                      selected?.id === product.id ? 'bg-card shadow-sm ring-1 ring-border' : 'hover:bg-card/60'
+                    )}
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium text-foreground">{product.name}</span>
+                      <span className="block text-xs text-muted-foreground">
+                        {purposeOf(product)?.label || 'General purpose'} · {product.documents.length} documents
+                        {product.collateral.requirement !== 'none' ? ` · collateral ${describeRequirement(product).toLowerCase()}` : ''}
+                      </span>
+                    </span>
+                    <span className={cn('mt-0.5 shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium', product.enabled ? 'bg-success/15 text-success' : 'bg-muted text-muted-foreground')}>
+                      {product.enabled ? 'Offered' : 'Off'}
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
         <Button variant="outline" size="sm" className="w-full" onClick={() => setAdding(true)}>
           <Plus />
           Add a product
         </Button>
       </div>
 
-      {selected ? <ProductEditor key={selected.id} product={selected} types={types} onSave={save} /> : null}
+      {selected ? <ProductEditor key={selected.id} product={selected} loanTypes={loanTypes} types={types} onSave={save} onDelete={remove} /> : null}
 
       <AddProductDialog
+        loanTypes={loanTypes}
         open={adding}
         onOpenChange={setAdding}
-        taken={products.map((product) => product.id)}
+        taken={takenIds}
         onCreate={async (draft) => {
           await save(draft)
           setSelectedId(draft.id)
@@ -129,11 +153,14 @@ function Products({ products, types, onSaved, notify }) {
   )
 }
 
-function AddProductDialog({ open, onOpenChange, taken, onCreate }) {
+function AddProductDialog({ loanTypes, open, onOpenChange, taken, onCreate }) {
   const [name, setName] = useState('')
   const [id, setId] = useState('')
   const [idEdited, setIdEdited] = useState(false)
-  const [form, setForm] = useState('personal')
+  const [loanTypeKey, setLoanTypeKey] = useState(loanTypes[0]?.key)
+  const loanType = loanTypes.find((type) => type.key === loanTypeKey) || loanTypes[0]
+  const form = loanType?.form || 'personal'
+  const [purpose, setPurpose] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -142,11 +169,12 @@ function AddProductDialog({ open, onOpenChange, taken, onCreate }) {
       setName('')
       setId('')
       setIdEdited(false)
-      setForm('personal')
+      setLoanTypeKey(loanTypes[0]?.key)
+      setPurpose('')
       setError('')
       setBusy(false)
     }
-  }, [open])
+  }, [open, loanTypes])
 
   const problem = !name.trim()
     ? 'Give the product a name.'
@@ -162,7 +190,7 @@ function AddProductDialog({ open, onOpenChange, taken, onCreate }) {
     setError('')
     try {
       // Off until the admin has checked its pricing, documents and collateral.
-      await onCreate({ ...productDefaults(form), id, name: name.trim(), enabled: false })
+      await onCreate({ ...productDefaults(form), id, name: name.trim(), loanType: loanType.key, purpose: purpose || null, enabled: false })
       onOpenChange(false)
     } catch (createError) {
       setError(createError.message)
@@ -175,7 +203,7 @@ function AddProductDialog({ open, onOpenChange, taken, onCreate }) {
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Add a loan product</DialogTitle>
-          <DialogDescription>It starts switched off, with the form’s usual pricing and documents. Adjust them, then switch it on.</DialogDescription>
+          <DialogDescription>It starts switched off, with its form’s usual pricing and documents. Adjust them, then switch it on.</DialogDescription>
         </DialogHeader>
         <form onSubmit={create} className="space-y-4" noValidate>
           <Field id="new-product-name" label="Name" hint="As applicants see it, e.g. Civil Servant Loan.">
@@ -199,18 +227,38 @@ function AddProductDialog({ open, onOpenChange, taken, onCreate }) {
             />
           </Field>
           <fieldset className="space-y-2">
-            <legend className="text-sm font-medium text-foreground">Application form</legend>
+            <legend className="text-sm font-medium text-foreground">Loan type</legend>
             <div className="grid gap-2 sm:grid-cols-2">
-              {Object.entries(APPLICANT_FORMS).map(([key, entry]) => (
-                <label key={key} className={cn('flex cursor-pointer flex-col rounded-lg border p-3 text-sm', form === key ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'hover:bg-muted/40')}>
-                  <input type="radio" name="new-product-form" value={key} checked={form === key} onChange={() => setForm(key)} className="sr-only" />
-                  <span className="font-medium text-foreground">{entry.label}</span>
-                  <span className="mt-0.5 text-xs text-muted-foreground">{entry.hint}</span>
+              {loanTypes.map((type) => (
+                <label key={type.key} className={cn('flex cursor-pointer flex-col rounded-lg border p-3 text-sm', loanType?.key === type.key ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'hover:bg-muted/40')}>
+                  <input
+                    type="radio"
+                    name="new-product-type"
+                    value={type.key}
+                    checked={loanType?.key === type.key}
+                    onChange={() => {
+                      setLoanTypeKey(type.key)
+                      setPurpose('')
+                    }}
+                    className="sr-only"
+                  />
+                  <span className="font-medium text-foreground">{type.label}</span>
+                  <span className="mt-0.5 text-xs text-muted-foreground">{APPLICANT_FORMS[type.form].label} application form</span>
                 </label>
               ))}
             </div>
-            <p className="text-xs text-muted-foreground">The form decides the questions asked and which credit rules apply. It can’t be changed later.</p>
+            <p className="text-xs text-muted-foreground">Its type’s form decides the questions asked and which credit rules apply.</p>
           </fieldset>
+          <Field id="new-product-purpose" label="What it’s for" hint="Shown to applicants with the product. Change it any time.">
+            <Select id="new-product-purpose" value={purpose} onChange={(event) => setPurpose(event.target.value)}>
+              <option value="">General purpose</option>
+              {LOAN_PURPOSES[form].map((entry) => (
+                <option key={entry.key} value={entry.key}>
+                  {entry.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
           <FormError message={error} />
           {problem && (name || id) ? <p className="text-sm text-muted-foreground">{problem}</p> : null}
           <DialogFooter>
@@ -228,7 +276,8 @@ function AddProductDialog({ open, onOpenChange, taken, onCreate }) {
   )
 }
 
-function ProductEditor({ product, types, onSave }) {
+function ProductEditor({ product, loanTypes, types, onSave, onDelete }) {
+  const [deleting, setDeleting] = useState(false)
   const [value, setValue] = useState(product)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -270,6 +319,10 @@ function ProductEditor({ product, types, onSave }) {
         </div>
       </Panel>
 
+      <Panel title="Loan type and eligibility" description="What the loan is for, how it is described, and who automatically qualifies.">
+        <EligibilityFields product={value} loanTypes={loanTypes} onChange={set} />
+      </Panel>
+
       <Panel title="Pricing" description="Submitted applications keep the price they were given.">
         <PricingFields id={value.id} pricing={value} onChange={set} />
       </Panel>
@@ -282,6 +335,30 @@ function ProductEditor({ product, types, onSave }) {
         <CollateralRules id={value.id} product={value} types={types} onChange={(changes) => set({ collateral: { ...value.collateral, ...changes } })} />
       </Panel>
 
+      <Panel title="Guarantors" description="Whether applicants name someone who will repay if they can’t. Up to three; each guarantor’s name, NRC, phone, relationship and address are asked.">
+        <fieldset className="grid gap-2 sm:grid-cols-3">
+          <legend className="sr-only">Guarantors are</legend>
+          {Object.entries(GUARANTOR_REQUIREMENTS).map(([key, entry]) => (
+            <label
+              key={key}
+              className={cn('flex cursor-pointer flex-col rounded-lg border p-3 text-sm', (value.guarantors?.requirement || 'none') === key ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'hover:bg-muted/40')}
+            >
+              <input type="radio" name={`${value.id}-guarantors`} value={key} checked={(value.guarantors?.requirement || 'none') === key} onChange={() => set({ guarantors: { requirement: key } })} className="sr-only" />
+              <span className="font-medium text-foreground">{entry.label}</span>
+              <span className="mt-0.5 text-xs text-muted-foreground">{entry.hint}</span>
+            </label>
+          ))}
+        </fieldset>
+      </Panel>
+
+      <Panel title="Delete this product" description="Applicants can no longer choose it. Applications already made under it keep it, so they still read as they did.">
+        <Button type="button" variant="outline" className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => setDeleting(true)}>
+          <Trash2 />
+          Delete {product.name}
+        </Button>
+      </Panel>
+      <DeleteProductDialog product={product} open={deleting} onOpenChange={setDeleting} onDelete={onDelete} />
+
       <SaveCard
         dirty={dirty}
         saving={saving}
@@ -290,6 +367,143 @@ function ProductEditor({ product, types, onSave }) {
         onDiscard={() => setValue(product)}
         note="Saved changes apply to new applications straight away. Submitted applications keep the terms they were given."
       />
+    </div>
+  )
+}
+
+/** Confirms deleting a product; says why if it can't be (the last one switched on). */
+function DeleteProductDialog({ product, open, onOpenChange, onDelete }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    if (open) {
+      setBusy(false)
+      setError('')
+    }
+  }, [open])
+  const confirm = async () => {
+    setBusy(true)
+    setError('')
+    try {
+      await onDelete(product)
+      onOpenChange(false)
+    } catch (deleteError) {
+      setError(deleteError.message)
+      setBusy(false)
+    }
+  }
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Delete {product.name}?</DialogTitle>
+          <DialogDescription>
+            It disappears from the website and from this list, and can’t be brought back. If applications were made under it, it is kept for them only, so their documents, pricing and name still show.
+          </DialogDescription>
+        </DialogHeader>
+        <FormError message={error} />
+        <DialogFooter>
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={busy}>
+            Cancel
+          </Button>
+          <Button type="button" variant="destructive" onClick={confirm} disabled={busy}>
+            {busy ? <Loader2 className="animate-spin" /> : <Trash2 />}
+            Delete product
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/**
+ * A product's purpose, interest type and eligibility (src/config/eligibility.js), with its
+ * classification worked out from its settings and a worked example of who qualifies.
+ */
+function EligibilityFields({ product, loanTypes, onChange }) {
+  const words = INCOME_LABELS[product.form]
+  const rules = product.eligibility
+  const setRule = (changes) => onChange({ eligibility: { ...rules, ...changes } })
+  const [example, setExample] = useState(product.form === 'personal' ? 10000 : 50000)
+  // The editor holds what is typed; the calculation needs numbers.
+  const priced = { ...product, interestRate: Number(product.interestRate), facilityFee: Number(product.facilityFee), minAmount: Number(product.minAmount), maxAmount: Number(product.maxAmount), maxTenure: Number(product.maxTenure), eligibility: { minIncome: null, repaymentShare: Number(rules.repaymentShare) || 0 } }
+  const result = eligibilityFor(priced, { income: example })
+  return (
+    <div className="space-y-5">
+      <div className="grid gap-4 sm:grid-cols-3">
+        <Field id={`${product.id}-loan-type`} label="Loan type" hint={`Types using the ${APPLICANT_FORMS[product.form].label.toLowerCase()} form.`}>
+          <Select id={`${product.id}-loan-type`} value={product.loanType} onChange={(event) => onChange({ loanType: event.target.value })}>
+            {loanTypes
+              .filter((type) => type.form === product.form)
+              .map((type) => (
+                <option key={type.key} value={type.key}>
+                  {type.label}
+                </option>
+              ))}
+          </Select>
+        </Field>
+        <Field id={`${product.id}-purpose`} label="What it’s for">
+          <Select id={`${product.id}-purpose`} value={product.purpose || ''} onChange={(event) => onChange({ purpose: event.target.value || null })}>
+            <option value="">General purpose</option>
+            {LOAN_PURPOSES[product.form].map((entry) => (
+              <option key={entry.key} value={entry.key}>
+                {entry.label}
+              </option>
+            ))}
+          </Select>
+        </Field>
+        <Field id={`${product.id}-interest-type`} label="Interest">
+          <Select id={`${product.id}-interest-type`} value={product.interestType || 'fixed'} onChange={(event) => onChange({ interestType: event.target.value })}>
+            {Object.entries(INTEREST_TYPES).map(([key, label]) => (
+              <option key={key} value={key}>
+                {label}
+              </option>
+            ))}
+          </Select>
+        </Field>
+      </div>
+      <p className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+        Shown as
+        {productTags(priced).map((tag) => (
+          <span key={tag} className="rounded-full bg-muted px-2 py-0.5 font-medium text-foreground">
+            {tag}
+          </span>
+        ))}
+        <span>(from its collateral, longest tenure and interest).</span>
+      </p>
+      <p className="text-sm text-muted-foreground">
+        Who qualifies for it by {words.short} is set in{' '}
+        <a href="/admin/rules" className="font-medium text-primary hover:underline">
+          Policy rules
+        </a>
+        , in the {product.form === 'personal' ? 'Personal' : 'Business'} Policy: a rule such as “{product.form === 'personal' ? 'Net monthly pay' : 'Average monthly bank credits'} is less than K5,000 → not eligible
+        for {product.name || 'this loan'}”. Here: how much of it may go to repayments, which sets how much they can borrow.
+      </p>
+      <div className="grid gap-4 sm:grid-cols-2">
+        <Field id={`${product.id}-share`} label="Share of income for repayments (%)" hint={`The most of their ${words.short} all their loan repayments may take, this one included.`}>
+          <Input
+            id={`${product.id}-share`}
+            type="number"
+            step="any"
+            value={Number((Number(rules.repaymentShare) * 100).toFixed(2))}
+            onChange={(event) => setRule({ repaymentShare: Number(event.target.value) / 100 })}
+          />
+        </Field>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 rounded-lg bg-muted/50 p-4 text-sm">
+        <label htmlFor={`${product.id}-example-income`} className="text-muted-foreground">
+          An applicant with {words.short} of K
+        </label>
+        <Input id={`${product.id}-example-income`} type="number" value={example} onChange={(event) => setExample(Number(event.target.value) || 0)} className="h-8 w-28 text-sm" />
+        <span className="text-muted-foreground">and no other loans</span>
+        <span className="font-medium text-foreground">
+          {result.status === 'eligible'
+            ? `could borrow up to ${formatKwacha(result.maxAmount)} (budget ${formatKwacha(result.budget)} a month), if the policy’s net pay bands let them have it.`
+            : result.status === 'ineligible'
+              ? `couldn’t borrow it: ${result.reason}`
+              : ''}
+        </span>
+      </div>
     </div>
   )
 }
@@ -531,6 +745,118 @@ function DocumentsEditor({ product, onChange }) {
       </div>
       {adding === CUSTOM && customTaken ? <p className="text-xs text-destructive">This product already has a document with that name.</p> : null}
       {product.form === 'business' ? <p className="text-xs text-muted-foreground">Each director’s NRC and passport photo are always asked for on the company form.</p> : null}
+    </div>
+  )
+}
+
+/**
+ * The loan types applicants choose first (Personal loans, Business loans, …). Each uses one
+ * of the two application forms, chosen when it is added. A type with products can't be
+ * deleted: move its products to another type first (on each product, Loan type).
+ */
+function LoanTypes({ loanTypes, products, onSaved, notify }) {
+  const [value, setValue] = useState(loanTypes)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [draft, setDraft] = useState({ label: '', form: 'personal' })
+  useEffect(() => setValue(loanTypes), [loanTypes])
+  const dirty = JSON.stringify(value) !== JSON.stringify(loanTypes)
+  const update = (key, changes) => setValue((prev) => prev.map((type) => (type.key === key ? { ...type, ...changes } : type)))
+  const countOf = (key) => products.filter((product) => product.loanType === key).length
+  const newKey = slugOf(draft.label)
+  const canAdd = draft.label.trim().length >= 2 && LOAN_TYPE_KEY_PATTERN.test(newKey) && !value.some((type) => type.key === newKey)
+
+  const save = async () => {
+    setSaving(true)
+    setError('')
+    try {
+      const response = await api('/settings/loanTypes', { method: 'PUT', body: { types: value } })
+      onSaved(buildLoanTypes(response.loanTypes))
+      notify('Loan types saved')
+    } catch (saveError) {
+      setError(saveError.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      <Panel title="Loan types" description="What applicants choose first, before a product. Each type uses the individual or the company application form, and every product belongs to one type.">
+        <ul className="divide-y rounded-lg border">
+          {value.map((type) => {
+            const count = countOf(type.key)
+            const saved = loanTypes.some((entry) => entry.key === type.key)
+            return (
+              <li key={type.key} className="grid gap-3 p-3 sm:grid-cols-[minmax(0,14rem)_minmax(0,1fr)_auto] sm:items-start">
+                <div className="space-y-1">
+                  <Input aria-label="Loan type name" value={type.label} onChange={(event) => update(type.key, { label: event.target.value })} className="h-9 text-sm" />
+                  <p className="text-xs text-muted-foreground">
+                    {APPLICANT_FORMS[type.form].label} form · {count} {count === 1 ? 'product' : 'products'}
+                    {saved ? '' : ' · new'}
+                  </p>
+                </div>
+                <Input
+                  aria-label={`What ${type.label} are`}
+                  placeholder="One line for applicants, e.g. For farmers and agricultural co-operatives"
+                  value={type.description}
+                  onChange={(event) => update(type.key, { description: event.target.value })}
+                  className="h-9 text-sm"
+                />
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-9 text-destructive"
+                  disabled={count > 0 || value.length === 1}
+                  onClick={() => setValue((prev) => prev.filter((entry) => entry.key !== type.key))}
+                  aria-label={`Delete ${type.label}`}
+                  title={count > 0 ? `Move its ${count} ${count === 1 ? 'product' : 'products'} to another loan type first (Products → Loan type).` : value.length === 1 ? 'Keep at least one loan type.' : 'Delete this loan type.'}
+                >
+                  <Trash2 className="size-4" />
+                </Button>
+              </li>
+            )
+          })}
+        </ul>
+        <p className="mt-2 text-xs text-muted-foreground">A loan type with products can’t be deleted: move them to another type of the same form first.</p>
+        <div className="mt-4 flex flex-wrap items-end gap-2">
+          <Field id="new-loan-type" label="Add a loan type">
+            <Input id="new-loan-type" placeholder="e.g. Agricultural loans" value={draft.label} onChange={(event) => setDraft({ ...draft, label: event.target.value })} className="h-9 w-64 text-sm" />
+          </Field>
+          <Field id="new-loan-type-form" label="Application form">
+            <Select id="new-loan-type-form" value={draft.form} onChange={(event) => setDraft({ ...draft, form: event.target.value })} className="h-9 w-48 text-sm">
+              {Object.entries(APPLICANT_FORMS).map(([key, entry]) => (
+                <option key={key} value={key}>
+                  {entry.label}
+                </option>
+              ))}
+            </Select>
+          </Field>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={!canAdd}
+            onClick={() => {
+              setValue((prev) => [...prev, { key: newKey, label: draft.label.trim(), description: '', form: draft.form }])
+              setDraft({ label: '', form: 'personal' })
+            }}
+          >
+            <Plus />
+            Add
+          </Button>
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">The form can’t be changed once the type is saved: it decides the questions its applicants answer.</p>
+      </Panel>
+      <SaveCard
+        dirty={dirty}
+        saving={saving}
+        error={error}
+        onSave={save}
+        onDiscard={() => setValue(loanTypes)}
+        note="Applicants see the change straight away. A new type shows on the website once one of its products is switched on."
+      />
     </div>
   )
 }

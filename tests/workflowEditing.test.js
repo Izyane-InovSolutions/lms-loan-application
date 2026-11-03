@@ -10,31 +10,31 @@ const links = (definition, id) => {
   return state.type === 'offer' ? [`accept→${state.offer.onAccept}`] : state.actions.map((action) => `${action.kind}→${action.to}`)
 }
 
-// Today's default: Pre-screening → Appraisal → Underwriting → Offer Issuance → Loan Booking.
+// Today's default: Pre-screening → Appraisal → Underwriting → Underwriting: approval → Offer Issuance → Loan Booking.
 const base = () => forEditing(legacyToWorkflow({}))
 
 describe('the list view’s moves', () => {
   it('puts a new step in the path where it is dropped', () => {
-    const added = addState(base(), { label: 'Underwriting' })
+    const added = addState(base(), { label: 'Credit check' })
     const moved = moveStep(added.definition, added.id, 'pending_approval')
-    expect(steps(moved)).toEqual(['submitted', 'in_review', 'underwriting', 'pending_approval', 'approved', 'accepted'])
-    expect(links(moved, 'in_review')).toEqual(['recommend→underwriting'])
-    expect(links(moved, 'underwriting')).toEqual(['move→pending_approval'])
-    expect(moved.states.find((state) => state.id === 'underwriting').actions[0].label).toBe('Send to Underwriting')
+    expect(steps(moved)).toEqual(['submitted', 'appraisal', 'in_review', 'credit_check', 'pending_approval', 'approved', 'accepted'])
+    expect(links(moved, 'in_review')).toEqual(['recommend→credit_check'])
+    expect(links(moved, 'credit_check')).toEqual(['move→pending_approval'])
+    expect(moved.states.find((state) => state.id === 'credit_check').actions[0].label).toBe('Send to Underwriting: approval')
     expect(errors(moved)).toEqual([])
   })
 
   it('reconnects the steps it leaves, and the ones it lands between', () => {
-    const added = addState(base(), { label: 'Underwriting' })
+    const added = addState(base(), { label: 'Credit check' })
     const first = moveStep(added.definition, added.id, 'pending_approval')
-    // Up above Appraisal: Pre-screening now leads to it, it leads to Appraisal, and Appraisal skips it.
-    const moved = moveStep(first, 'underwriting', 'in_review')
-    expect(steps(moved)).toEqual(['submitted', 'underwriting', 'in_review', 'pending_approval', 'approved', 'accepted'])
-    expect(links(moved, 'submitted')).toEqual(['move→underwriting'])
-    expect(links(moved, 'underwriting')).toEqual(['move→in_review'])
+    // Up above Underwriting: Appraisal now leads to it, it leads to Underwriting, and Underwriting skips it.
+    const moved = moveStep(first, 'credit_check', 'in_review')
+    expect(steps(moved)).toEqual(['submitted', 'appraisal', 'credit_check', 'in_review', 'pending_approval', 'approved', 'accepted'])
+    expect(links(moved, 'appraisal')).toEqual(['move→credit_check'])
+    expect(links(moved, 'credit_check')).toEqual(['move→in_review'])
     expect(links(moved, 'in_review')).toEqual(['recommend→pending_approval'])
     // Its default name follows its new target.
-    expect(moved.states.find((state) => state.id === 'underwriting').actions[0].label).toBe('Send to Appraisal')
+    expect(moved.states.find((state) => state.id === 'credit_check').actions[0].label).toBe('Send to Underwriting')
     expect(errors(moved)).toEqual([])
   })
 
@@ -66,16 +66,50 @@ describe('turning a step off', () => {
   })
 })
 
-describe('workflows published before the stages were renamed', () => {
-  it('take the new stage names, keeping any the workspace chose', async () => {
+describe('workflows published from the editor before today’s stages', () => {
+  // As the editor saved the old default: no Appraisal stage, the review called by a former name.
+  const former = (labels) => {
+    const today = legacyToWorkflow({})
+    const states = today.states
+      .filter((state) => state.id !== 'appraisal')
+      .map((state) => ({
+        ...state,
+        label: labels[state.id] || state.label,
+        askApplicant: state.id === 'pending_approval' ? false : state.askApplicant,
+        actions: (state.actions || []).map((action) => (action.id === 'start_review' ? { ...action, label: labels.startAction, to: 'in_review' } : action)),
+      }))
+    return { ...today, states }
+  }
+
+  it('are brought in line: renamed, an Appraisal stage put in after the start, underwriting able to ask', async () => {
     const { withCurrentStageNames } = await import('../api/_lib/workflowVersions.js')
-    const base = legacyToWorkflow({})
-    // As the editor saved it in October: the former default names, one stage renamed by the workspace.
-    const former = { ...base, states: base.states.map((state) => ({ ...state, label: { submitted: 'New', in_review: 'In review', pending_approval: 'Credit committee', approved: 'Offer made', accepted: 'Offer accepted' }[state.id] || state.label, actions: (state.actions || []).map((action) => (action.id === 'start_review' ? { ...action, label: 'Start review' } : action)) })) }
-    const renamed = withCurrentStageNames(former)
-    const label = (id) => renamed.states.find((state) => state.id === id).label
-    expect(['submitted', 'in_review', 'pending_approval', 'approved', 'accepted'].map(label)).toEqual(['Pre-screening', 'Appraisal', 'Credit committee', 'Offer Issuance', 'Loan Booking'])
-    expect(renamed.states.find((state) => state.id === 'submitted').actions[0].label).toBe('Start appraisal')
-    expect(withCurrentStageNames(renamed)).toBeNull()
+    // November's names: "Appraisal" was the officer's review. One stage renamed by the workspace.
+    const november = former({ submitted: 'Pre-screening', in_review: 'Appraisal', pending_approval: 'Underwriting', approved: 'Offer Issuance', accepted: 'Customer signed', startAction: 'Start appraisal' })
+    const upgraded = withCurrentStageNames(november)
+    const label = (id) => upgraded.states.find((state) => state.id === id).label
+    expect(upgraded.states.map((state) => state.id).slice(0, 4)).toEqual(['submitted', 'appraisal', 'in_review', 'pending_approval'])
+    expect(['submitted', 'appraisal', 'in_review', 'pending_approval', 'approved', 'accepted'].map(label)).toEqual(['Pre-screening', 'Appraisal', 'Underwriting', 'Underwriting: approval', 'Offer Issuance', 'Customer signed'])
+    expect(upgraded.states.find((state) => state.id === 'submitted').actions[0]).toMatchObject({ label: 'Start the review', to: 'appraisal' })
+    expect(upgraded.states.find((state) => state.id === 'appraisal').actions[0].to).toBe('in_review')
+    expect(upgraded.states.find((state) => state.id === 'pending_approval').askApplicant).toBe(true)
+    expect(errors(upgraded)).toEqual([])
+    // Done once.
+    expect(withCurrentStageNames(upgraded)).toBeNull()
+
+    // October's names too.
+    const october = withCurrentStageNames(former({ submitted: 'New', in_review: 'In review', pending_approval: 'Awaiting approval', approved: 'Offer made', accepted: 'Offer accepted', startAction: 'Start review' }))
+    expect(['submitted', 'appraisal', 'in_review', 'pending_approval', 'approved', 'accepted'].map((id) => october.states.find((state) => state.id === id).label)).toEqual([
+      'Pre-screening',
+      'Appraisal',
+      'Underwriting',
+      'Underwriting: approval',
+      'Offer Issuance',
+      'Loan Booking',
+    ])
+  })
+
+  it('leave a workflow the workspace built itself alone', async () => {
+    const { withCurrentStageNames } = await import('../api/_lib/workflowVersions.js')
+    expect(withCurrentStageNames(former({ submitted: 'Intake', in_review: 'Credit review', pending_approval: 'Committee', approved: 'Offer', accepted: 'Signed', startAction: 'Begin' }))).toBeNull()
   })
 })

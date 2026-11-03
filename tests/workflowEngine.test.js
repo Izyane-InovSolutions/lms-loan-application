@@ -80,6 +80,19 @@ describe('the workflow made from today’s settings', () => {
     expect(await consistent(id)).toMatchObject({ status: 'in_review' })
   })
 
+  it('lets underwriting ask the applicant for more before it decides', async () => {
+    const other = await submit('underwriting-asks@example.com')
+    await act(officer, other, 'start_review')
+    for (const check of ['identity', 'documents', 'income']) await act(officer, other, 'check', { check, done: true })
+    await act(officer, other, 'recommend', { verdict: 'approve', rationale: 'Affordable' })
+    expect(await consistent(other)).toMatchObject({ state: 'pending_approval', status: 'pending_approval' })
+    const asked = await act(admin, other, 'request_info', { message: 'Send your latest bank statement' })
+    expect(asked.status, JSON.stringify(asked.body)).toBe(200)
+    expect(await consistent(other)).toMatchObject({ state: 'pending_approval', status: 'info_requested' })
+    await act(admin, other, 'cancel_request', { reason: 'Received by email' })
+    expect(await consistent(other)).toMatchObject({ state: 'pending_approval', status: 'pending_approval' })
+  })
+
   it('follows the settings while nobody has published from the editor', async () => {
     // Four-eyes off: the officer's recommendation becomes the decision, for open cases too.
     expect((await admin.put('/settings/workflow', { requireSecondApproval: false, slaDays: 3, requireLegalReview: false })).status).toBe(200)
@@ -199,6 +212,33 @@ describe('a workflow published from the editor', () => {
     expect((await move(officer, id, 'pay', { note: 'EFT 1234' })).status).toBe(200)
     expect(await consistent(id)).toMatchObject({ state: 'paid_out', status: 'disbursed' })
     expect((await move(officer, id, 'pay')).body.code).toBe('invalid_state')
+  })
+
+  it('holds booking and payout until the offer’s conditions are met', async () => {
+    const other = await submit('conditions@example.com')
+    await move(officer, other, 'prescreen')
+    await act(officer, other, 'check', { check: 'identity', done: true, note: 'NRC seen' })
+    await move(officer, other, 'underwrite', { verdict: 'approve', rationale: 'Affordable' })
+    const approved = await move(salesManager, other, 'approve', { rationale: 'Agreed', conditions: 'Payroll deduction confirmed by the employer\n- Life cover in place' })
+    expect(approved.status, JSON.stringify(approved.body)).toBe(200)
+    const conditions = (await row(other)).checks.conditions
+    expect(conditions.map((condition) => [condition.id, condition.text, condition.met])).toEqual([
+      ['c1', 'Payroll deduction confirmed by the employer', false],
+      ['c2', 'Life cover in place', false],
+    ])
+    await act(officer, other, 'record_acceptance', await signedAcceptance(kv, 'conditions@example.com'))
+    // In the disbursement state: payout waits, and the case page says why.
+    expect((await move(officer, other, 'pay')).body.code).toBe('conditions_open')
+    const detail = (await officer.get(`/applications/${other}`)).body
+    expect(detail.workflow.actions.find((action) => action.kind === 'pay_out').blocked).toMatch(/^Payout waits for the offer’s conditions/)
+
+    expect((await officer.post(`/applications/${other}/conditions/c1`, { met: true, note: 'HR letter received' })).status).toBe(200)
+    expect((await move(officer, other, 'pay')).body.message).toMatch(/Life cover in place/)
+    const done = await officer.post(`/applications/${other}/conditions/c2`, { met: true })
+    expect(done.body.application.checks.conditions.every((condition) => condition.met)).toBe(true)
+    expect(done.body.events.some((event) => event.message === 'Condition met: Payroll deduction confirmed by the employer (HR letter received)')).toBe(true)
+    expect((await move(officer, other, 'pay', { note: 'EFT 9' })).status).toBe(200)
+    expect((await officer.post(`/applications/${other}/conditions/nope`, { met: true })).status).toBe(404)
   })
 
   it('still finishes the old case on its old workflow', async () => {

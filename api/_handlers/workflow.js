@@ -16,8 +16,11 @@ import { runPrescreen, loadFactInputs } from '../_lib/prescreen/run.js'
 import { computeFacts } from '../_lib/prescreen/facts.js'
 import { MANUAL_FIGURES } from '../_lib/prescreen/reasons.js'
 import { getDraftRuleset, getPublishedRuleset, listRulesetHistory, publishDraftRuleset, saveDraftRuleset } from '../_lib/prescreen/rulesets.js'
+import { ELIGIBILITY_FACTS, rulesetEligibility, validateEligibilityRules } from '../../src/config/productEligibility.js'
+import { buildLoanTypes, liveProducts } from '../../src/config/loanProducts.js'
 import { getSetting } from '../_lib/settings.js'
 import { CrbError, getCrb, refreshCrb } from '../_lib/crb/index.js'
+import { CreditPullError, pullCreditReport } from '../_lib/crb/pull.js'
 import { identityFor } from '../_lib/crb/identity.js'
 import kv from '../_lib/kv.js'
 import { reportError } from '../_lib/errors.js'
@@ -27,7 +30,8 @@ import { creditStaffIds, followerIds, notifyUsers } from '../_lib/notify.js'
 import { textCustomer } from '../_lib/sms.js'
 import { WITHDRAWABLE_STATUSES, requestableSlots } from '../../src/config/applications.js'
 import { analyzeCaseUpload } from '../_lib/ai/documents.js'
-import { getApplicationProduct, getCollateralCatalog } from '../_lib/products.js'
+import { getApplicationProduct, getCollateralCatalog, getProducts } from '../_lib/products.js'
+import { conditionsOf, openConditions } from '../../src/config/conditions.js'
 import { collateralItems, itemLabel } from '../../src/config/collateral.js'
 import { ensureOfferDocuments } from '../_lib/offerDocuments.js'
 import { issueStageDocuments } from '../_lib/stageDocuments.js'
@@ -39,9 +43,55 @@ const { applications, applicationDocuments, prescreens, users, locations, crbRep
 // Case actions
 // ---------------------------------------------------------------------------
 
-/** Hands a case to the LMS in the background, once it has entered a state marked for it. */
+/**
+ * Hands a case to the LMS in the background, once it has entered a state marked for it —
+ * unless the offer's conditions aren't all met yet (conditions.js): then it waits, noted on
+ * the case, and goes when the last one is ticked off (setCondition).
+ */
 const handToLms = async (application, actor = null) => {
+  const open = openConditions(application)
+  if (open.length) {
+    const db = await getDb()
+    await db
+      .update(applications)
+      .set({ checks: { ...(application.checks || {}), lmsWaitsForConditions: true } })
+      .where(eq(applications.id, application.id))
+    await addEvent(db, { applicationId: application.id, actor: null, type: 'lms', message: `Booking in the LMS waits for the offer’s conditions: ${open.map((condition) => condition.text).join('; ')}` })
+    return
+  }
   if (await queueLmsSync(application)) afterResponse('LMS hand-off', () => syncApplicationToLms(application.id, actor ? { actor } : undefined))
+}
+
+/**
+ * Ticks one of the offer's conditions off (or back on), with a note of what was seen.
+ * Body: { met, note }. When the last is met and booking was waiting for it, it goes now.
+ */
+const setCondition = async (req, res, { params }) => {
+  const viewer = await requireUser(req, { anyPermission: ['cases.work', 'cases.disburse'] })
+  const application = await findVisibleApplication(viewer, params.id)
+  const conditions = conditionsOf(application)
+  const condition = conditions.find((entry) => entry.id === params.conditionId)
+  if (!condition) fail(404, 'That condition isn’t on this offer.', 'not_found')
+  const met = req.body?.met !== false
+  const note = text(req.body?.note, 500) || null
+  if (application.lmsSyncStatus === 'synced' && !met) fail(409, 'The loan is already booked in the LMS.', 'invalid_state')
+  const next = conditions.map((entry) => (entry.id === condition.id ? { ...entry, met, note, by: viewer.id, byName: viewer.name, at: new Date().toISOString() } : entry))
+  const db = await getDb()
+  // Against the version read, so two people ticking at once can't lose a tick.
+  const [updated] = await db
+    .update(applications)
+    .set({ checks: { ...(application.checks || {}), conditions: next }, version: application.version + 1, updatedAt: new Date() })
+    .where(and(eq(applications.id, application.id), eq(applications.version, application.version)))
+    .returning()
+  if (!updated) fail(409, 'Someone else changed this case just now. Refresh and try again.', 'stale')
+  await addEvent(db, { applicationId: application.id, actor: viewer, type: 'condition', message: `${met ? 'Condition met' : 'Condition reopened'}: ${condition.text}${note ? ` (${note})` : ''}` })
+  await recordAudit({ req, actor: viewer, action: met ? 'application.condition_met' : 'application.condition_reopened', entityType: 'application', entityId: application.id, detail: { condition: condition.id } })
+  if (!openConditions(updated).length && updated.checks?.lmsWaitsForConditions) {
+    await db.update(applications).set({ checks: { ...updated.checks, lmsWaitsForConditions: false } }).where(eq(applications.id, application.id))
+    await addEvent(db, { applicationId: application.id, actor: viewer, type: 'lms', message: 'Every condition is met: booking the loan in the LMS' })
+    await handToLms(updated, viewer)
+  }
+  return loadCase(application.id, viewer)
 }
 
 /** Makes and emails the documents the case's new state sends the applicant, if it sends any (stageDocuments.js). */
@@ -136,6 +186,32 @@ const act = async (req, res, { params }) => {
 const VERIFICATION_STATUSES = { verified: 'Verified', issue: 'Raised an issue with', clear: 'Cleared the legal check on' }
 
 /**
+ * The item a legal review action is about: a pledged collateral item (by index) or a document
+ * on the case (by id). Returns { group, key, label } — where it is kept in
+ * applications.verifications, and how the timeline names it.
+ */
+const verificationTarget = async (db, application, { target, id }) => {
+  if (target === 'collateral') {
+    const items = collateralItems(application.data)
+    const index = Number(id)
+    if (!Number.isInteger(index) || !items[index]) fail(404, 'That collateral item isn’t on this application.', 'not_found')
+    return { group: 'collateral', key: String(index), label: `collateral item ${index + 1} (${itemLabel(items[index], await getCollateralCatalog())})` }
+  }
+  if (target === 'document') {
+    const documentId = String(id || '')
+    if (!/^[0-9a-f-]{36}$/i.test(documentId)) fail(404, 'That document isn’t on this application.', 'not_found')
+    const [document] = await db
+      .select({ id: applicationDocuments.id, label: applicationDocuments.label })
+      .from(applicationDocuments)
+      .where(and(eq(applicationDocuments.id, documentId), eq(applicationDocuments.applicationId, application.id)))
+      .limit(1)
+    if (!document) fail(404, 'That document isn’t on this application.', 'not_found')
+    return { group: 'documents', key: document.id, label: `the ${document.label.toLowerCase()}` }
+  }
+  return fail(400, 'Choose a collateral item or a document.', 'invalid_input')
+}
+
+/**
  * Legal review (legal.verify): marks one pledged collateral item or one document verified,
  * records an issue with it (a note is needed), or clears it. Body: { target: 'collateral' |
  * 'document', id: item index | document id, status: 'verified' | 'issue' | 'clear', note }.
@@ -144,36 +220,13 @@ const VERIFICATION_STATUSES = { verified: 'Verified', issue: 'Raised an issue wi
 const verify = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'legal.verify' })
   const application = await findVisibleApplication(viewer, params.id)
-  const { target, status } = req.body || {}
+  const { status } = req.body || {}
   const note = text(req.body?.note, 500)
   if (!VERIFICATION_STATUSES[status]) fail(400, 'Choose verified, issue or clear.', 'invalid_input')
   if (status === 'issue' && note.length < 3) fail(400, 'Say what the issue is.', 'note_required')
   const db = await getDb()
+  const { group, key, label } = await verificationTarget(db, application, req.body || {})
 
-  let key
-  let label
-  if (target === 'collateral') {
-    const items = collateralItems(application.data)
-    const index = Number(req.body?.id)
-    if (!Number.isInteger(index) || !items[index]) fail(404, 'That collateral item isn’t on this application.', 'not_found')
-    key = String(index)
-    label = `collateral item ${index + 1} (${itemLabel(items[index], await getCollateralCatalog())})`
-  } else if (target === 'document') {
-    const id = String(req.body?.id || '')
-    if (!/^[0-9a-f-]{36}$/i.test(id)) fail(404, 'That document isn’t on this application.', 'not_found')
-    const [document] = await db
-      .select({ id: applicationDocuments.id, label: applicationDocuments.label })
-      .from(applicationDocuments)
-      .where(and(eq(applicationDocuments.id, id), eq(applicationDocuments.applicationId, application.id)))
-      .limit(1)
-    if (!document) fail(404, 'That document isn’t on this application.', 'not_found')
-    key = document.id
-    label = `the ${document.label.toLowerCase()}`
-  } else {
-    fail(400, 'Choose a collateral item or a document.', 'invalid_input')
-  }
-
-  const group = target === 'collateral' ? 'collateral' : 'documents'
   const check = { status, note: note || null, by: viewer.id, byName: viewer.name, at: new Date().toISOString() }
   // One statement, so two people checking different items at once don't overwrite each other.
   const value =
@@ -186,9 +239,134 @@ const verify = async (req, res, { params }) => {
     actor: viewer,
     type: 'verification',
     message: `${VERIFICATION_STATUSES[status]} ${label}${note ? `: ${note}` : ''}`,
-    detail: { target, key, status },
+    detail: { target: req.body?.target, key, status },
   })
-  await recordAudit({ req, actor: viewer, action: `application.verification_${status}`, entityType: 'application', entityId: application.id, detail: { reference: application.reference, target, key } })
+  await recordAudit({ req, actor: viewer, action: `application.verification_${status}`, entityType: 'application', entityId: application.id, detail: { reference: application.reference, target: req.body?.target, key } })
+  return loadCase(application.id, viewer)
+}
+
+/**
+ * A comment on one legal review item, by the legal officer or an officer working the case:
+ * what they saw, what they still need. Body: { target, id, text }. Kept with the checks, at
+ * verifications.comments['collateral:0' | 'document:<id>'], oldest first, and on the timeline.
+ */
+const commentOnVerification = async (req, res, { params }) => {
+  const viewer = await requireUser(req, { anyPermission: ['legal.verify', 'cases.work'] })
+  const application = await findVisibleApplication(viewer, params.id)
+  const message = text(req.body?.text, 1000)
+  if (message.length < 2) fail(400, 'Write the comment first.', 'invalid_input')
+  const db = await getDb()
+  const { group, key, label } = await verificationTarget(db, application, req.body || {})
+  const thread = `${group === 'collateral' ? 'collateral' : 'document'}:${key}`
+  const comment = { id: crypto.randomUUID(), text: message, by: viewer.id, byName: viewer.name, at: new Date().toISOString() }
+  // Appended in one statement, so comments made at the same moment are both kept.
+  const comments = sql`coalesce(${applications.verifications} -> 'comments', '{}'::jsonb)`
+  const value = sql`jsonb_set(${applications.verifications} || jsonb_build_object('comments', ${comments}), ${`{comments,${thread}}`}::text[], coalesce(${comments} -> ${thread}, '[]'::jsonb) || ${JSON.stringify([comment])}::jsonb)`
+  await db.update(applications).set({ verifications: value, updatedAt: new Date() }).where(eq(applications.id, application.id))
+  await addEvent(db, { applicationId: application.id, actor: viewer, type: 'note', message: `On ${label}: ${message}`, detail: { target: req.body?.target, key } })
+  return loadCase(application.id, viewer)
+}
+
+// A valuation's figures, as an officer enters them: kwacha amounts and ISO dates.
+const valuationAmount = (value, label, { required = false } = {}) => {
+  if ((value === '' || value === null || value === undefined) && !required) return null
+  const amount = Number(String(value ?? '').replace(/[^0-9.]/g, ''))
+  if (!(amount > 0)) fail(400, `Enter the ${label} in kwacha.`, 'invalid_input')
+  return amount
+}
+const valuationDate = (value, label, { required = false } = {}) => {
+  if (!value && !required) return null
+  const date = new Date(String(value || ''))
+  if (Number.isNaN(date.getTime()) || date > new Date()) fail(400, `Enter the date ${label}, not in the future.`, 'invalid_input')
+  return date.toISOString().slice(0, 10)
+}
+
+/** The collateral item an appraisal is about, by index; 404 when the application has no such item. */
+const appraisedItem = (application, index) => {
+  const items = collateralItems(application.data)
+  const position = Number(index)
+  if (!Number.isInteger(position) || !items[position]) fail(404, 'That collateral item isn’t on this application.', 'not_found')
+  return { position, item: items[position] }
+}
+
+/**
+ * Appraisal: the lender's valuation of one pledged collateral item (cases.work) — who valued
+ * it and when, its market and forced-sale values, whether and when it was inspected, and
+ * notes. From then on the item's lending value is worked out on the market value, not the
+ * applicant's estimate, so the rules run again. Body: { valuer, valuedOn, marketValue,
+ * forcedSaleValue?, inspectedOn?, notes? }. A report already uploaded is kept.
+ */
+const saveValuation = async (req, res, { params }) => {
+  const viewer = await requireUser(req, { permission: 'cases.work' })
+  const application = await findVisibleApplication(viewer, params.id)
+  const { position, item } = appraisedItem(application, params.index)
+  const body = req.body || {}
+  const valuer = text(body.valuer, 120)
+  if (valuer.length < 2) fail(400, 'Say who valued it: the valuer or firm.', 'invalid_input')
+  const marketValue = valuationAmount(body.marketValue, 'market value', { required: true })
+  const forcedSaleValue = valuationAmount(body.forcedSaleValue, 'forced-sale value')
+  if (forcedSaleValue && forcedSaleValue > marketValue) fail(400, 'The forced-sale value can’t be more than the market value.', 'invalid_input')
+  const previous = application.valuations?.[position] || {}
+  const valuation = {
+    valuer,
+    valuedOn: valuationDate(body.valuedOn, 'it was valued', { required: true }),
+    marketValue,
+    forcedSaleValue,
+    inspectedOn: valuationDate(body.inspectedOn, 'it was inspected'),
+    notes: text(body.notes, 1000) || null,
+    reportId: previous.reportId || null,
+    by: viewer.id,
+    byName: viewer.name,
+    at: new Date().toISOString(),
+  }
+  const db = await getDb()
+  await db
+    .update(applications)
+    .set({ valuations: sql`jsonb_set(${applications.valuations}, ${`{${position}}`}::text[], ${JSON.stringify(valuation)}::jsonb)`, updatedAt: new Date() })
+    .where(eq(applications.id, application.id))
+  const stated = Number(item.value) || 0
+  await addEvent(db, {
+    applicationId: application.id,
+    actor: viewer,
+    type: 'valuation',
+    message: `Valued collateral item ${position + 1} (${itemLabel(item, await getCollateralCatalog())}) at K${marketValue.toLocaleString()}${stated ? ` (the applicant estimated K${stated.toLocaleString()})` : ''}, by ${valuer}${valuation.inspectedOn ? `, inspected ${valuation.inspectedOn}` : ''}`,
+  })
+  await recordAudit({ req, actor: viewer, action: 'application.collateral_valued', entityType: 'application', entityId: application.id, detail: { reference: application.reference, item: position, marketValue } })
+  // The lending value is a rule input.
+  await runPrescreen(application.id, { actor: viewer })
+  return loadCase(application.id, viewer)
+}
+
+/** The valuer's report for one collateral item: filed on the case (slot valuation.<index>), linked to its valuation. A newer one replaces it. */
+const uploadValuationReport = async (req, res, { params }) => {
+  const viewer = await requireUser(req, { permission: 'cases.work' })
+  const application = await findVisibleApplication(viewer, params.id)
+  const { position } = appraisedItem(application, params.index)
+  const { file } = await readSingleUpload(req)
+  const db = await getDb()
+  const stored = await putBlob(`applications/${application.id}/valuation-${position}-${file.filename}`, file.data, { contentType: file.contentType })
+  const [document] = await db
+    .insert(applicationDocuments)
+    .values({
+      applicationId: application.id,
+      slot: `valuation.${position}`,
+      docType: 'valuation',
+      label: `Collateral ${position + 1} valuation report`,
+      pathname: stored.pathname,
+      url: stored.url,
+      filename: file.filename,
+      contentType: file.contentType,
+      size: file.size,
+      source: 'staff',
+      uploadedBy: viewer.id,
+    })
+    .returning({ id: applicationDocuments.id })
+  const linked = { ...(application.valuations?.[position] || {}), reportId: document.id }
+  await db
+    .update(applications)
+    .set({ valuations: sql`jsonb_set(${applications.valuations}, ${`{${position}}`}::text[], ${JSON.stringify(linked)}::jsonb)`, updatedAt: new Date() })
+    .where(eq(applications.id, application.id))
+  await addEvent(db, { applicationId: application.id, actor: viewer, type: 'document', message: `Added the valuation report for collateral item ${position + 1}` })
   return loadCase(application.id, viewer)
 }
 
@@ -322,24 +500,6 @@ const logVisit = async (req, res, { params }) => {
   return loadCase(application.id, viewer)
 }
 
-// Long enough to cover the bureau's timeout plus loading its WSDL.
-const CRB_LOCK_SECONDS = 180
-// Our own setup, not the bureau, is at fault for these.
-const CRB_SETUP_CODES = new Set(['crb_not_configured', 'crb_contract_mismatch', 'crb_insecure_url'])
-
-const crbEventMessage = (crb, score, report, unchanged) => {
-  if (crb.sample) return `Credit bureau score ${score} (sample data)`
-  const headline = report.found === false
-    ? `Credit bureau: no report for this NRC${report.responseCode === null || report.responseCode === undefined ? '' : ` (response code ${report.responseCode})`}`
-    :`Credit bureau score ${score ?? 'not given'}${report.grade ? `, grade ${report.grade}` : ''}`
-  const notes = [
-    report.testIdentity && `bureau test identity ${report.testIdentity.nrc}, not the applicant`,
-    unchanged && 'unchanged since the previous report',
-    report.identity?.mismatch && 'the bureau returned a different NRC — check before relying on it',
-  ]
-  return [headline, ...notes.filter(Boolean)].join('; ')
-}
-
 /**
  * Pulls a credit bureau report, only with the applicant's recorded consent, for the
  * person the application is about. Staff wait for the answer (at most the bureau's
@@ -348,61 +508,12 @@ const crbEventMessage = (crb, score, report, unchanged) => {
 const runCreditCheck = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'cases.work' })
   const application = await findVisibleApplication(viewer, params.id)
-  await refreshCrb({ force: true })
-  const crb = getCrb()
-  if (!crb) fail(400, 'No credit bureau is connected.', 'crb_not_configured')
-  const db = await getDb()
-  const [consent] = await db
-    .select()
-    .from(consents)
-    .where(and(eq(consents.applicationId, application.id), eq(consents.type, 'crb'), eq(consents.granted, true)))
-    .limit(1)
-  if (!consent) fail(403, 'The applicant has not consented to a credit bureau check.', 'no_consent')
-  const identity = identityFor(application)
-
-  // One pull at a time per case: a double click, or two officers at once, would
-  // otherwise make two enquiries at the bureau.
-  const lockKey = `los:crb-pull:${application.id}`
-  if ((await kv.set(lockKey, viewer.id, { nx: true, ex: CRB_LOCK_SECONDS })) === null) {
-    fail(409, 'A credit report is already being pulled for this application. Try again in a moment.', 'crb_in_progress')
-  }
-  let pulled
   try {
-    pulled = await crb.fetchReport(identity)
+    await pullCreditReport(application, { actor: viewer, req })
   } catch (error) {
-    if (!(error instanceof CrbError)) throw error
-    // Only our own wording is recorded: the bureau's reply may echo the applicant's details.
-    const message = error.uncertain ? `${error.message} It may still have recorded the enquiry.` : error.message
-    await addEvent(db, { applicationId: application.id, actor: viewer, type: 'crb', message: `Credit bureau check failed: ${message}` })
-    await recordAudit({ req, actor: viewer, action: 'application.crb_failed', entityType: 'application', entityId: application.id, detail: { provider: crb.name, code: error.code, uncertain: error.uncertain } })
-    await reportError({ source: 'crb', message: `${error.code}: ${error.message}`, route: 'POST /applications/:id/crb', detail: { provider: crb.name } })
-    fail(CRB_SETUP_CODES.has(error.code) ? 503 : 502, message, error.code)
-  } finally {
-    await kv.del(lockKey)
+    if (!(error instanceof CreditPullError)) throw error
+    fail(error.status, error.message, error.code)
   }
-
-  const { score, report } = pulled
-  const [previous] = await db
-    .select({ report: crbReports.report })
-    .from(crbReports)
-    .where(eq(crbReports.applicationId, application.id))
-    .orderBy(desc(crbReports.createdAt))
-    .limit(1)
-  const unchanged = Boolean(report.fingerprint) && previous?.report?.fingerprint === report.fingerprint
-  await db.transaction(async (tx) => {
-    await tx.insert(crbReports).values({ applicationId: application.id, provider: crb.name, score, report, requestedBy: viewer.id })
-    await addEvent(tx, { applicationId: application.id, actor: viewer, type: 'crb', message: crbEventMessage(crb, score, report, unchanged) })
-  })
-  await recordAudit({
-    req,
-    actor: viewer,
-    action: 'application.crb_checked',
-    entityType: 'application',
-    entityId: application.id,
-    detail: { provider: crb.name, ...(report.requestNo ? { bureauRequest: report.requestNo } : {}), ...(report.identity?.mismatch ? { identityMismatch: true } : {}) },
-  })
-  // The score is a rule input, so the prescreen is brought up to date.
-  await runPrescreen(application.id, { actor: viewer })
   return loadCase(application.id, viewer)
 }
 
@@ -614,24 +725,39 @@ const getRules = async (req) => {
   await requireUser(req, { anyPermission: ['rules.view', 'rules.manage'] })
   const [published, draft, history] = await Promise.all([getPublishedRuleset(), getDraftRuleset(), listRulesetHistory()])
   return {
-    published: { version: published.version, policies: rulesToPolicies(published.rules), publishedAt: published.publishedAt, note: published.note },
-    draft: draft ? { policies: rulesToPolicies(draft.rules), note: draft.note } : null,
+    published: { version: published.version, policies: rulesToPolicies(published.rules), eligibility: rulesetEligibility(published.rules), publishedAt: published.publishedAt, note: published.note },
+    draft: draft ? { policies: rulesToPolicies(draft.rules), eligibility: rulesetEligibility(draft.rules), note: draft.note } : null,
     history,
     facts: FACTS,
+    // For the product eligibility rules: the figures they may test, and the products and loan types they can name.
+    eligibilityFacts: ELIGIBILITY_FACTS,
+    products: liveProducts(await getProducts()).map(({ id, name, loanType, form, enabled }) => ({ id, name, loanType, form, enabled })),
+    loanTypes: buildLoanTypes(await getSetting('loanTypes')),
   }
 }
+
+/** Eligibility rules as sent, checked against the products and loan types that exist. */
+const cleanEligibility = async (rules) =>
+  validateEligibilityRules(rules, {
+    productIds: liveProducts(await getProducts()).map((product) => product.id),
+    loanTypeKeys: buildLoanTypes(await getSetting('loanTypes')).map((type) => type.key),
+  })
 
 const saveDraft = async (req) => {
   const actor = await requireUser(req, { permission: 'rules.manage' })
   let policies
+  let eligibility
   try {
     policies = validatePolicies(req.body?.policies)
+    // Left out: the eligibility rules stay as they are in the draft (or as published).
+    eligibility =
+      req.body?.eligibility === undefined ? rulesetEligibility(((await getDraftRuleset()) || (await getPublishedRuleset())).rules) : await cleanEligibility(req.body.eligibility)
   } catch (error) {
     fail(400, error.message, 'invalid_rules')
   }
-  const draft = await saveDraftRuleset({ policies }, text(req.body?.note, 300) || null, actor)
-  await recordAudit({ req, actor, action: 'rules.draft_saved', entityType: 'ruleset', entityId: draft.id, detail: { policies: policies.length } })
-  return { draft: { policies, note: draft.note } }
+  const draft = await saveDraftRuleset({ policies, eligibility }, text(req.body?.note, 300) || null, actor)
+  await recordAudit({ req, actor, action: 'rules.draft_saved', entityType: 'ruleset', entityId: draft.id, detail: { policies: policies.length, eligibility: eligibility.length } })
+  return { draft: { policies, eligibility, note: draft.note } }
 }
 
 const discardDraft = async (req) => {
@@ -651,7 +777,7 @@ const listVersions = async (req) => {
   const db = await getDb()
   const rows = await db.select().from(schema.rulesets).where(ne(schema.rulesets.status, 'draft')).orderBy(desc(schema.rulesets.version)).limit(30)
   return {
-    versions: rows.map((row) => ({ version: row.version, status: row.status, note: row.note, publishedAt: row.publishedAt, policies: rulesToPolicies(row.rules) })),
+    versions: rows.map((row) => ({ version: row.version, status: row.status, note: row.note, publishedAt: row.publishedAt, policies: rulesToPolicies(row.rules), eligibility: rulesetEligibility(row.rules) })),
   }
 }
 
@@ -664,14 +790,16 @@ const restoreVersion = async (req) => {
   const [row] = await db.select().from(schema.rulesets).where(eq(schema.rulesets.version, version)).limit(1)
   if (!row) fail(404, 'That version does not exist.', 'not_found')
   let policies
+  let eligibility
   try {
     policies = validatePolicies(rulesToPolicies(row.rules))
+    eligibility = await cleanEligibility(rulesetEligibility(row.rules))
   } catch (error) {
     fail(400, error.message, 'invalid_rules')
   }
-  const draft = await saveDraftRuleset({ policies }, `Restored from version ${version}`, actor)
+  const draft = await saveDraftRuleset({ policies, eligibility }, `Restored from version ${version}`, actor)
   await recordAudit({ req, actor, action: 'rules.version_restored', entityType: 'ruleset', entityId: draft.id, detail: { fromVersion: version, policies: policies.length } })
-  return { draft: { policies, note: draft.note } }
+  return { draft: { policies, eligibility, note: draft.note } }
 }
 
 const SIMULATION_SAMPLE = 300
@@ -733,6 +861,10 @@ export const workflowRoutes = [
   ['POST', '/applications/:id/actions', act],
   ['POST', '/applications/:id/documents', addStaffDocument],
   ['POST', '/applications/:id/verifications', verify],
+  ['POST', '/applications/:id/verifications/comments', commentOnVerification],
+  ['PUT', '/applications/:id/valuations/:index', saveValuation],
+  ['POST', '/applications/:id/conditions/:conditionId', setCondition],
+  ['POST', '/applications/:id/valuations/:index/report', uploadValuationReport],
   ['POST', '/applications/:id/prescreen', rerunPrescreen],
   ['POST', '/applications/:id/figures', setFigures],
   ['GET', '/applications/:id/facts', previewFacts],

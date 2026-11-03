@@ -1,0 +1,1 @@
+ALTER TABLE "applications" ADD COLUMN "valuations" jsonb DEFAULT '{}'::jsonb NOT NULL;

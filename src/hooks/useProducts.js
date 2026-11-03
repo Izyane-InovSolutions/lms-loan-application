@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { LOAN_PRODUCTS } from '../config/loanProducts'
+import { DEFAULT_LOAN_TYPES, LOAN_PRODUCTS } from '../config/loanProducts'
 import { DEFAULT_COLLATERAL_CATALOG, activeCatalog } from '../config/collateral'
 
 /*
@@ -12,6 +12,7 @@ import { DEFAULT_COLLATERAL_CATALOG, activeCatalog } from '../config/collateral'
 
 const DEFAULT_CATALOG = {
   products: LOAN_PRODUCTS,
+  loanTypes: DEFAULT_LOAN_TYPES,
   collateralCatalog: activeCatalog(DEFAULT_COLLATERAL_CATALOG),
   loaded: false,
 }
@@ -24,8 +25,8 @@ const load = () => {
   if (!pending) {
     pending = fetch('/api/v1/products')
       .then((response) => (response.ok ? response.json() : Promise.reject(new Error(String(response.status)))))
-      .then(({ products, collateralCatalog }) => {
-        cached = { products, collateralCatalog: collateralCatalog || DEFAULT_CATALOG.collateralCatalog, loaded: true }
+      .then(({ products, loanTypes, collateralCatalog }) => {
+        cached = { products, loanTypes: loanTypes || DEFAULT_CATALOG.loanTypes, collateralCatalog: collateralCatalog || DEFAULT_CATALOG.collateralCatalog, loaded: true }
         listeners.forEach((listener) => listener(cached))
         return cached
       })
@@ -41,7 +42,7 @@ const load = () => {
   return pending
 }
 
-/** { products, collateralCatalog, loaded }: `loaded` turns true once the workspace's own answer (or a failure) is in. */
+/** { products, loanTypes, collateralCatalog, loaded }: `loaded` turns true once the workspace's own answer (or a failure) is in. */
 export function useProductCatalog() {
   const [catalog, setCatalog] = useState(cached || DEFAULT_CATALOG)
 

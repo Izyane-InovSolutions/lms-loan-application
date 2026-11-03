@@ -24,8 +24,9 @@ import { getZraConfig } from '../_lib/zra/config.js'
 
 const LEGACY_WORKFLOW_KEYS = ['workflow', 'offers', 'stages', 'lms']
 import { BRAND_NAME_MAX } from '../../src/config/branding.js'
-import { APPLICANT_FORMS, BUILT_IN_PRODUCT_IDS, DOCUMENT_CATALOGUE, PRODUCT_ID_PATTERN, buildProducts, defaultDocuments } from '../../src/config/loanProducts.js'
+import { APPLICANT_FORMS, BUILT_IN_PRODUCT_IDS, DOCUMENT_CATALOGUE, INTEREST_TYPES, LOAN_PURPOSES, LOAN_TYPE_KEY_PATTERN, PRODUCT_ID_PATTERN, STANDARD_PRODUCTS, buildLoanTypes, buildProducts, defaultDocuments, liveProducts } from '../../src/config/loanProducts.js'
 import { COLLATERAL_CODE_PATTERN, COLLATERAL_REQUIREMENTS, buildCollateralCatalog } from '../../src/config/collateral.js'
+import { GUARANTOR_REQUIREMENTS } from '../../src/config/guarantors.js'
 import { isHexColour, normaliseTheme } from '../../src/config/theme.js'
 
 /*
@@ -51,9 +52,9 @@ const validatePricing = (id, value, label = id === 'personal' ? 'Personal loan' 
     minAmount: number(value.minAmount, { min: 1, label: `${label}: minimum amount` }),
     maxAmount: number(value.maxAmount, { min: 1, label: `${label}: maximum amount` }),
     exampleAmount: number(value.exampleAmount, { min: 1, label: `${label}: example amount` }),
-    minTenure: number(value.minTenure, { min: 1, max: 120, integer: true, label: `${label}: shortest tenure` }),
-    maxTenure: number(value.maxTenure, { min: 1, max: 120, integer: true, label: `${label}: longest tenure` }),
-    defaultTenure: number(value.defaultTenure, { min: 1, max: 120, integer: true, label: `${label}: default tenure` }),
+    minTenure: number(value.minTenure, { min: 1, max: 360, integer: true, label: `${label}: shortest tenure` }),
+    maxTenure: number(value.maxTenure, { min: 1, max: 360, integer: true, label: `${label}: longest tenure` }),
+    defaultTenure: number(value.defaultTenure, { min: 1, max: 360, integer: true, label: `${label}: default tenure` }),
     interestRate: number(value.interestRate, { min: 0, max: 1, label: `${label}: interest rate` }),
     interestBasis: value.interestBasis === 'month' ? 'month' : 'loan',
     facilityFee: number(value.facilityFee, { min: 0, label: `${label}: facility fee` }),
@@ -87,19 +88,38 @@ const validateProductDocuments = (form, value, label) => {
 }
 
 /** One product, built-in or added: its words, form, pricing, documents and collateral rules. */
-const validateProduct = (id, value, current, collateralTypes) => {
+const validateProduct = (id, value, current, collateralTypes, loanTypes) => {
   const builtIn = BUILT_IN_PRODUCT_IDS.includes(id)
-  const form = builtIn ? id : current?.form || value.form
+  const form = builtIn ? id : current?.form || STANDARD_PRODUCTS[id]?.form || value.form
   if (!APPLICANT_FORMS[form]) throw new Error(`Choose the application form "${text(value.name, 80) || id}" uses.`)
   const name = text(value.name, 80)
   if (name.length < 3) throw new Error('Every loan product needs a name of at least 3 characters.')
   const label = name
+  // The loan type it belongs to: one that uses the same application form.
+  const loanTypeKey = value.loanType ?? current?.loanType ?? STANDARD_PRODUCTS[id]?.loanType ?? form
+  const loanType = loanTypes.find((type) => type.key === loanTypeKey)
+  if (!loanType) throw new Error(`${label}: choose the loan type it belongs to.`)
+  if (loanType.form !== form) throw new Error(`${label} uses the ${APPLICANT_FORMS[form].label.toLowerCase()} form, so it can only belong to a loan type that uses that form.`)
   const requirement = Object.keys(COLLATERAL_REQUIREMENTS).includes(value.collateral?.requirement) ? value.collateral.requirement : 'none'
   const known = new Set(collateralTypes.map((type) => type.key))
   return {
     ...validatePricing(id, value, label),
     form,
+    loanType: loanType.key,
     name,
+    // What it's for (LOAN_PURPOSES of its form), or null for general purpose; the interest type it is sold as.
+    purpose: LOAN_PURPOSES[form].some((entry) => entry.key === value.purpose) ? value.purpose : null,
+    interestType: INTEREST_TYPES[value.interestType] ? value.interestType : 'fixed',
+    // Whether applicants name guarantors (src/config/guarantors.js).
+    guarantors: { requirement: GUARANTOR_REQUIREMENTS[value.guarantors?.requirement] ? value.guarantors.requirement : 'none' },
+    // Who qualifies (src/config/eligibility.js).
+    eligibility: {
+      minIncome:
+        value.eligibility?.minIncome === null || value.eligibility?.minIncome === '' || value.eligibility?.minIncome === undefined
+          ? null
+          : number(value.eligibility.minIncome, { min: 0, label: `${label}: the minimum ${form === 'personal' ? 'net pay' : 'monthly revenue'}` }) || null,
+      repaymentShare: number(value.eligibility?.repaymentShare ?? (form === 'personal' ? 0.4 : 0.3), { min: 0.05, max: 1, label: `${label}: the share of income for repayments` }),
+    },
     tagline: text(value.tagline, 120),
     description: text(value.description, 600),
     // Left out of the request: kept as they are (or the form's usual ones), never emptied by omission.
@@ -111,20 +131,82 @@ const validateProduct = (id, value, current, collateralTypes) => {
       mustCover: ['required', 'amount'].includes(requirement) && Boolean(value.collateral?.mustCover),
     },
     // Added products keep the time they were made, which orders them after the built-in ones.
-    ...(builtIn ? {} : { createdAt: current?.createdAt || new Date().toISOString() }),
+    ...(builtIn ? {} : { createdAt: current?.createdAt || STANDARD_PRODUCTS[id]?.createdAt || new Date().toISOString() }),
   }
 }
 
 const validateProducts = async (value) => {
   const stored = await getSetting('products')
   const { types } = buildCollateralCatalog(await getSetting('collateral'))
+  const loanTypes = buildLoanTypes(await getSetting('loanTypes'))
   const products = {}
   for (const [id, entry] of Object.entries(value || {})) {
     if (!BUILT_IN_PRODUCT_IDS.includes(id) && !PRODUCT_ID_PATTERN.test(id)) throw new Error(`"${id}" can’t be a product id: use lower-case letters, numbers and dashes.`)
-    products[id] = validateProduct(id, entry || {}, stored[id], types)
+    if (id.startsWith('match-')) throw new Error(`Product ids can’t start with "match-": it is kept for “we’ll match you” applications.`)
+    if (stored[id]?.deleted) throw new Error(`The product "${id}" was deleted. Give a new product another id.`)
+    products[id] = validateProduct(id, entry || {}, stored[id], types, loanTypes)
   }
   if (!buildProducts({ ...stored, ...products }).some((product) => product.enabled)) throw new Error('Keep at least one loan product switched on.')
   return products
+}
+
+/**
+ * The loan types. A type keeps the application form it was made with; one left out is
+ * deleted, which is refused while any product (on or off) still belongs to it.
+ */
+const validateLoanTypes = async (value) => {
+  const stored = buildLoanTypes(await getSetting('loanTypes'))
+  const products = buildProducts(await getSetting('products'))
+  const keys = new Set()
+  const types = (Array.isArray(value?.types) ? value.types : []).slice(0, 30).map((entry) => {
+    const key = text(entry?.key, 40)
+    if (!LOAN_TYPE_KEY_PATTERN.test(key)) throw new Error(`"${key}" can’t be a loan type key: use lower-case letters, numbers and dashes.`)
+    if (keys.has(key)) throw new Error(`The loan type "${key}" is listed twice.`)
+    keys.add(key)
+    const label = text(entry.label, 60)
+    if (label.length < 2) throw new Error('Every loan type needs a name.')
+    const existing = stored.find((type) => type.key === key)
+    const form = existing ? existing.form : entry.form
+    if (!APPLICANT_FORMS[form]) throw new Error(`Choose the application form “${label}” uses.`)
+    return { key, label, description: text(entry.description, 300), form }
+  })
+  if (!types.length) throw new Error('Keep at least one loan type.')
+  for (const type of stored) {
+    if (keys.has(type.key)) continue
+    const count = liveProducts(products).filter((product) => product.loanType === type.key).length
+    if (count) throw new Error(`“${type.label}” still has ${count} ${count === 1 ? 'product' : 'products'}. Move ${count === 1 ? 'it' : 'them'} to another loan type first.`)
+  }
+  return { types }
+}
+
+/** How many applications were made under a product (a built-in one: also those from before products, by their form). */
+const applicationsUnder = async (id) => {
+  const db = await getDb()
+  const { applications } = schema
+  const own = sql`${applications.productId} = ${id}`
+  const [{ count }] = await db
+    .select({ count: sql`count(*)::int` })
+    .from(applications)
+    .where(BUILT_IN_PRODUCT_IDS.includes(id) ? sql`(${own} or (${applications.productId} is null and ${applications.loanType} = ${id}))` : own)
+  return count
+}
+
+/**
+ * Deletes a loan product. One no application was made under is removed for good; one with
+ * applications is kept for them (their documents, pricing and name still read) but leaves
+ * every list and can never be offered again. At least one product must stay switched on.
+ */
+const deleteProduct = async (req, res, { params }) => {
+  const actor = await requireUser(req, { permission: 'settings.manage' })
+  const stored = await getSetting('products')
+  const product = liveProducts(buildProducts(stored)).find((entry) => entry.id === params.id)
+  if (!product) fail(404, 'That loan product doesn’t exist.', 'not_found')
+  const used = await applicationsUnder(product.id)
+  const next = used ? { ...(stored[product.id] || {}), deleted: true, enabled: false } : null
+  if (!buildProducts({ ...stored, [product.id]: next }).some((entry) => entry.enabled)) fail(400, 'Keep at least one loan product switched on. Switch another on before deleting this one.', 'invalid_input')
+  const saved = await setSetting('products', { [product.id]: next }, actor)
+  await recordAudit({ req, actor, action: 'settings.product_deleted', entityType: 'setting', entityId: 'products', detail: { id: product.id, name: product.name, applications: used, kept: Boolean(used) } })
+  return { products: saved, kept: Boolean(used), applications: used }
 }
 
 /** Whether any application pledged collateral matching this ({ type } or { code }). */
@@ -286,6 +368,7 @@ const VALIDATORS = {
         .map((entry) => text(entry, 60))
         .filter(Boolean),
       timeoutSeconds: number(value.timeoutSeconds, { min: 5, max: 300, integer: true, label: 'The timeout' }),
+      sendSecurity: Boolean(value.sendSecurity),
     }
   },
   zra: (value) => {
@@ -345,11 +428,13 @@ const VALIDATORS = {
       reportSector: number(value.reportSector, { min: 1, max: 99, integer: true, label: 'The report sector' }),
       timeoutSeconds: number(value.timeoutSeconds, { min: 5, max: 120, integer: true, label: 'The bureau timeout' }),
       testIdentity,
+      autoPull: value.autoPull !== false,
     }
   },
   workflow: (value) => ({
     requireSecondApproval: Boolean(value.requireSecondApproval),
     requireLegalReview: value.requireLegalReview !== false,
+    requireValuation: value.requireValuation !== false,
     slaDays: number(value.slaDays, { min: 1, max: 60, integer: true, label: 'The target days' }),
   }),
   offers: (value) => ({
@@ -360,6 +445,7 @@ const VALIDATORS = {
   prescreen: (value) => ({ autoDecline: Boolean(value.autoDecline) }),
   products: validateProducts,
   collateral: validateCollateral,
+  loanTypes: validateLoanTypes,
   retention: (value) => ({
     declinedDays: optionalDays(value.declinedDays, 'Declined applications'),
     withdrawnDays: optionalDays(value.withdrawnDays, 'Withdrawn applications'),
@@ -659,6 +745,7 @@ export const settingsRoutes = [
   ['GET', '/settings', getSettings],
   ['GET', '/stages', stagesForStaff],
   ['PUT', '/settings/:key', saveSetting],
+  ['DELETE', '/settings/products/:id', deleteProduct],
   ['POST', '/settings/lms/test', testLms],
   ['POST', '/settings/zra/test', testZra],
   ['POST', '/settings/crb/test', testCrb],

@@ -39,8 +39,11 @@ import {
   PRODUCT_KEYS,
   describeCondition,
   factsForProduct,
+  isEligibilityRule,
   validatePolicies,
 } from "@/config/creditRules";
+import { validateEligibilityRules } from "@/config/productEligibility";
+import { EligibilityRules } from "./EligibilityRules";
 import { api } from "../api";
 import { hasPermission } from "@/config/roles";
 import { useAuth } from "../auth";
@@ -87,6 +90,7 @@ const OUTCOME_TONE = {
   decline: "text-destructive",
   refer: "text-warning",
   warn: "text-muted-foreground",
+  not_eligible: "text-primary",
 };
 
 let tempId = 0;
@@ -152,6 +156,8 @@ export function RulesPage() {
   const canEdit = hasPermission(user, "rules.manage");
   const [state, setState] = useState({ status: "loading" });
   const [policies, setPolicies] = useState([]);
+  // Product eligibility rules (EligibilityRules.jsx): saved and published with the policies.
+  const [eligibility, setEligibility] = useState([]);
   const [note, setNote] = useState("");
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(null);
@@ -169,6 +175,7 @@ export function RulesPage() {
       const data = await api("/rules");
       setState({ status: "ready", ...data });
       setPolicies((data.draft || data.published).policies);
+      setEligibility((data.draft || data.published).eligibility || []);
       setNote(data.draft?.note || "");
       setDirty(false);
       setSimulation(null);
@@ -195,11 +202,17 @@ export function RulesPage() {
   const validation = useMemo(() => {
     try {
       validatePolicies(policies);
+      validateEligibilityRules(eligibility);
       return null;
     } catch (validationError) {
       return validationError.message;
     }
-  }, [policies]);
+  }, [policies, eligibility]);
+
+  const changeEligibility = (rules) => {
+    setEligibility(rules);
+    setDirty(true);
+  };
 
   const mutate = (updater) => {
     setPolicies(updater);
@@ -314,7 +327,10 @@ export function RulesPage() {
 
   const saveDraft = () =>
     run("save", async () => {
-      await api("/rules/draft", { method: "PUT", body: { policies, note } });
+      await api("/rules/draft", {
+        method: "PUT",
+        body: { policies, eligibility, note },
+      });
       notify("Draft saved");
       await load();
     });
@@ -345,7 +361,10 @@ export function RulesPage() {
   const publish = () =>
     run("publish", async () => {
       if (dirty)
-        await api("/rules/draft", { method: "PUT", body: { policies, note } });
+        await api("/rules/draft", {
+          method: "PUT",
+          body: { policies, eligibility, note },
+        });
       const { published } = await api("/rules/publish", {
         method: "POST",
         body: { note },
@@ -524,6 +543,7 @@ export function RulesPage() {
             <PolicyEditor
               key={policy.id}
               policy={policy}
+              products={state.products || []}
               filter={filtering ? filter : null}
               collapsed={!filtering && collapsed.has(policy.id)}
               onToggleCollapsed={() => toggleCollapsed(policy.id)}
@@ -540,6 +560,7 @@ export function RulesPage() {
           ) : (
             <PolicyReadOnly
               key={policy.id}
+              products={state.products || []}
               policy={
                 filtering
                   ? {
@@ -560,6 +581,14 @@ export function RulesPage() {
           </Button>
         ) : null}
       </div>
+
+      <EligibilityRules
+        rules={eligibility}
+        canEdit={canEdit}
+        products={state.products || []}
+        loanTypes={state.loanTypes || []}
+        onChange={changeEligibility}
+      />
 
       {state.history.length > 1 ? (
         <Panel title="Earlier versions">
@@ -637,7 +666,7 @@ export function RulesPage() {
           </DialogHeader>
           <div className="space-y-3">
             {viewing?.policies.map((policy) => (
-              <PolicyReadOnly key={policy.id} policy={policy} />
+              <PolicyReadOnly key={policy.id} policy={policy} products={state.products || []} />
             ))}
           </div>
           <DialogFooter>
@@ -817,6 +846,7 @@ function StatusBadge({ enabled }) {
 /** One editable policy: its name, product and on/off, then its rules. */
 function PolicyEditor({
   policy,
+  products,
   filter,
   collapsed,
   onToggleCollapsed,
@@ -919,6 +949,7 @@ function PolicyEditor({
                     onDuplicate={() => onDuplicateRule(ri)}
                     rule={rule}
                     product={policy.product}
+                    products={products}
                     policyEnabled={policy.enabled}
                     onChange={(changes) => onRuleChange(ri, changes)}
                     onRemove={() => onRuleRemove(ri)}
@@ -948,6 +979,7 @@ function PolicyEditor({
 function RuleEditor({
   rule,
   product,
+  products = [],
   policyEnabled,
   onChange,
   onRemove,
@@ -955,6 +987,8 @@ function RuleEditor({
 }) {
   const allowed = factsForProduct(product);
   const fact = allowed[rule.fact] || FACTS[rule.fact];
+  // "Not eligible for…": the loans it rules out, and a message the applicant reads.
+  const eligibility = isEligibilityRule(rule);
   const operator = OPERATORS[rule.operator];
   // Fields are locked while the rule is off, or while the whole policy is off.
   const locked = !policyEnabled || !rule.enabled;
@@ -1027,19 +1061,40 @@ function RuleEditor({
           )}
         </div>
         <Input
-          aria-label="Message for the officer"
+          aria-label={eligibility ? "Message for the applicant" : "Message for the officer"}
           value={rule.message}
           onChange={(event) => onChange({ message: event.target.value })}
-          placeholder="What the concern is, in words the officer will read"
+          placeholder={
+            eligibility
+              ? "What the applicant reads, e.g. Needs net pay of at least K5,000 a month."
+              : "What the concern is, in words the officer will read"
+          }
           disabled={locked}
           className="h-9 text-sm"
         />
+        {eligibility ? (
+          <EligibleProducts
+            rule={rule}
+            products={products.filter(
+              (entry) => product === "both" || entry.form === product,
+            )}
+            disabled={locked}
+            onChange={onChange}
+          />
+        ) : null}
       </div>
       <div className="col-start-1 self-start lg:col-start-auto">
         <Select
           aria-label="Then"
           value={rule.outcome}
-          onChange={(event) => onChange({ outcome: event.target.value })}
+          onChange={(event) =>
+            onChange({
+              outcome: event.target.value,
+              ...(event.target.value === "not_eligible" && !rule.products
+                ? { products: [] }
+                : {}),
+            })
+          }
           disabled={locked}
           className={cn("h-9 text-sm font-medium", OUTCOME_TONE[rule.outcome])}
         >
@@ -1084,8 +1139,60 @@ function RuleEditor({
   );
 }
 
+/** The loans a "Not eligible for…" rule rules out: chips, and a picker for the rest. */
+function EligibleProducts({ rule, products, disabled, onChange }) {
+  const chosen = rule.products || [];
+  const name = (id) => products.find((entry) => entry.id === id)?.name || id;
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 text-xs">
+      <span className="font-medium text-muted-foreground">Not eligible for</span>
+      {chosen.map((id) => (
+        <span
+          key={id}
+          className="inline-flex items-center gap-1 rounded-full bg-primary/10 py-0.5 pl-2 pr-1 font-medium text-primary"
+        >
+          {name(id)}
+          {disabled ? null : (
+            <button
+              type="button"
+              onClick={() =>
+                onChange({ products: chosen.filter((entry) => entry !== id) })
+              }
+              aria-label={`Remove ${name(id)}`}
+              className="rounded-full px-1 hover:bg-primary/15"
+            >
+              ×
+            </button>
+          )}
+        </span>
+      ))}
+      {disabled ? null : (
+        <Select
+          aria-label="Add a loan this rule rules out"
+          value=""
+          onChange={(event) =>
+            event.target.value &&
+            onChange({ products: [...chosen, event.target.value] })
+          }
+          className="h-7 w-52 text-xs"
+        >
+          <option value="">{chosen.length ? "Add another loan…" : "Choose the loans…"}</option>
+          {products
+            .filter((entry) => !chosen.includes(entry.id))
+            .map((entry) => (
+              <option key={entry.id} value={entry.id}>
+                {entry.name}
+                {entry.enabled ? "" : " (off)"}
+              </option>
+            ))}
+        </Select>
+      )}
+    </div>
+  );
+}
+
 /** Read-only policy view for officers and sales managers. */
-function PolicyReadOnly({ policy }) {
+function PolicyReadOnly({ policy, products = [] }) {
   return (
     <div
       className={cn(
@@ -1116,7 +1223,9 @@ function PolicyReadOnly({ policy }) {
           >
             <span className="text-foreground">{describeCondition(rule)}</span>
             <span className={cn("font-medium", OUTCOME_TONE[rule.outcome])}>
-              {OUTCOMES[rule.outcome].label}
+              {isEligibilityRule(rule)
+                ? `Not eligible for ${(rule.products || []).map((id) => products.find((entry) => entry.id === id)?.name || id).join(", ")}`
+                : OUTCOMES[rule.outcome].label}
             </span>
             <span className="text-muted-foreground">{rule.message}</span>
             <div className="lg:justify-self-end">

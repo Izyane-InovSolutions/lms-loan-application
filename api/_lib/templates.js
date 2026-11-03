@@ -100,6 +100,13 @@ We are pleased to offer you a {{product}} on the terms below.
 - Total repayable: {{total_repayable}}
 - Monthly instalment: {{monthly_instalment}}
 
+## Repayment schedule
+{{repayment_schedule}}
+
+## Security
+- Collateral: {{collateral}}
+- Guarantors: {{guarantors}}
+
 ## Conditions
 {{conditions}}
 

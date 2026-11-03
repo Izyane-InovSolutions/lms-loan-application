@@ -7,14 +7,16 @@ import { addEvent } from './applications.js'
 import { getSetting } from './settings.js'
 import { getPublishedWorkflow, getWorkflowVersion } from './workflowVersions.js'
 import { OPEN_STATUSES, WITHDRAWABLE_STATUSES, requestableSlots } from '../../src/config/applications.js'
-import { ACTION_KINDS, PHASES, actionPermission, SYSTEM_FINAL_IDS, actionTarget, appliesTo, awaitsDocuments, forwardEdges, resolveState, stateById } from '../../src/config/workflow.js'
+import { ACTION_KINDS, PHASES, actionPermission, caseSubject, SYSTEM_FINAL_IDS, actionTarget, appliesTo, awaitsDocuments, forwardEdges, resolveState, stateById } from '../../src/config/workflow.js'
 import { checkOtp } from './otp.js'
 import { signatureFor } from './signing.js'
 import { outstandingDocuments } from './stageDocuments.js'
 import { listDocumentKinds } from './templates.js'
 import { priceLoan, productFor } from '../../src/config/loanProducts.js'
 import { getCollateralCatalog, getProducts } from './products.js'
-import { describeOutstanding, legalReviewComplete, legalReviewOutstanding } from '../../src/config/legalReview.js'
+import { approvalHold, valuationHold } from '../../src/config/appraisal.js'
+import { collateralItems } from '../../src/config/collateral.js'
+import { openConditions, parseConditions } from '../../src/config/conditions.js'
 
 const { applications, applicationDocuments, appraisals, users } = schema
 
@@ -109,7 +111,7 @@ const locate = async (application, db = null) => {
  * and the offer's deadline when it is the offer state.
  */
 export const entryChanges = (flow, application, targetId, settings, now = new Date()) => {
-  const target = resolveState(flow.definition, targetId, application.loanType)
+  const target = resolveState(flow.definition, targetId, caseSubject(application))
   if (!target) throw new Error(`Workflow v${flow.version} has no state “${targetId}” for ${application.loanType} loans.`)
   const changes = {
     state: target.id,
@@ -232,7 +234,7 @@ const assertFourEyes = async (tx, viewer, application) => {
 /** Finds the current state's action an older action name stands for, with the errors those names always gave. */
 const resolveLegacyAction = (flow, state, application, input) => {
   const { definition } = flow
-  const product = application.loanType
+  const product = caseSubject(application)
   const find = (predicate) => (state.actions || []).find(predicate) || null
   switch (input.action) {
     case 'start_review': {
@@ -296,6 +298,12 @@ const runTransition = async (tx, viewer, application, flow, state, action, input
           ? reason(input.rationale ?? input.reason ?? input.note, 'Say why the case is being sent back.')
           : text(input.note ?? input.reference, 1000)
   const recommendTerms = action.kind === 'recommend' && verdict === 'approve' ? terms(application, input, settings) : null
+  // Leaving the Appraisal stage forward needs every pledged item valued; so does recommending
+  // approval, in case a valuation was taken back since (appraisal.js). A decline never waits.
+  if ((state.appraisal && kind?.forward && action.kind !== 'reject') || recommendTerms) {
+    const hold = valuationHold(application, settings.collateralCatalog, settings.workflow)
+    if (hold) fail(409, `${recommendTerms ? 'Recommending approval' : 'Moving on'} waits for ${hold}.`, 'valuation_incomplete')
+  }
 
   const neededChecks = [...(state.requiredChecks || []), ...(action.kind === 'recommend' && verdict !== 'approve' ? [] : action.options?.checks || [])]
   const missing = [...new Set(neededChecks)].filter((key) => !application.checks?.[key]?.done)
@@ -325,7 +333,7 @@ const runTransition = async (tx, viewer, application, flow, state, action, input
       event = { type: state.trackProgress ? 'stage' : 'status', message: state.trackProgress ? `${stepName(state)}: done${rationale ? ` (${rationale})` : ''}` : `${action.label}${rationale ? ` (${rationale})` : ''}` }
     }
   } else if (action.kind === 'return') {
-    changes.stageProgress = progressWithout(flow, application, actionTarget(flow.definition, action, application.loanType).id)
+    changes.stageProgress = progressWithout(flow, application, actionTarget(flow.definition, action, caseSubject(application)).id)
     event = { type: 'decision', message: `Sent back for more work: ${rationale}` }
   } else if (action.kind === 'recommend') {
     await tx.insert(appraisals).values({
@@ -346,11 +354,13 @@ const runTransition = async (tx, viewer, application, flow, state, action, input
     Object.assign(result, await decision(tx, viewer, application, action, input, rationale, settings, flow, changes))
     event = result.event
   } else if (action.kind === 'pay_out') {
+    const open = openConditions(application)
+    if (open.length) fail(409, `Tick off the offer’s conditions first: ${open.map((condition) => condition.text).join('; ')}.`, 'conditions_open')
     event = { type: 'status', message: rationale ? `Paid out (${rationale})` : 'Paid out', visibleToCustomer: true }
   }
 
   // A return to a state that's off goes to the one before it; entering passes the rest through.
-  const { target, changes: entry } = entryChanges(flow, application, actionTarget(flow.definition, action, application.loanType)?.id || action.to, settings)
+  const { target, changes: entry } = entryChanges(flow, application, actionTarget(flow.definition, action, caseSubject(application))?.id || action.to, settings)
   result.handToLms = Boolean(target.handToLms)
   result.enteredOffer = target.type === 'offer'
   return { changes: { ...changes, ...entry }, event, result, target }
@@ -386,12 +396,11 @@ const decision = async (tx, viewer, application, action, input, rationale, setti
     }
   }
 
-  // Legal sign-off first, when the workspace asks for it: every collateral item and document verified.
-  if (settings.workflow.requireLegalReview !== false) {
-    const documents = await tx.select().from(applicationDocuments).where(eq(applicationDocuments.applicationId, application.id))
-    const outstanding = legalReviewOutstanding(application, documents, settings.collateralCatalog)
-    if (!legalReviewComplete(outstanding)) fail(409, `The legal review isn’t complete: ${describeOutstanding(outstanding)}.`, 'legal_review_incomplete')
-  }
+  // The appraisal first, as the workspace asks (appraisal.js): every collateral item valued,
+  // and every collateral item and document verified by the legal officer.
+  const documents = await tx.select().from(applicationDocuments).where(eq(applicationDocuments.applicationId, application.id))
+  const hold = approvalHold(application, documents, settings.collateralCatalog, settings.workflow)
+  if (hold) fail(409, `Approval waits for ${hold}.`, 'approval_held')
 
   const approved = terms(application, { amount: input.amount ?? recommendation?.amount, tenure: input.tenure ?? recommendation?.tenure }, settings)
   const min = viewer.approvalMin ?? 0
@@ -401,12 +410,14 @@ const decision = async (tx, viewer, application, action, input, rationale, setti
   await record('approve', approved)
 
   Object.assign(changes, { decidedAt: new Date(), approvedAmount: approved.amount, approvedTenure: approved.tenure })
+  // The conditions, as a checklist the loan isn't booked or paid out without (conditions.js).
+  changes.checks = { ...(application.checks || {}), conditions: parseConditions(conditions) }
   if (singleStep) changes.assignedOfficer = application.assignedOfficer || viewer.id
   if (approved.amount !== application.amount || approved.tenure !== application.tenure) {
     const price = priceLoan(approved.amount, approved.tenure, productFor(application, settings.products))
     Object.assign(changes, { totalRepayable: price.total, monthlyInstalment: price.monthly })
   }
-  const toOffer = actionTarget(flow.definition, action, application.loanType)?.type === 'offer'
+  const toOffer = actionTarget(flow.definition, action, caseSubject(application))?.type === 'offer'
   return {
     decided: 'approved',
     approved: true,
@@ -675,7 +686,7 @@ export const caseWorkflow = locate
 // ---------------------------------------------------------------------------
 
 /** Why `viewer` can't take `action` here, or null when they can (the server checks again on the day). */
-const blockedReason = (viewer, application, state, action, recommendation, roleName, outstanding, legal) => {
+const blockedReason = (viewer, application, state, action, recommendation, roleName, outstanding, holds) => {
   if (application.status === 'info_requested') return 'Waiting on the applicant.'
   if (viewer.role !== 'admin') {
     const roles = state.roles || []
@@ -687,17 +698,29 @@ const blockedReason = (viewer, application, state, action, recommendation, roleN
   }
   // A recommendation may still be to decline, so it stays open; the server holds an approval.
   if (outstanding.length && action.kind !== 'recommend' && awaitsDocuments(action)) return `Waiting for signed documents: ${outstanding.join(', ')}.`
-  // Declining or sending back stays open; only approval waits for the legal review.
-  if (action.kind === 'approve' && legal && !legal.complete) return `Approval waits for legal sign-off: ${legal.summary}.`
+  // Declining or sending back stays open: approval waits for the valuations and the legal
+  // check, and leaving Appraisal for the valuations.
+  if (action.kind === 'approve' && holds.approval) return `Approval waits for ${holds.approval}.`
+  if (state.appraisal && action.kind === 'move' && holds.valuation) return `Moves on once valued: waiting for ${holds.valuation}.`
+  const conditions = openConditions(application)
+  if (action.kind === 'pay_out' && conditions.length) return `Payout waits for the offer’s conditions: ${conditions.map((condition) => condition.text).join('; ')}.`
   return null
 }
 
-/** Where the legal review stands, when approval waits for it (Settings → Credit workflow); else null. */
-const legalReviewFor = async (application) => {
-  if ((await getSetting('workflow')).requireLegalReview === false) return null
+/**
+ * What the collateral holds, for the case page (appraisal.js): { legalRequired, valuation,
+ * approval } — whether approval waits for the legal check at all, what holds leaving
+ * Appraisal or recommending approval, and what holds an approval; null when nothing does.
+ */
+const appraisalFor = async (application) => {
+  const settings = await getSetting('workflow')
+  const catalog = await getCollateralCatalog()
   const documents = await (await getDb()).select().from(applicationDocuments).where(eq(applicationDocuments.applicationId, application.id))
-  const outstanding = legalReviewOutstanding(application, documents, await getCollateralCatalog())
-  return { complete: legalReviewComplete(outstanding), summary: describeOutstanding(outstanding) }
+  return {
+    legalRequired: settings.requireLegalReview !== false && collateralItems(application.data).length > 0,
+    valuation: valuationHold(application, catalog, settings),
+    approval: approvalHold(application, documents, catalog, settings),
+  }
 }
 
 /**
@@ -707,14 +730,14 @@ const legalReviewFor = async (application) => {
 export const workflowView = async (viewer, application, { recommendation = null } = {}) => {
   const { flow, state } = await locate(application)
   const { definition, analysis } = flow
-  const product = application.loanType
+  const product = caseSubject(application)
   const labels = Object.fromEntries((await listRoles()).map((role) => [role.key, role.label]))
   const roleName = (key) => labels[key] || key
   const phase = analysis.phases[state.id] || null
   const stepStates = analysis.order.map((id) => stateById(definition, id)).filter((entry) => entry?.trackProgress && appliesTo(entry, product))
   const outstanding = state.type === 'final' ? [] : await outstandingDocuments(await getDb(), application, state, await listDocumentKinds({ includeRetired: true }), definition)
   const currentStretch = new Set([state.id, ...laterStates(definition, state.id, product)])
-  const legal = state.type === 'final' ? null : await legalReviewFor(application)
+  const appraisal = state.type === 'final' ? { legalRequired: false, valuation: null, approval: null } : await appraisalFor(application)
   return {
     version: flow.version,
     legacy: flow.legacy,
@@ -733,8 +756,12 @@ export const workflowView = async (viewer, application, { recommendation = null 
       onAcceptLabel: state.type === 'offer' ? resolveState(definition, state.offer?.onAccept, product)?.label || null : null,
       // Required documents not yet signed or received, which hold the case here.
       documentsOutstanding: outstanding,
-      // Whether approval waits for the legal review here, and what is left of it (null: it doesn't).
-      legalReview: legal,
+      // Whether approval waits for the legal review, and what still holds a recommendation
+      // to approve or an approval (the appraisal, appraisal.js); null when nothing does.
+      legalReview: appraisal.legalRequired ? { required: true } : null,
+      approvalHold: appraisal.approval,
+      valuationHold: appraisal.valuation,
+      appraisal: Boolean(state.appraisal),
     },
     phase,
     worksHere: worksOn(viewer, state),
@@ -767,7 +794,7 @@ export const workflowView = async (viewer, application, { recommendation = null 
               claim: Boolean(action.options?.claim),
               requireNote: Boolean(action.options?.requireNote),
               checks: action.options?.checks || [],
-              blocked: blockedReason(viewer, application, state, action, recommendation, roleName, outstanding, legal),
+              blocked: blockedReason(viewer, application, state, action, recommendation, roleName, outstanding, appraisal),
             }
           }),
   }

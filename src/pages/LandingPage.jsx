@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react'
+import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { UserCheck } from 'lucide-react'
 
@@ -14,17 +14,44 @@ import { SiteFooter } from '@/components/landing/SiteFooter'
 import { ResumeApplicationDialog } from '@/components/landing/ResumeApplicationDialog'
 import { StartApplicationDialog } from '@/components/landing/StartApplicationDialog'
 import { applyPath } from '@/config/applicationSteps'
-import { useProducts } from '@/hooks/useProducts'
+import { useProductCatalog } from '@/hooks/useProducts'
+import { MATCHING_PREFIX, isMatchingId, matchingProduct } from '@/config/loanProducts'
 import { roleLabel } from '@/config/roles'
 import { fetchPrefill, fetchReferrer } from '@/services/applicationsApi'
 import { readReferral, rememberReferral } from '@/lib/referral'
+
+// What the visitor typed into the loan finder, kept for this browser tab only (it is about their pay).
+const FIGURES_KEY = 'los:qualify'
+const readSavedFigures = () => {
+  try {
+    return JSON.parse(window.sessionStorage.getItem(FIGURES_KEY) || 'null') || {}
+  } catch {
+    return {}
+  }
+}
+const saveFigures = (figures) => {
+  try {
+    window.sessionStorage.setItem(FIGURES_KEY, JSON.stringify(figures))
+  } catch {
+    // Storage blocked: the figures last until the page is left.
+  }
+}
 
 function LandingPage() {
   const [resumeOpen, setResumeOpen] = useState(false)
   // The product being started (its id), while the email step is open.
   const [pendingProductId, setPendingProductId] = useState(null)
-  const products = useProducts()
-  const pendingProduct = products.find((product) => product.id === pendingProductId) || null
+  // The loan finder (LoanProducts): who is borrowing, and what they earn, per loan type.
+  const [loanType, setLoanType] = useState('personal')
+  const [figures, setFigures] = useState(readSavedFigures)
+  const { products, loanTypes } = useProductCatalog()
+  // A product chosen in the finder, or a loan type's "we'll match you" application (loanProducts.js).
+  const pendingProduct = useMemo(() => {
+    const found = products.find((product) => product.id === pendingProductId)
+    if (found || !isMatchingId(pendingProductId)) return found || null
+    const type = loanTypes.find((entry) => `${MATCHING_PREFIX}${entry.key}` === pendingProductId)
+    return type ? matchingProduct(type, products) : null
+  }, [products, loanTypes, pendingProductId])
   const [referrer, setReferrer] = useState(null)
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
@@ -46,13 +73,29 @@ function LandingPage() {
   // the very first field; the wizard prefills it and carries on.
   const handleApply = useCallback((productId) => setPendingProductId(productId), [])
 
+  // "Apply" from the header, hero and footer: the loan finder, on the type chosen (its first, if that one isn't offered).
+  const handleChooseType = useCallback((type) => {
+    setLoanType(type)
+    requestAnimationFrame(() => document.getElementById('loans')?.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+  }, [])
+
+  const handleFiguresChange = useCallback((type, values) => {
+    setFigures((prev) => {
+      const next = { ...prev, [type]: values }
+      saveFigures(next)
+      return next
+    })
+  }, [])
+
   const handleStart = useCallback(
     async (email) => {
       const product = pendingProduct || products[0]
       const start = applyPath(product.id, 0, product.form)
+      // The figures they qualified on go with them: the wizard caps the amount by them, and submits them.
+      const eligibility = figures[product.loanType] || null
       if (!email) {
         setPendingProductId(null)
-        navigate(start)
+        navigate(start, { state: { eligibility } })
         return
       }
 
@@ -61,14 +104,14 @@ function LandingPage() {
       const formState = await fetchPrefill(email, product.form).catch(() => null)
       if (!formState) {
         setPendingProductId(null)
-        navigate(start, { state: { startEmail: email } })
+        navigate(start, { state: { startEmail: email, eligibility } })
         return
       }
 
       setPendingProductId(null)
-      navigate(start, { state: { startEmail: email, prefilledApplication: formState } })
+      navigate(start, { state: { startEmail: email, prefilledApplication: formState, eligibility } })
     },
-    [navigate, pendingProduct, products]
+    [navigate, pendingProduct, products, figures]
   )
 
   const handleResume = useCallback(() => setResumeOpen(true), [])
@@ -84,7 +127,7 @@ function LandingPage() {
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
-      <SiteHeader onApply={handleApply} onResume={handleResume} />
+      <SiteHeader onApply={handleChooseType} onResume={handleResume} />
 
       {referrer ? (
         <div className="border-b bg-primary/5">
@@ -97,13 +140,13 @@ function LandingPage() {
       ) : null}
 
       <main className="flex-1">
-        <Hero onApply={handleApply} onCheckStatus={handleCheckStatus} />
-        <LoanProducts onApply={handleApply} />
+        <Hero onChooseType={handleChooseType} onCheckStatus={handleCheckStatus} />
+        <LoanProducts loanType={loanType} onLoanTypeChange={setLoanType} figures={figures} onFiguresChange={handleFiguresChange} onApply={handleApply} />
         <HowItWorks />
         <Requirements />
         <TrustSection />
         <Faq />
-        <CallToAction onApply={handleApply} onResume={handleResume} />
+        <CallToAction onApply={handleChooseType} onResume={handleResume} />
       </main>
 
       <SiteFooter />
@@ -113,7 +156,7 @@ function LandingPage() {
         onOpenChange={(open) => {
           if (!open) setPendingProductId(null)
         }}
-        productName={pendingProduct?.name}
+        productName={pendingProduct?.matching ? `${pendingProduct.name.toLowerCase()} application` : pendingProduct?.name}
         onStart={handleStart}
       />
 

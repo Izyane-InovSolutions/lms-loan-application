@@ -53,8 +53,8 @@ export const PERMISSION_GROUPS = [
       { key: 'cases.disburse', label: 'Send to the LMS and record payouts' },
       {
         key: 'legal.verify',
-        label: 'Verify collateral and documents',
-        description: 'Mark each pledged collateral item and each document verified, or record an issue with it, on the case’s Legal review.',
+        label: 'Verify collateral',
+        description: 'In underwriting: mark each pledged collateral item and its proof documents verified, or record an issue with them, on the case’s Collateral tab.',
       },
     ],
   },
@@ -132,7 +132,7 @@ export const BUILT_IN_ROLES = {
   },
   legal_officer: {
     label: 'Legal officer',
-    description: 'Checks and verifies the collateral pledged and the documents on applications. Doesn’t work or decide cases.',
+    description: 'Checks the collateral pledged on applications, and its proof documents, during underwriting. Doesn’t work or decide cases.',
     scope: 'all',
     permissions: ['legal.verify'],
   },

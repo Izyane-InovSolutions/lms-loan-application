@@ -37,7 +37,7 @@ const prepareDraft = async (email, extra = {}) => {
     body: {
       submissionKey: crypto.randomUUID(),
       loanType: 'personal',
-      loanData: { amount: 5000, tenure: 6 },
+      loanData: { amount: 5000, tenure: 6, income: 20000 },
       consents: { dataProcessing: true, location: true },
       location: { latitude: -15.41, longitude: 28.28, accuracy: 20 },
       data: {
@@ -62,7 +62,7 @@ const submit = async (email, extra) => {
 }
 
 /** Takes a submitted case to "approved" through the real workflow, with four-eyes off. */
-const approve = async (id, { amount } = {}) => {
+const approve = async (id, { amount, conditions } = {}) => {
   let version = (await officer.get(`/applications/${id}`)).body.application.version
   const act = async (payload) => {
     const response = await officer.post(`/applications/${id}/actions`, { version, ...payload })
@@ -72,7 +72,7 @@ const approve = async (id, { amount } = {}) => {
   }
   await act({ action: 'start_review' })
   for (const check of ['identity', 'documents', 'income']) await act({ action: 'check', check, done: true, note: 'Seen original' })
-  return act({ action: 'recommend', verdict: 'approve', rationale: 'Affordable', ...(amount ? { amount } : {}) })
+  return act({ action: 'recommend', verdict: 'approve', rationale: 'Affordable', ...(amount ? { amount } : {}), ...(conditions ? { conditions } : {}) })
 }
 
 beforeAll(async () => {
@@ -212,7 +212,7 @@ describe('loan products from settings', () => {
     const after = (await client(handler).get('/products')).body.products.find((product) => product.id === 'personal')
     expect(after.interestBasis).toBe('month')
 
-    const { token, body } = await prepareDraft('longer@example.com', { loanData: { amount: 5000, tenure: 18 } })
+    const { token, body } = await prepareDraft('longer@example.com', { loanData: { amount: 5000, tenure: 18, income: 20000 } })
     const tooLong = await applicant.post('/applications', body, { authorization: `Bearer ${token}` })
     expect(tooLong.body.code).toBe('invalid_tenure')
 
@@ -316,7 +316,11 @@ describe('LMS connection from settings (against a stand-in Frappe)', () => {
       }
       if (url.pathname.endsWith('get_custom_loan_application_by_email')) {
         const email = url.searchParams.get('email')
-        const rows = created.filter((payload) => payload.email === email).map((payload, index) => ({ name: `CLA-${index + 1}`, los_reference: payload.los_reference, loan_application_status: 'Disbursed' }))
+        // Named as when filed (CLA-<position>), so a lookup finds the same record.
+        const rows = created
+          .map((payload, index) => ({ payload, name: `CLA-${index + 1}` }))
+          .filter(({ payload }) => payload.email === email)
+          .map(({ payload, name }) => ({ name, los_reference: payload.los_reference, loan_application_status: 'Disbursed' }))
         return rows.length ? send(200, { message: { data: rows } }) : send(404, { message: 'No Custom Loan Application found' })
       }
       send(404, {})
@@ -360,7 +364,28 @@ describe('LMS connection from settings (against a stand-in Frappe)', () => {
     expect((await admin.post('/settings/lms/test', {})).body.ok).toBe(true)
   })
 
+  it('books the loan only once the offer’s conditions are met', async () => {
+    const filed = await submit('lms.conditions@example.com')
+    await approve(filed.id, { conditions: 'Employer confirms payroll deduction' })
+    const customer = client(handler)
+    await emailCode(kv, 'login', 'lms.conditions@example.com', '525252')
+    await customer.post('/auth/customer', { email: 'lms.conditions@example.com', code: '525252' })
+    await customer.post(`/me/applications/${filed.id}/accept`, await signedAcceptance(kv, 'lms.conditions@example.com'))
+    const before = created.length
+    await new Promise((resolve) => setTimeout(resolve, 200))
+    const held = (await officer.get(`/applications/${filed.id}`)).body
+    expect(created).toHaveLength(before)
+    expect(held.application.lmsSyncStatus).not.toBe('synced')
+    expect(held.events.some((event) => /^Booking in the LMS waits for the offer’s conditions/.test(event.message))).toBe(true)
+    expect((await officer.post(`/applications/${filed.id}/lms/send`)).body.code).toBe('conditions_open')
+
+    await officer.post(`/applications/${filed.id}/conditions/c1`, { met: true, note: 'Letter from HR' })
+    for (let attempt = 0; attempt < 60 && created.length === before; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(created).toHaveLength(before + 1)
+  })
+
   it('hands over an accepted loan with our reference, never twice, and picks up the payout', async () => {
+    const earlier = created.length
     const filed = await submit('lms.customer@example.com')
     await approve(filed.id)
     const customer = client(handler)
@@ -376,20 +401,20 @@ describe('LMS connection from settings (against a stand-in Frappe)', () => {
       }
       throw new Error('never synced')
     })()
-    expect(synced.lmsReference).toBe('CLA-1')
-    expect(created[0].los_reference).toBe(filed.reference)
-    expect(created[0].documents).toHaveLength(5)
+    expect(synced.lmsReference).toBe(`CLA-${earlier + 1}`)
+    expect(created[earlier].los_reference).toBe(filed.reference)
+    expect(created[earlier].documents).toHaveLength(5)
 
     // A resend after an unconfirmed hand-off finds it already there instead of filing again.
     const db = await getDb()
     const { eq } = await import('drizzle-orm')
     await db.update(schema.applications).set({ lmsSyncStatus: 'failed', lmsReference: null }).where(eq(schema.applications.id, filed.id))
     await officer.post(`/applications/${filed.id}/lms/send`)
-    expect(created).toHaveLength(1)
-    expect((await officer.get(`/applications/${filed.id}`)).body.application.lmsReference).toBe('CLA-1')
+    expect(created).toHaveLength(earlier + 1)
+    expect((await officer.get(`/applications/${filed.id}`)).body.application.lmsReference).toBe(`CLA-${earlier + 1}`)
 
     const summary = await runDailyMaintenance('http://localhost')
-    expect(summary.lms.disbursed).toBe(1)
+    expect(summary.lms.disbursed).toBe(earlier + 1)
     expect((await officer.get(`/applications/${filed.id}`)).body.application.status).toBe('disbursed')
     await admin.put('/settings/lmsConnection', connection({ enabled: false }))
   })

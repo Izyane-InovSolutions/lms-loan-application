@@ -113,6 +113,13 @@
       "when": 1793610610409,
       "tag": "0015_legal_review",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1793649477932,
+      "tag": "0016_collateral_valuations",
+      "breakpoints": true
     }
   ]
 }

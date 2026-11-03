@@ -29,10 +29,11 @@ const STAGES = {
 describe('the workflow today’s settings describe', () => {
   it('is the usual backbone by default: review, a second approver, an offer, payout', () => {
     const definition = legacyToWorkflow({})
-    expect(ids(definition)).toEqual(['submitted', 'in_review', 'pending_approval', 'approved', 'accepted', 'paid_out', 'declined', 'withdrawn', 'expired'])
+    expect(ids(definition)).toEqual(['submitted', 'appraisal', 'in_review', 'pending_approval', 'approved', 'accepted', 'paid_out', 'declined', 'withdrawn', 'expired'])
     const { categories } = valid(definition)
     expect(categories).toMatchObject({
       submitted: 'submitted',
+      appraisal: 'in_review',
       in_review: 'in_review',
       pending_approval: 'pending_approval',
       approved: 'approved',
@@ -43,6 +44,14 @@ describe('the workflow today’s settings describe', () => {
     expect(definition.states.find((state) => state.id === 'approved').type).toBe('offer')
     // Recommending approval needs the checks marked "needed to approve".
     expect(definition.states.find((state) => state.id === 'in_review').actions[0].options.checks).toEqual(['identity', 'documents', 'income'])
+    // Appraisal values the collateral: a loan without any passes straight through to underwriting.
+    expect(definition.states.find((state) => state.id === 'appraisal')).toMatchObject({ label: 'Appraisal', appraisal: true })
+    expect(resolveState(definition, 'appraisal', { form: 'personal', collateral: false }).id).toBe('in_review')
+    expect(resolveState(definition, 'appraisal', { form: 'personal', collateral: true }).id).toBe('appraisal')
+    // Knowing only the form, collateral is unknown: the state applies.
+    expect(resolveState(definition, 'appraisal', 'personal').id).toBe('appraisal')
+    expect(definition.states.find((state) => state.id === 'in_review').label).toBe('Underwriting')
+    expect(definition.states.find((state) => state.id === 'pending_approval')).toMatchObject({ label: 'Underwriting: approval', askApplicant: true })
   })
 
   it('lets the officer decide alone with four-eyes off', () => {
@@ -72,6 +81,7 @@ describe('the workflow today’s settings describe', () => {
     const definition = legacyToWorkflow({ stages: STAGES })
     expect(ids(definition)).toEqual([
       'submitted',
+      'appraisal',
       'document_check',
       'field_verification',
       'in_review',
