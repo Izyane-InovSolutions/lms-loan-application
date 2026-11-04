@@ -68,6 +68,19 @@ export const acceptTermsAndSubmit = async (page) => {
   return (await page.getByText(/LOS-\d{4}-\d{6}/).first().textContent()).match(/LOS-\d{4}-\d{6}/)[0]
 }
 
+/**
+ * Starts an application from the landing page's loan finder: the loan category, its sub
+ * category, a monthly income above every default policy band (creditRules.js NET_PAY_BANDS /
+ * REVENUE_BANDS), then the product's start button. Leaves the email step open.
+ */
+export const startFromFinder = async (page, { category, subcategory, income, product }) => {
+  await page.getByRole('radiogroup', { name: 'Loan category' }).getByRole('radio', { name: new RegExp(category) }).click()
+  await page.getByRole('radio', { name: subcategory, exact: true }).click()
+  await page.locator('#qualify-income').fill(String(income))
+  await page.getByRole('button', { name: `Start a ${product.toLowerCase()}` }).click()
+  await expect(page.locator('#start-email')).toBeVisible()
+}
+
 export const signInAs = async (page, roleLabel) => {
   await page.goto('/admin/login')
   await page.getByRole('button', { name: new RegExp(roleLabel) }).click()

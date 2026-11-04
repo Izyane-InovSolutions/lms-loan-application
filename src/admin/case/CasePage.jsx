@@ -46,6 +46,7 @@ import { CaseSummary, expectedForSlot } from './CaseSummary'
 import { sectionsFor } from './fields'
 import { conditionsOf } from '@/config/conditions'
 import { LegalReview } from './LegalReview'
+import { PrescreenStats } from './PrescreenStats'
 
 const withinAssignmentRange = (person, amount) =>
   Number(amount) >= (person.approvalMin ?? 0) && (person.approvalMax == null || Number(amount) <= person.approvalMax)
@@ -210,6 +211,8 @@ export function CasePage() {
     setTab(value)
     tabs.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
+  // The workflow's first stage (Pre-screening) reports as "submitted": the screening figures are shown at a glance there only.
+  const atPrescreening = application.status === 'submitted'
   const checklistEditable = may.work && (['submitted', 'in_review', 'info_requested'].includes(application.status) || workflow?.state.checks.length > 0)
 
   return (
@@ -306,6 +309,7 @@ export function CasePage() {
         {/* The assessment, with the figures and bureau report the rules rest on. */}
         {tab === 'analysis' ? (
           <div className="space-y-4">
+            {atPrescreening ? <PrescreenStats application={application} product={product} prescreen={prescreen} crbReports={crbReports} /> : null}
             <CaseSummary
               application={application}
               documents={documents}

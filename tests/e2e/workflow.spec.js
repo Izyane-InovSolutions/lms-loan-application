@@ -38,17 +38,17 @@ test('an admin builds the workflow in the editor, and cases follow it', async ({
   await panel.getByLabel('Show as a step on the case').check()
   await panel.getByRole('button', { name: 'Add an action' }).click()
   await panel.getByLabel('Action name').fill('Send to approval')
-  await panel.getByLabel('Goes to').selectOption({ label: 'Underwriting' })
+  await panel.getByLabel('Goes to').selectOption({ label: 'Underwriting: approval' })
   await page.keyboard.press('Escape')
   await expect(panel).toBeHidden()
 
-  // Dragging its grip puts it before "Underwriting".
-  await drag(page, page.locator('article[aria-label="Credit check"] [title="Drag to reorder"]'), page.locator('article[aria-label="Underwriting"]'))
+  // Dragging its grip puts it before "Underwriting: approval".
+  await drag(page, page.locator('article[aria-label="Credit check"] [title="Drag to reorder"]'), page.locator('article[aria-label="Underwriting: approval"]'))
   const order = await page.locator('article h3').allTextContents()
-  expect(order.indexOf('Credit check')).toBe(order.indexOf('Underwriting') - 1)
+  expect(order.indexOf('Credit check')).toBe(order.indexOf('Underwriting: approval') - 1)
 
-  // Review now recommends to underwriting.
-  await page.getByRole('button', { name: 'Edit Appraisal' }).click()
+  // Underwriting now recommends to the credit check.
+  await page.getByRole('button', { name: 'Edit Underwriting', exact: true }).click()
   await panel.getByLabel('Goes to').selectOption({ label: 'Credit check' })
   await page.keyboard.press('Escape')
   await expect(panel).toBeHidden()
@@ -122,13 +122,13 @@ test('in the list view, an admin drags a step into the path and turns another of
   await drag(page, row('Compliance').locator('[title="Drag to move"]'), { boundingBox: async () => ({ ...box, height: box.height / 2 }) })
   const order = await steps.locator('li h3').allTextContents()
   expect(order.indexOf('Compliance')).toBe(order.indexOf('Credit check') - 1)
-  await expect(row('Appraisal')).toContainText(/Recommend\s*Compliance/)
+  await expect(row('Underwriting')).toContainText(/Recommend\s*Compliance/)
   await expect(row('Compliance')).toContainText('Send to Credit check')
   await expect(page.getByText(/things? needs? fixing/)).toBeHidden()
 
   // Credit check off: cases pass straight through, and it keeps its setup.
   await page.getByRole('switch', { name: 'Disable Credit check' }).click()
-  await expect(row('Credit check')).toContainText('Off: cases pass straight through to “Underwriting”')
+  await expect(row('Credit check')).toContainText('Off: cases pass straight through to “Underwriting: approval”')
   await page.getByRole('tab', { name: 'Flow' }).click()
   await expect(page.locator('article[aria-label="Credit check"]')).toContainText('Off: cases pass straight through')
   await page.screenshot({ path: 'test-results/workflow-list-flow.png', fullPage: true })
