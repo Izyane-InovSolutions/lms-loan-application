@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { acceptTermsAndSubmit, attachAll, choose, fieldId, customerSignIn, emailedCode, fill, next, signInAs, typeDate } from './helpers.js'
+import { acceptTermsAndSubmit, attachAll, choose, fieldId, customerSignIn, emailedCode, fill, next, signInAs, startFromFinder, typeDate } from './helpers.js'
 
 /*
  * The whole life of a personal loan, as people use it: an applicant arrives through an
@@ -20,7 +20,7 @@ test('a referred personal loan goes from application to payout', async ({ browse
   await applicant.goto('/?ref=DEMODSA')
   await expect(applicant.getByText(/applying with Kelvin/)).toBeVisible()
 
-  await applicant.getByRole('button', { name: /Apply/ }).first().click()
+  await startFromFinder(applicant, { category: 'Personal loans', subcategory: 'Non-asset loans', income: 12000, product: 'Personal Loan' })
   await applicant.locator('#start-email').fill(EMAIL)
   await applicant.getByRole('button', { name: /^Continue$/ }).click()
   await applicant.waitForURL('**/apply/personal/personal-information')
@@ -28,20 +28,19 @@ test('a referred personal loan goes from application to payout', async ({ browse
   await fill(applicant, 'personalInfo.firstName', 'Ada')
   await fill(applicant, 'personalInfo.surname', 'Banda')
   await fill(applicant, 'personalInfo.phone', '971234567')
+  // Nationality decides the ID asked for: an NRC for Zambians.
+  await applicant.locator(fieldId('employmentInfo.nationality')).selectOption('Zambia')
   await fill(applicant, 'personalInfo.nrc', '123456789')
   await choose(applicant, 'personalInfo.gender')
   await choose(applicant, 'personalInfo.maritalStatus')
   await typeDate(applicant, '05011990')
-  // Without agreeing to be helped, the first step doesn't go on.
-  await applicant.getByRole('button', { name: /^Continue/ }).click()
-  await expect(applicant.getByText('Please agree that we may help you finish your application.').first()).toBeVisible()
-  await applicant.getByLabel(/help me finish it/).check()
+  // On their own, applicants are told up front that staff may help them finish.
+  await expect(applicant.getByText('Help with finishing')).toBeVisible()
   await next(applicant)
 
   await fill(applicant, 'employmentInfo.residentialAddress', 'Plot 12, Kabulonga, Lusaka')
   await applicant.locator(fieldId('employmentInfo.occupation')).selectOption('Civil servant')
   await fill(applicant, 'employmentInfo.employerName', 'Ministry of Education')
-  await choose(applicant, 'employmentInfo.nationality')
   await fill(applicant, 'employmentInfo.principalObjectiveOfLoan', 'School fees')
   await fill(applicant, 'employmentInfo.nextOfKinName', 'Bo Banda')
   await fill(applicant, 'employmentInfo.nextOfKinPhone', '971234568')
@@ -67,7 +66,6 @@ test('a referred personal loan goes from application to payout', async ({ browse
 
   await next(applicant)
 
-  await applicant.getByLabel(/Share my location/).check()
   const reference = await acceptTermsAndSubmit(applicant)
 
   // An officer takes it and asks for a clearer payslip.
@@ -77,8 +75,8 @@ test('a referred personal loan goes from application to payout', async ({ browse
   await officer.getByRole('link', { name: /Ada Banda/ }).first().click()
   await expect(officer.getByText('Brought in by')).toBeVisible()
   await expect(officer.getByText(/Kelvin Mbewe/)).toBeVisible()
-  await officer.getByRole('button', { name: 'Start appraisal' }).click()
-  await expect(officer.getByText('Appraisal').first()).toBeVisible()
+  await officer.getByRole('button', { name: 'Start the review' }).click()
+  await expect(officer.getByText('Underwriting').first()).toBeVisible()
   await officer.getByRole('button', { name: 'Ask the applicant' }).click()
   await officer.locator('#action-message').fill('Please upload a clearer copy of your latest payslip.')
   await officer.getByRole('button', { name: 'Send request' }).click()
@@ -116,9 +114,8 @@ test('a referred personal loan goes from application to payout', async ({ browse
   await applicant.goto('/my-applications')
   await applicant.getByRole('button', { name: /K4,000 personal loan/ }).click()
   await expect(applicant.getByRole('heading', { name: 'Your loan offer' })).toBeVisible()
-  // They read the generated offer letter and agreement, then sign and confirm with a code.
+  // They read the generated offer letter, then sign and confirm with a code.
   await expect(applicant.getByText('Offer letter', { exact: true })).toBeVisible()
-  await expect(applicant.getByText('Facility letter', { exact: true })).toBeVisible()
   await applicant.getByLabel(/I have read the offer letter/).check()
   await applicant.locator('#sign-name').fill('Ada Banda')
   const padBox = applicant.getByRole('img', { name: /Sign here/ })
@@ -133,10 +130,11 @@ test('a referred personal loan goes from application to payout', async ({ browse
   await applicant.screenshot({ path: 'test-results/offer-signing.png', fullPage: true })
   await applicant.getByRole('button', { name: 'Sign and accept' }).click()
   await expect(applicant.getByText('Offer accepted').first()).toBeVisible()
-  await expect(applicant.getByText('Facility letter (signed)')).toBeVisible()
+  await expect(applicant.getByText('Offer letter (signed)')).toBeVisible()
 
   // The case keeps the signature and the signed copies.
   await approver.reload()
+  await approver.getByRole('navigation', { name: 'Case sections' }).getByRole('button', { name: /^Documents/ }).click()
   await expect(approver.getByRole('img', { name: 'Signature of Ada Banda' })).toBeVisible()
 
   // And it is paid out.

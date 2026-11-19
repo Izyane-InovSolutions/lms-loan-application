@@ -1,11 +1,12 @@
 import { expect, test } from '@playwright/test'
-import { acceptTermsAndSubmit, attachAll, choose, fieldId, emailedCode, fill, next, signInAs, typeDate } from './helpers.js'
+import { acceptTermsAndSubmit, attachAll, choose, fieldId, emailedCode, fill, next, signInAs, startFromFinder, typeDate } from './helpers.js'
 
 /** Fills the two business steps; the documents step and after are left to the caller. */
 const fillBusiness = async (page, { email, company, selfService = false }) => {
-  // On their own, applicants agree up front that staff may help them finish.
-  if (selfService) await page.getByLabel(/help me finish it/).check()
+  // On their own, applicants are told up front that staff may help them finish.
+  if (selfService) await expect(page.getByText('Help with finishing')).toBeVisible()
   await fill(page, 'businessInfo.companyName', company)
+  await fill(page, 'businessInfo.tpin', '1002003004')
   // A limited company: directors, Form 2 and a board resolution are asked for.
   await page.locator(fieldId('businessInfo.businessType')).selectOption('Limited Liability Company (LLC)')
   await typeDate(page, '03012015')
@@ -22,23 +23,25 @@ const fillBusiness = async (page, { email, company, selfService = false }) => {
   await fill(page, 'directorInfo.applicantLastName', 'Chanda')
   await fill(page, 'directorInfo.applicantPhone', '971234569')
   await fill(page, 'directorInfo.applicantEmail', email)
+  await page.locator(fieldId('directorInfo.applicantNationality')).selectOption('Zambia')
   await fill(page, 'directorInfo.applicantNrc', '234567891')
   await typeDate(page, '06011985')
   await choose(page, 'directorInfo.applicantGender')
   await choose(page, 'directorInfo.applicantMaritalStatus')
   await fill(page, 'directorInfo.applicantAddress', 'Roma, Lusaka')
-  await fill(page, 'directorInfo.applicantPosition', 'Director')
-  await choose(page, 'directorInfo.applicantNationality')
+  await page.locator(fieldId('directorInfo.applicantPosition')).selectOption('Director')
   await next(page)
 
   await attachAll(page)
   await next(page)
+  // Revenue decides what the business qualifies for; the finder fills it in, an agent types it here.
+  await fill(page, 'loanData.income', '150000')
   await next(page)
 }
 
 test('a business applies online and the case shows its directors and documents', async ({ page, browser }) => {
   await page.goto('/')
-  await page.getByRole('button', { name: /Start a business loan/ }).click()
+  await startFromFinder(page, { category: 'Business loans', subcategory: 'Working capital', income: 150000, product: 'Business Loan' })
   await page.locator('#start-email').fill('mutale@kafueagro.com')
   await page.getByRole('button', { name: /^Continue$/ }).click()
   await page.waitForURL('**/apply/business/business-information')
@@ -49,10 +52,12 @@ test('a business applies online and the case shows its directors and documents',
   await signInAs(officer, 'Loan officer')
   await officer.goto(`/admin/applications?q=${reference}&status=all`)
   await officer.getByRole('link', { name: /Kafue Agro Supplies/ }).first().click()
+  const sections = officer.getByRole('navigation', { name: 'Case sections' })
+  await sections.getByRole('button', { name: 'Details' }).click()
   await expect(officer.getByText('Director 1 NRC').first()).toBeVisible()
-  await officer.getByRole('navigation', { name: 'Case sections' }).getByRole('button', { name: /^Documents/ }).click()
-  await expect(officer.getByText('PACRA certificate')).toBeVisible()
-  await expect(officer.getByText('Director 1 passport photo')).toBeVisible()
+  await sections.getByRole('button', { name: /^Documents/ }).click()
+  await expect(officer.getByRole('button', { name: /^PACRA certificate/ })).toBeVisible()
+  await expect(officer.getByRole('button', { name: /^Director 1 passport photo/ })).toBeVisible()
 })
 
 test('an agent fills in an application with a customer, who confirms with a code', async ({ page }) => {
@@ -96,13 +101,14 @@ test('an agent saves a customer’s application as a draft and continues it late
   await page.goto('/admin/applications')
   await page.getByRole('button', { name: 'New application' }).first().click()
   await page.waitForURL('**/apply/personal/**')
-  // No up-front consent box with an agent: the customer agrees at submit, by code.
-  await expect(page.getByLabel(/help me finish it/)).toHaveCount(0)
+  // No up-front notice with an agent: the customer agrees at submit, by code.
+  await expect(page.getByText('Help with finishing')).toHaveCount(0)
 
   await fill(page, 'personalInfo.firstName', 'Chipo')
   await fill(page, 'personalInfo.surname', 'Mwale')
   await fill(page, 'personalInfo.phone', '971234570')
   await fill(page, 'personalInfo.email', 'chipo.mwale@example.com')
+  await page.locator(fieldId('employmentInfo.nationality')).selectOption('Zambia')
   await fill(page, 'personalInfo.nrc', '345678912')
   await choose(page, 'personalInfo.gender')
   await choose(page, 'personalInfo.maritalStatus')
