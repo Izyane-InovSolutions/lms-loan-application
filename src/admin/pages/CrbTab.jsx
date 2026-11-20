@@ -57,7 +57,7 @@ export function CrbTab({ settings, integrations, notify, onSaved }) {
     <div className="max-w-3xl">
       <Panel title="Credit bureau" description={statusNote(integrations.crb)}>
         <div className="space-y-5">
-          <Field id="crb-provider" label="Bureau" hint="Officers can pull a report only for applicants who consented to a credit check.">
+          <Field id="crb-provider" label="Bureau" hint="Officers can pull a report for any application that allows a credit check (see below).">
             <Select id="crb-provider" value={value.provider} onChange={set('provider')}>
               {PROVIDERS.map((provider) => (
                 <option key={provider.value} value={provider.value}>
@@ -130,9 +130,21 @@ export function CrbTab({ settings, integrations, notify, onSaved }) {
           <Toggle
             id="crb-auto-pull"
             label="Pull a report as each application arrives"
-            description="Part of pre-screening: when the applicant consented, the report is pulled straight after they submit and the policy rules run on its score. Off: an officer runs the check from the case. Each pull is an enquiry at the bureau."
+            description="Part of pre-screening: the report is pulled straight after the applicant submits and the policy rules run on its score. Off: an officer runs the check from the case. Each pull is an enquiry at the bureau."
             checked={value.autoPull !== false}
             onChange={(autoPull) => connection.set({ autoPull })}
+          />
+
+          <Toggle
+            id="crb-ask-consent"
+            label="Ask applicants for consent first"
+            description={
+              value.askConsent
+                ? 'Applicants tick a box to allow the check; those who don’t are never checked. Applies to applications submitted from now on.'
+                : 'Off: the check is part of every application. Applicants aren’t asked, but are told before they submit that their credit report will be requested, and the case records that they were told. Applies to applications submitted from now on.'
+            }
+            checked={Boolean(value.askConsent)}
+            onChange={(askConsent) => connection.set({ askConsent })}
           />
 
           {test ? (

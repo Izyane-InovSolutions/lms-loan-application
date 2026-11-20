@@ -8,7 +8,8 @@ import { useBranding } from '@/components/brand/BrandingProvider'
 
 /**
  * The choices made at submission, on the Overview step: optional location sharing,
- * credit bureau consent where a bureau is connected, and — when an agent is filling it
+ * the credit bureau check where a bureau is connected (a consent checkbox, or only a notice
+ * when the workspace makes the check part of every application), and — when an agent is filling it
  * in — the code the customer reads back to show they agree. Terms and data processing
  * are accepted in the terms dialog on submit.
  */
@@ -16,6 +17,7 @@ export function SubmitConsents({
   allowCrb,
   onAllowCrb,
   crbEnabled,
+  crbAskConsent = true,
   assistedBy,
   customerEmail,
   consentCode,
@@ -43,7 +45,15 @@ export function SubmitConsents({
         </span>
       </div>
 
-      {crbEnabled ? (
+      {crbEnabled && !crbAskConsent ? (
+        <div className="flex items-start gap-3">
+          <ShieldCheck className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <span className="text-sm">
+            <span className="block font-medium text-foreground">A credit bureau check is part of this application</span>
+            <span className="mt-0.5 block text-muted-foreground">{consentText('crb_notice', name)}</span>
+          </span>
+        </div>
+      ) : crbEnabled ? (
         <label className="flex cursor-pointer items-start gap-3">
           <input
             type="checkbox"

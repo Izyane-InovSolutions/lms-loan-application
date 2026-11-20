@@ -422,8 +422,11 @@ describe('Product 109 pulls (against a stand-in bureau)', () => {
     expect((await eventsOf(applicationId))[0].message).toBe('Credit bureau: no report for this NRC (response code 202)')
   })
 
-  it('never asks the bureau without consent, or with an unusable NRC', async () => {
+  it('never asks the bureau without consent when consent is asked, or with an unusable NRC', async () => {
+    const { crb } = (await admin.get('/settings')).body.settings
+    await admin.put('/settings/crb', { ...crb, askConsent: true })
     const withoutConsent = await submit('crb.noconsent@example.com', { crb: false })
+    await admin.put('/settings/crb', crb)
     expect((await officer.post(`/applications/${withoutConsent}/crb`)).body.code).toBe('no_consent')
     const badNrc = await submit('crb.badnrc@example.com', { nrc: '12345' })
     const response = await officer.post(`/applications/${badNrc}/crb`)
@@ -451,12 +454,23 @@ describe('pre-screening’s own credit check', () => {
     expect(detail.crbReports[0]).toMatchObject({ requestedBy: null })
   })
 
-  it('asks nothing without consent, or when the workspace turns it off', async () => {
+  it('pulls without a tick when the check is part of every application (the default)', async () => {
+    const id = await submit('crb.told@example.com', { crb: false })
+    const [event] = await crbEvents(id)
+    expect(event.message).toMatch(/^Pre-screening: Credit bureau score/)
+    const { consents } = (await officer.get(`/applications/${id}`)).body
+    expect(consents.find((consent) => consent.type === 'crb_notice')).toMatchObject({ granted: true, noticeVersion: 'crb-notice-2026-11' })
+    expect(consents.some((consent) => consent.type === 'crb')).toBe(false)
+  })
+
+  it('asks nothing without consent when consent is asked, or when the workspace turns it off', async () => {
+    const { crb } = (await admin.get('/settings')).body.settings
+    await admin.put('/settings/crb', { ...crb, askConsent: true })
     const withoutConsent = await submit('crb.noconsent@example.com', { crb: false })
     await new Promise((resolve) => setTimeout(resolve, 300))
     expect(await eventsOf(withoutConsent)).toEqual([])
+    await admin.put('/settings/crb', crb)
 
-    const { crb } = (await admin.get('/settings')).body.settings
     expect((await admin.put('/settings/crb', { ...crb, autoPull: false })).status).toBe(200)
     bureau.calls = []
     const off = await submit('crb.off@example.com')

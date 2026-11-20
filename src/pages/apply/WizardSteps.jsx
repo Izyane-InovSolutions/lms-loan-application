@@ -95,6 +95,7 @@ export function WizardStep(props) {
     addDirector,
     addDirectorUpload,
     allowCrb,
+    crb,
     analysisFor,
     applicantEmail,
     assistedBy,
@@ -956,7 +957,8 @@ export function WizardStep(props) {
       <SubmitConsents
         allowCrb={allowCrb}
         onAllowCrb={setAllowCrb}
-        crbEnabled={CRB_ENABLED}
+        crbEnabled={crb ? crb.enabled : CRB_ENABLED}
+        crbAskConsent={crb ? crb.askConsent : true}
         assistedBy={assistedBy}
         customerEmail={applicantEmail}
         consentCode={consentCode}

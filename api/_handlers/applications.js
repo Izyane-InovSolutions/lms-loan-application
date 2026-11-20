@@ -37,7 +37,7 @@ import { isStaffRole } from '../../src/config/roles.js'
 import { CONSENT_NOTICES } from '../../src/config/consent.js'
 import { checkOtp, consumeOtp } from '../_lib/otp.js'
 import { clientIp } from '../_lib/http.js'
-import { getCrb } from '../_lib/crb/index.js'
+import { getCrb, refreshCrb } from '../_lib/crb/index.js'
 import { currentConsentVersion } from '../_lib/legal.js'
 import { getSetting } from '../_lib/settings.js'
 import { creditStaffIds, notifyUsers } from '../_lib/notify.js'
@@ -278,6 +278,7 @@ const submitApplication = async (req) => {
   const startState = resolveState(flow.definition, flow.definition.start, loanType)
   // The terms and privacy notice versions in force right now are what the applicant saw.
   const dataProcessingVersion = await currentConsentVersion()
+  const crbConsent = await getSetting('crb')
   const application = await db.transaction(async (tx) => {
     const reference = await nextReference(tx)
     const [row] = await tx
@@ -313,7 +314,9 @@ const submitApplication = async (req) => {
       // Agreed on the first step: staff could see the draft and contact them about it.
       ...(draft?.contactConsent ? [{ type: 'draft_contact', granted: true }] : []),
       { type: 'location', granted: true },
-      ...(getCrb() ? [{ type: 'crb', granted: Boolean(wanted.crb) }] : []),
+      // With a bureau connected: the applicant's choice, or (Settings → Credit bureau, consent
+      // not asked) the notice they were shown that the check is part of the application.
+      ...(getCrb() ? [crbConsent.askConsent ? { type: 'crb', granted: Boolean(wanted.crb) } : { type: 'crb_notice', granted: true }] : []),
     ].map((consent) => ({
       ...consent,
       applicationId: id,
@@ -365,7 +368,7 @@ const submitApplication = async (req) => {
   afterResponse('ZRA taxpayer check', () => verifyApplicationWithZra(application.id))
   afterResponse('prescreen and LMS hand-off', async () => {
     await runPrescreen(application.id)
-    // Pre-screening's credit check, when the applicant consented (Settings → Credit bureau).
+    // Pre-screening's credit check, when it is allowed (Settings → Credit bureau).
     await autoPullCreditReport(application)
     const who = application.companyName || application.applicantName
     await notifyUsers(await creditStaffIds(), { type: 'new_application', title: `New application ${application.reference}`, body: `${who}, K${application.amount.toLocaleString()}`, applicationId: application.id }, { origin })
@@ -863,11 +866,16 @@ const matchProducts = async (req) => {
 
 /** Public: the products applicants can choose, with current pricing. */
 // Public: what applicants can apply for, grouped by loan type, and the collateral they can pledge (active types and items).
-const listProducts = async () => ({
-  products: (await getProducts()).filter((product) => product.enabled),
-  loanTypes: buildLoanTypes(await getSetting('loanTypes')),
-  collateralCatalog: activeCatalog(await getCollateralCatalog()),
-})
+const listProducts = async () => {
+  await refreshCrb()
+  return {
+    products: (await getProducts()).filter((product) => product.enabled),
+    loanTypes: buildLoanTypes(await getSetting('loanTypes')),
+    collateralCatalog: activeCatalog(await getCollateralCatalog()),
+    // Whether the apply form asks for credit bureau consent, or only says the check is made.
+    creditCheck: { bureau: Boolean(getCrb()), askConsent: Boolean((await getSetting('crb')).askConsent) },
+  }
+}
 
 export const applicationRoutes = [
   ['GET', '/products', listProducts],

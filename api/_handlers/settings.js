@@ -469,6 +469,7 @@ const VALIDATORS = {
       timeoutSeconds: number(value.timeoutSeconds, { min: 5, max: 120, integer: true, label: 'The bureau timeout' }),
       testIdentity,
       autoPull: value.autoPull !== false,
+      askConsent: Boolean(value.askConsent),
     }
   },
   workflow: (value) => ({
