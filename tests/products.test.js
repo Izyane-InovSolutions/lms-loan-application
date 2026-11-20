@@ -6,7 +6,7 @@ vi.mock('../api/_lib/kv.js', () => ({ default: kv }))
 
 const { default: handler } = await import('../api/v1/[...path].js')
 const { putBlob } = await import('../api/_lib/blob.js')
-const { STANDARD_PRODUCTS, buildLoanTypes, buildProducts, productDefaults, subcategoryOf } = await import('../src/config/loanProducts.js')
+const { STANDARD_PRODUCTS, buildLoanTypes, buildProducts, productDefaults, purposeOf, subcategoryOf } = await import('../src/config/loanProducts.js')
 const { affordabilityError, eligibilityFor, productTags } = await import('../src/config/eligibility.js')
 const { collateralErrors, collateralRequirement } = await import('../src/config/collateral.js')
 const { describeSlot, requiredSlots } = await import('../src/config/applications.js')
@@ -131,6 +131,17 @@ describe('loan products in the workspace', () => {
     expect(saved.body.collateral.items.map((item) => item.code)).toEqual(['MV-CAR', 'LS-CAT'])
     expect((await admin.put('/settings/collateral', { types: [], items: [] })).body.message).toMatch(/at least one/)
     expect((await admin.put('/settings/products', { 'civil-servant': { ...civilServant, collateral: { requirement: 'amount', types: [] } } })).body.message).toMatch(/amount collateral is required from/)
+  })
+
+  it('takes a purpose of the admin’s own wording under Other', async () => {
+    expect((await admin.put('/settings/products', { 'civil-servant': { ...civilServant, purpose: 'other', customPurpose: '  ' } })).body.message).toMatch(/say what the loan is for/)
+    const saved = await admin.put('/settings/products', { 'civil-servant': { ...civilServant, purpose: 'other', customPurpose: '  Solar installation loan ' } })
+    expect(saved.status, JSON.stringify(saved.body)).toBe(200)
+    expect(saved.body.products['civil-servant']).toMatchObject({ purpose: 'other', customPurpose: 'Solar installation loan' })
+    expect(purposeOf(saved.body.products['civil-servant'])?.label).toBe('Solar installation loan')
+    // A listed purpose drops the old wording; an unknown one falls back to general purpose.
+    expect((await admin.put('/settings/products', { 'civil-servant': { ...civilServant, purpose: 'vehicle', customPurpose: 'Solar' } })).body.products['civil-servant']).toMatchObject({ purpose: 'vehicle', customPurpose: '' })
+    expect((await admin.put('/settings/products', { 'civil-servant': { ...civilServant, purpose: 'nonsense' } })).body.products['civil-servant'].purpose).toBe(null)
   })
 
   it('groups products under loan types, which can be added and deleted once empty', async () => {

@@ -12,6 +12,8 @@ import {
   INTEREST_TYPES,
   LOAN_PURPOSES,
   LOAN_TYPE_KEY_PATTERN,
+  OTHER_PURPOSE,
+  OTHER_PURPOSE_MAX,
   PRODUCT_ID_PATTERN,
   buildLoanTypes,
   buildProducts,
@@ -190,6 +192,7 @@ function AddProductDialog({ loanTypes, open, onOpenChange, taken, onCreate }) {
   const loanType = loanTypes.find((type) => type.key === loanTypeKey) || loanTypes[0]
   const form = loanType?.form || 'personal'
   const [purpose, setPurpose] = useState('')
+  const [customPurpose, setCustomPurpose] = useState('')
   const [subcategory, setSubcategory] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -201,6 +204,7 @@ function AddProductDialog({ loanTypes, open, onOpenChange, taken, onCreate }) {
       setIdEdited(false)
       setLoanTypeKey(loanTypes[0]?.key)
       setPurpose('')
+      setCustomPurpose('')
       setSubcategory('')
       setError('')
       setBusy(false)
@@ -228,6 +232,7 @@ function AddProductDialog({ loanTypes, open, onOpenChange, taken, onCreate }) {
         loanType: loanType.key,
         subcategory: subcategory || loanType.subcategories[0]?.key || null,
         purpose: purpose || null,
+        customPurpose: purpose === OTHER_PURPOSE ? customPurpose.trim() : '',
         enabled: false,
       })
       onOpenChange(false)
@@ -280,7 +285,8 @@ function AddProductDialog({ loanTypes, open, onOpenChange, taken, onCreate }) {
                     checked={loanType?.key === type.key}
                     onChange={() => {
                       setLoanTypeKey(type.key)
-                      setPurpose('')
+                      // A listed purpose belongs to its form; the admin's own wording fits any.
+                      if (purpose !== OTHER_PURPOSE) setPurpose('')
                       setSubcategory('')
                     }}
                     className="sr-only"
@@ -301,16 +307,17 @@ function AddProductDialog({ loanTypes, open, onOpenChange, taken, onCreate }) {
               ))}
             </Select>
           </Field>
-          <Field id="new-product-purpose" label="What it’s for" hint="Shown to applicants with the product. Change it any time.">
-            <Select id="new-product-purpose" value={purpose} onChange={(event) => setPurpose(event.target.value)}>
-              <option value="">General purpose</option>
-              {LOAN_PURPOSES[form].map((entry) => (
-                <option key={entry.key} value={entry.key}>
-                  {entry.label}
-                </option>
-              ))}
-            </Select>
-          </Field>
+          <PurposeField
+            id="new-product-purpose"
+            form={form}
+            purpose={purpose}
+            customPurpose={customPurpose}
+            hint="Shown to applicants with the product. Change it any time."
+            onChange={(changes) => {
+              if ('purpose' in changes) setPurpose(changes.purpose || '')
+              if ('customPurpose' in changes) setCustomPurpose(changes.customPurpose)
+            }}
+          />
           <FormError message={error} />
           {problem && (name || id) ? <p className="text-sm text-muted-foreground">{problem}</p> : null}
           <DialogFooter>
@@ -325,6 +332,48 @@ function AddProductDialog({ loanTypes, open, onOpenChange, taken, onCreate }) {
         </form>
       </DialogContent>
     </Dialog>
+  )
+}
+
+/**
+ * "What it's for": one of the form's listed purposes, general purpose, or Other with the
+ * admin's own wording (shown to applicants like a listed one). Calls onChange with
+ * { purpose, customPurpose }.
+ */
+function PurposeField({ id, form, purpose, customPurpose, hint, onChange }) {
+  const other = purpose === OTHER_PURPOSE
+  return (
+    <Field id={id} label="What it’s for" hint={hint}>
+      <div className="space-y-2">
+        <Select
+          id={id}
+          value={purpose || ''}
+          onChange={(event) => {
+            const next = event.target.value
+            onChange({ purpose: next || null, customPurpose: next === OTHER_PURPOSE ? customPurpose : '' })
+          }}
+        >
+          <option value="">General purpose</option>
+          {LOAN_PURPOSES[form].map((entry) => (
+            <option key={entry.key} value={entry.key}>
+              {entry.label}
+            </option>
+          ))}
+          <option value={OTHER_PURPOSE}>Other…</option>
+        </Select>
+        {other ? (
+          <Input
+            id={`${id}-other`}
+            aria-label="What the loan is for"
+            placeholder="e.g. Solar installation loan"
+            maxLength={OTHER_PURPOSE_MAX}
+            value={customPurpose}
+            onChange={(event) => onChange({ customPurpose: event.target.value })}
+            autoFocus={!customPurpose}
+          />
+        ) : null}
+      </div>
+    </Field>
   )
 }
 
@@ -524,16 +573,7 @@ function EligibilityFields({ product, loanTypes, onChange }) {
             ))}
           </Select>
         </Field>
-        <Field id={`${product.id}-purpose`} label="What it’s for">
-          <Select id={`${product.id}-purpose`} value={product.purpose || ''} onChange={(event) => onChange({ purpose: event.target.value || null })}>
-            <option value="">General purpose</option>
-            {LOAN_PURPOSES[product.form].map((entry) => (
-              <option key={entry.key} value={entry.key}>
-                {entry.label}
-              </option>
-            ))}
-          </Select>
-        </Field>
+        <PurposeField id={`${product.id}-purpose`} form={product.form} purpose={product.purpose || ''} customPurpose={product.customPurpose || ''} onChange={onChange} />
         <Field id={`${product.id}-interest-type`} label="Interest">
           <Select id={`${product.id}-interest-type`} value={product.interestType || 'fixed'} onChange={(event) => onChange({ interestType: event.target.value })}>
             {Object.entries(INTEREST_TYPES).map(([key, label]) => (

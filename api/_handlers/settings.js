@@ -24,7 +24,7 @@ import { getZraConfig } from '../_lib/zra/config.js'
 
 const LEGACY_WORKFLOW_KEYS = ['workflow', 'offers', 'stages', 'lms']
 import { BRAND_NAME_MAX } from '../../src/config/branding.js'
-import { APPLICANT_FORMS, BUILT_IN_PRODUCT_IDS, DOCUMENT_CATALOGUE, INTEREST_TYPES, LOAN_PURPOSES, LOAN_TYPE_KEY_PATTERN, PRODUCT_ID_PATTERN, STANDARD_PRODUCTS, buildLoanTypes, buildProducts, defaultDocuments, liveProducts, subcategoryOf } from '../../src/config/loanProducts.js'
+import { APPLICANT_FORMS, BUILT_IN_PRODUCT_IDS, DOCUMENT_CATALOGUE, INTEREST_TYPES, LOAN_PURPOSES, LOAN_TYPE_KEY_PATTERN, OTHER_PURPOSE, OTHER_PURPOSE_MAX, PRODUCT_ID_PATTERN, STANDARD_PRODUCTS, buildLoanTypes, buildProducts, defaultDocuments, liveProducts, subcategoryOf } from '../../src/config/loanProducts.js'
 import { COLLATERAL_CODE_PATTERN, COLLATERAL_REQUIREMENTS, buildCollateralCatalog } from '../../src/config/collateral.js'
 import { GUARANTOR_REQUIREMENTS } from '../../src/config/guarantors.js'
 import { isHexColour, normaliseTheme } from '../../src/config/theme.js'
@@ -115,8 +115,9 @@ const validateProduct = (id, value, current, collateralTypes, loanTypes) => {
     loanType: loanType.key,
     subcategory,
     name,
-    // What it's for (LOAN_PURPOSES of its form), or null for general purpose; the interest type it is sold as.
-    purpose: LOAN_PURPOSES[form].some((entry) => entry.key === value.purpose) ? value.purpose : null,
+    // What it's for (LOAN_PURPOSES of its form, or 'other' with its own wording), or null for
+    // general purpose; the interest type it is sold as.
+    ...purposeFields(value, form, label),
     interestType: INTEREST_TYPES[value.interestType] ? value.interestType : 'fixed',
     // Whether applicants name guarantors (src/config/guarantors.js).
     guarantors: { requirement: GUARANTOR_REQUIREMENTS[value.guarantors?.requirement] ? value.guarantors.requirement : 'none' },
@@ -141,6 +142,16 @@ const validateProduct = (id, value, current, collateralTypes, loanTypes) => {
     // Added products keep the time they were made, which orders them after the built-in ones.
     ...(builtIn ? {} : { createdAt: current?.createdAt || STANDARD_PRODUCTS[id]?.createdAt || new Date().toISOString() }),
   }
+}
+
+/** A product's purpose: a listed one, 'other' with the admin's own wording, or general (null). */
+const purposeFields = (value, form, label) => {
+  if (value.purpose === OTHER_PURPOSE) {
+    const customPurpose = text(value.customPurpose, OTHER_PURPOSE_MAX)
+    if (!customPurpose) throw new Error(`${label}: say what the loan is for, or choose one of the listed purposes.`)
+    return { purpose: OTHER_PURPOSE, customPurpose }
+  }
+  return { purpose: LOAN_PURPOSES[form].some((entry) => entry.key === value.purpose) ? value.purpose : null, customPurpose: '' }
 }
 
 const validateProducts = async (value) => {
