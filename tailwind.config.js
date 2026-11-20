@@ -60,6 +60,14 @@ export default {
           foreground: 'hsl(var(--popover-foreground))',
         },
       },
+      // `text-primary` is the accent shaded to read as text (src/config/theme.js); fills,
+      // borders and rings keep the exact accent. A light accent like orange stays legible.
+      textColor: {
+        primary: {
+          DEFAULT: 'hsl(var(--primary-text))',
+          foreground: 'hsl(var(--primary-foreground))',
+        },
+      },
       borderRadius: {
         lg: 'var(--radius)',
         md: 'calc(var(--radius) - 2px)',

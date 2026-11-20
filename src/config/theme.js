@@ -26,7 +26,7 @@ export const PRESET_COLOURS = [
 ]
 
 export const SIDEBAR_STYLES = {
-  brand: { label: 'Brand colour', description: 'A deep shade of the accent.' },
+  brand: { label: 'Brand colour', description: 'A deep shade of the accent that keeps its colour.' },
   neutral: { label: 'Charcoal', description: 'Near-black, with the accent kept for highlights.' },
 }
 
@@ -88,37 +88,123 @@ export const takesWhiteText = (hex) => (1.05 / (luminance(hex) + 0.05)) >= 3
 
 const clamp = (value, min, max) => Math.min(max, Math.max(min, value))
 
+/** [hue, saturation %, lightness %] → "#rrggbb". */
+const hslToHex = (h, s, l) => {
+  const a = (s / 100) * Math.min(l / 100, 1 - l / 100)
+  const channel = (n) => {
+    const k = (n + h / 30) % 12
+    const value = l / 100 - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))
+    return Math.round(value * 255).toString(16).padStart(2, '0')
+  }
+  return `#${channel(0)}${channel(8)}${channel(4)}`
+}
+
+const contrast = (a, b) => {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x)
+  return (hi + 0.05) / (lo + 0.05)
+}
+
+/**
+ * Walks a colour's lightness one step at a time (darker with step -1, lighter with +1)
+ * until it reaches `ratio` against `background`, keeping hue and saturation. Returns the
+ * lightness, so a colour that already reads stays exactly as it is.
+ */
+const readableLightness = (h, s, from, background, ratio, step) => {
+  let light = from
+  while (light > 5 && light < 95 && contrast(hslToHex(h, s, light), background) < ratio) light += step
+  return light
+}
+
+/** Orange through yellow: hues that turn brown, not deeper, when darkened. */
+const isWarm = (h) => h >= 15 && h <= 65
+
+/**
+ * Lightness of the "Brand colour" sidebar. Cool accents take a deep 20% shade, which still
+ * reads as the colour. Warm ones would go brown there, so they're darkened only as far as
+ * white nav text needs (5.5:1, so the dimmed labels still read), capped at 32%.
+ */
+const sidebarLightness = (h, s, l) =>
+  isWarm(h) ? readableLightness(h, s, Math.min(l, 32), '#ffffff', 5.5, -1) : readableLightness(h, s, Math.min(l, 20), '#ffffff', 5.5, -1)
+
+/** Text for a fill: white, or a near-black of the accent, whichever reads better on it. */
+const textOn = (h, hex) => (contrast(hex, '#ffffff') >= contrast(hex, hslToHex(h, 45, 8)) ? '0 0% 100%' : `${h} 45% 8%`)
+
 /**
  * The colour tokens of src/index.css for a theme, light and dark, as "H S% L%" channels.
  * Only tokens that follow the accent are set; status colours (success, warning, danger)
  * keep their meaning whatever the brand.
+ *
+ * The accent is used as is wherever it can be. A fill (`--primary`) is the exact colour in
+ * light mode, and in dark mode too unless it would vanish on the dark page (under 3:1), when
+ * it's lightened just enough. Text in the accent (`--primary-text`, what `text-primary`
+ * uses) is shaded separately until it reads (4.8:1 on the page), so a light accent such as
+ * orange still gives legible links. Greys and dark surfaces carry a hint of the accent's
+ * hue instead of a fixed blue, softer for warm hues so they don't read as brown.
  */
 export const themeTokens = (input) => {
   const theme = normaliseTheme(input)
   const [h, s, l] = hexToHsl(theme.colour)
   const sat = clamp(s, 25, 85)
+  // How strongly the accent's hue tints the neutrals.
+  const tint = isWarm(h) ? clamp(Math.round(s * 0.25), 6, 20) : clamp(Math.round(s * 0.6), 8, 40)
+
+  const secondaryBg = hslToHex(h, clamp(sat - 20, 15, 45), 96)
+  const accentBg = hslToHex(h, clamp(sat + 10, 30, 90), 94)
+  // Light-mode text is checked on the admin canvas, the tinted page behind cards.
+  const canvas = hslToHex(h, clamp(sat - 30, 10, 33), 96)
+  const lightText = readableLightness(h, s, l, canvas, 4.8, -1)
+  const mutedTint = clamp(Math.round(tint / 2), 5, 16)
+  const sidebar = theme.sidebar === 'neutral' ? '220 14% 12%' : `${h} ${s}% ${sidebarLightness(h, s, l)}%`
   const light = {
     '--primary': `${h} ${s}% ${l}%`,
     '--primary-foreground': takesWhiteText(theme.colour) ? '0 0% 100%' : `${h} 45% 10%`,
+    '--primary-text': `${h} ${s}% ${lightText}%`,
     '--ring': `${h} ${s}% ${l}%`,
+    '--foreground': `${h} ${clamp(tint, 6, 30)}% 11%`,
+    '--card-foreground': `${h} ${clamp(tint, 6, 30)}% 11%`,
+    '--popover-foreground': `${h} ${clamp(tint, 6, 30)}% 11%`,
     '--secondary': `${h} ${clamp(sat - 20, 15, 45)}% 96%`,
-    '--secondary-foreground': `${h} ${sat}% 22%`,
+    '--secondary-foreground': `${h} ${s}% ${readableLightness(h, s, Math.min(lightText, 26), secondaryBg, 7, -1)}%`,
+    '--muted': `${h} ${tint}% 96%`,
+    '--muted-foreground': `${h} ${mutedTint}% ${readableLightness(h, mutedTint, 46, canvas, 4.6, -1)}%`,
     '--accent': `${h} ${clamp(sat + 10, 30, 90)}% 94%`,
-    '--accent-foreground': `${h} ${sat}% 25%`,
+    '--accent-foreground': `${h} ${s}% ${readableLightness(h, s, Math.min(lightText, 28), accentBg, 6.5, -1)}%`,
+    '--border': `${h} ${clamp(tint, 8, 32)}% 91%`,
+    '--input': `${h} ${clamp(tint, 8, 32)}% 91%`,
     '--canvas': `${h} ${clamp(sat - 30, 10, 33)}% 96%`,
-    '--sidebar': theme.sidebar === 'neutral' ? '220 14% 12%' : `${h} ${clamp(sat, 30, 70)}% 14%`,
+    '--sidebar': sidebar,
+    // The active-page marker in the sidebar: a light tint of the accent, so it reads on
+    // both the brand and the charcoal sidebar.
+    '--sidebar-marker': `${h} ${clamp(s, 60, 100)}% 72%`,
     '--radius': RADIUS_OPTIONS[theme.radius].value,
     '--font-sans': FONT_OPTIONS[theme.font].stack,
   }
+
+  const card = hslToHex(h, tint, 10)
+  const accentDark = hslToHex(h, tint, 18)
+  const fillL = readableLightness(h, s, l, card, 3, 1)
+  const darkText = readableLightness(h, s, Math.max(l, fillL), card, 4.8, 1)
   const dark = {
-    '--primary': `${h} ${clamp(sat, 40, 80)}% 62%`,
-    '--primary-foreground': `${h} 45% 8%`,
-    '--ring': `${h} ${clamp(sat, 40, 80)}% 62%`,
-    '--secondary': `${h} 34% 16%`,
-    '--accent': `${h} 34% 18%`,
-    '--accent-foreground': `${h} ${clamp(sat + 10, 40, 90)}% 82%`,
-    '--secondary-foreground': '210 40% 96%',
-    '--sidebar': theme.sidebar === 'neutral' ? '220 14% 7%' : `${h} 45% 9%`,
+    '--background': `${h} ${tint}% 7%`,
+    '--foreground': `${h} ${clamp(tint, 6, 25)}% 95%`,
+    '--card': `${h} ${tint}% 10%`,
+    '--card-foreground': `${h} ${clamp(tint, 6, 25)}% 95%`,
+    '--popover': `${h} ${tint}% 10%`,
+    '--popover-foreground': `${h} ${clamp(tint, 6, 25)}% 95%`,
+    '--primary': `${h} ${s}% ${fillL}%`,
+    '--primary-foreground': textOn(h, hslToHex(h, s, fillL)),
+    '--primary-text': `${h} ${s}% ${darkText}%`,
+    '--ring': `${h} ${s}% ${fillL}%`,
+    '--secondary': `${h} ${tint}% 16%`,
+    '--secondary-foreground': `${h} ${clamp(tint, 6, 25)}% 95%`,
+    '--muted': `${h} ${tint}% 16%`,
+    '--muted-foreground': `${h} ${clamp(Math.round(tint / 2), 5, 20)}% 68%`,
+    '--accent': `${h} ${tint}% 18%`,
+    '--accent-foreground': `${h} ${s}% ${readableLightness(h, s, Math.max(darkText, 75), accentDark, 7, 1)}%`,
+    '--border': `${h} ${tint}% 20%`,
+    '--input': `${h} ${tint}% 20%`,
+    // Warm accents keep their light-mode shade (darker would be brown); cool ones go deeper.
+    '--sidebar': theme.sidebar === 'neutral' ? '220 14% 7%' : isWarm(h) ? sidebar : `${h} ${clamp(s, 30, 70)}% 12%`,
   }
   return { light, dark }
 }

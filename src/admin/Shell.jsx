@@ -147,10 +147,10 @@ function Sidebar({ user, demoEnabled, theme, onToggleTheme }) {
                   >
                     {({ isActive }) => (
                       <>
-                        {/* The active page is marked with a rocket-red rule — the one place red appears at rest. */}
+                        {/* The active page is marked with a rule in a light tint of the theme's accent. */}
                         <span
                           aria-hidden="true"
-                          className={cn('absolute inset-y-1.5 left-0 w-[3px] rounded-full bg-brand transition-opacity', isActive ? 'opacity-100' : 'opacity-0')}
+                          className={cn('absolute inset-y-1.5 left-0 w-[3px] rounded-full bg-[hsl(var(--sidebar-marker))] transition-opacity', isActive ? 'opacity-100' : 'opacity-0')}
                         />
                         <item.icon className="size-4 shrink-0" aria-hidden="true" />
                         {item.label}

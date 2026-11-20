@@ -9,7 +9,7 @@ const { brandName, getLetterhead } = await import('../api/_lib/branding.js')
 const { lenderName } = await import('../api/_lib/offerDocuments.js')
 const { consentText } = await import('../src/config/consent.js')
 const { DEFAULT_BRAND_NAME } = await import('../src/config/branding.js')
-const { DEFAULT_THEME, themeTokens, takesWhiteText } = await import('../src/config/theme.js')
+const { DEFAULT_THEME, PRESET_COLOURS, themeTokens, takesWhiteText } = await import('../src/config/theme.js')
 
 const admin = client(handler)
 const officer = client(handler)
@@ -123,5 +123,39 @@ describe('the theme', () => {
     expect(themeTokens({ colour: '#fde047' }).light['--primary-foreground']).not.toBe('0 0% 100%')
     expect(themeTokens({ colour: '#1b4f72', sidebar: 'neutral' }).light['--sidebar']).toBe('220 14% 12%')
     expect(themeTokens({ colour: '#1b4f72', radius: 'sharp' }).light['--radius']).toBe('0.25rem')
+  })
+
+  it('keeps the accent recognisable and every accent text readable, light and dark', () => {
+    const hex = (channels) => {
+      const [h, s, l] = channels.replace(/%/g, '').split(' ').map(Number)
+      const a = (s / 100) * Math.min(l / 100, 1 - l / 100)
+      const f = (n) => {
+        const k = (n + h / 30) % 12
+        return Math.round((l / 100 - a * Math.max(-1, Math.min(k - 3, 9 - k, 1))) * 255)
+      }
+      return [f(0), f(8), f(4)]
+    }
+    const lum = (rgb) => {
+      const [r, g, b] = rgb.map((c) => (c / 255 <= 0.03928 ? c / 255 / 12.92 : ((c / 255 + 0.055) / 1.055) ** 2.4))
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    }
+    const ratio = (a, b) => {
+      const [hi, lo] = [lum(hex(a)), lum(hex(b))].sort((x, y) => y - x)
+      return (hi + 0.05) / (lo + 0.05)
+    }
+    for (const { colour } of [...PRESET_COLOURS, { colour: '#f18a00' }, { colour: '#fde047' }]) {
+      const { light, dark } = themeTokens({ colour })
+      expect(ratio(light['--primary-text'], light['--canvas']), colour).toBeGreaterThanOrEqual(4.5)
+      expect(ratio(light['--muted-foreground'], light['--canvas']), colour).toBeGreaterThanOrEqual(4.5)
+      expect(ratio(light['--primary'], light['--primary-foreground']), colour).toBeGreaterThanOrEqual(4.5)
+      expect(ratio(light['--sidebar'], '0 0% 100%'), colour).toBeGreaterThanOrEqual(5.5)
+      expect(ratio(dark['--primary-text'], dark['--card']), colour).toBeGreaterThanOrEqual(4.5)
+      expect(ratio(dark['--primary'], dark['--card']), colour).toBeGreaterThanOrEqual(3)
+      expect(ratio(dark['--primary'], dark['--primary-foreground']), colour).toBeGreaterThanOrEqual(4.5)
+      expect(ratio(dark['--muted-foreground'], dark['--card']), colour).toBeGreaterThanOrEqual(4.5)
+    }
+    // An accent that already reads is used exactly as chosen.
+    expect(themeTokens({ colour: '#f18a00' }).light['--primary']).toBe('34 100% 47%')
+    expect(themeTokens({ colour: '#f18a00' }).dark['--primary']).toBe('34 100% 47%')
   })
 })
