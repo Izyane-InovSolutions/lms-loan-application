@@ -13,10 +13,12 @@ const Select = React.forwardRef(({ className, children, ...props }, ref) => (
     <select
       ref={ref}
       className={cn(
-        'flex h-11 w-full appearance-none rounded-md border border-input bg-background px-3.5 py-2 pr-10 text-base ring-offset-background transition-colors',
+        'flex h-11 w-full appearance-none rounded-md border border-input bg-background px-3.5 py-0 pr-10 text-base ring-offset-background transition-colors',
         'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
         'disabled:cursor-not-allowed disabled:opacity-50',
         'aria-[invalid=true]:border-destructive aria-[invalid=true]:focus-visible:ring-destructive',
+        // No vertical padding: the native select centres its text itself, and padding
+        // clips the text when callers shrink the height (h-7 / h-9 compact rows).
         // Placeholder option renders muted until a real value is chosen.
         'invalid:text-muted-foreground/70',
         className
