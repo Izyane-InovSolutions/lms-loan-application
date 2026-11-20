@@ -241,7 +241,17 @@ export const LOAN_PURPOSES = {
   ],
 }
 
-export const purposeOf = (product) => (LOAN_PURPOSES[product?.form] || []).find((purpose) => purpose.key === product?.purpose) || null
+/**
+ * "Other": a product can name its own purpose (customPurpose, up to OTHER_PURPOSE_MAX
+ * characters) when none of the listed ones fits. Stored as purpose 'other'.
+ */
+export const OTHER_PURPOSE = 'other'
+export const OTHER_PURPOSE_MAX = 60
+
+export const purposeOf = (product) => {
+  if (product?.purpose === OTHER_PURPOSE) return product.customPurpose ? { key: OTHER_PURPOSE, label: product.customPurpose, description: '' } : null
+  return (LOAN_PURPOSES[product?.form] || []).find((purpose) => purpose.key === product?.purpose) || null
+}
 
 export const INTEREST_TYPES = { fixed: 'Fixed rate', variable: 'Variable rate' }
 
@@ -356,6 +366,7 @@ export const productDefaults = (form) => ({
   documents: defaultDocuments(form),
   collateral: DEFAULT_COLLATERAL_RULES,
   purpose: null,
+  customPurpose: '',
   interestType: 'fixed',
   eligibility: DEFAULT_ELIGIBILITY[form],
   subcategory: null,
