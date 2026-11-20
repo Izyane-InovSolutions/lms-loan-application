@@ -906,7 +906,7 @@ export function StageDocumentsPanel({ documents, applicationId, canWork, onResen
   )
 }
 
-const CONSENT_LABELS = { data_processing: 'Terms and privacy notice', draft_contact: 'Contact about the unfinished application', location: 'Location sharing', crb: 'Credit bureau check', offer: 'Loan offer accepted' }
+const CONSENT_LABELS = { data_processing: 'Terms and privacy notice', draft_contact: 'Contact about the unfinished application', location: 'Location sharing', crb: 'Credit bureau check', crb_notice: 'Credit bureau check (told, not asked)', offer: 'Loan offer accepted' }
 const METHOD_LABELS = { applicant_checkbox: 'by the applicant online', customer_code: 'by the customer’s emailed code, with an agent' }
 
 export function ConsentPanel({ consents }) {
@@ -921,7 +921,7 @@ export function ConsentPanel({ consents }) {
             <span>
               <span className="text-foreground">{CONSENT_LABELS[consent.type]}</span>
               <span className="block text-xs text-muted-foreground" title={consentText(consent.type, brand)}>
-                {consent.granted ? `Given ${METHOD_LABELS[consent.method] || ''}` : 'Not given'}, notice {consent.noticeVersion}
+                {consent.type === 'crb_notice' ? 'Notice shown at submission' : consent.granted ? `Given ${METHOD_LABELS[consent.method] || ''}` : 'Not given'}, notice {consent.noticeVersion}
               </span>
             </span>
           </li>

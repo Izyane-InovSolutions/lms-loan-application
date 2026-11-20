@@ -473,7 +473,7 @@ export const consents = pgTable(
     applicationId: uuid('application_id')
       .notNull()
       .references(() => applications.id, { onDelete: 'cascade' }),
-    // data_processing | location | crb
+    // data_processing | draft_contact | location | crb (consent asked) | crb_notice (told the check is made)
     type: text('type').notNull(),
     granted: boolean('granted').notNull(),
     noticeVersion: text('notice_version').notNull(),

@@ -102,7 +102,9 @@ function DashboardPage() {
   // the draft layer restores the answers. The product's form (personal or business)
   // decides the steps, the questions and the checks; the product its name, pricing,
   // documents and collateral.
-  const { products: offered, loanTypes, collateralCatalog, loaded: productsLoaded } = useProductCatalog()
+  const { products: offered, loanTypes, collateralCatalog, creditCheck, loaded: productsLoaded } = useProductCatalog()
+  // The credit bureau check: the workspace's answer once loaded, else the build's setting.
+  const crb = { enabled: creditCheck ? creditCheck.bureau : CRB_ENABLED, askConsent: creditCheck ? creditCheck.askConsent : true }
   // The products on offer, and each loan type's "we'll match you" application (match-<type>, loanProducts.js).
   const products = useMemo(() => [...offered, ...loanTypes.map((type) => matchingProduct(type, offered)).filter(Boolean)], [offered, loanTypes])
   const routeProduct = products.find((entry) => entry.id === typeParam)
@@ -363,7 +365,8 @@ function DashboardPage() {
 
   const isValidNRC = (value) => /^[0-9]{6}\/[0-9]{2}\/[0-9]{1,2}$/.test(value)
   const isValidPhone = (value) => /^\d{9}$/.test(value)
-  const isValidEmail = (value) => /^[^\s@]+@[A-Za-z0-9-]+\.com$/.test(value)
+  // Any domain with a letters-only ending: .com, .net, .org, .co.zm, .gov.zm and so on.
+  const isValidEmail = (value) => /^[^\s@]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}$/.test(value)
   const isValidBirthDate = (value) => {
     if (!value) return false
     const selectedDate = dayjs(value)
@@ -436,7 +439,7 @@ function DashboardPage() {
     if (fieldType === 'email') {
       setValidationError(
         `${section}.${field}`,
-        normalizedValue && !isValidEmail(normalizedValue) ? 'Email must end with a .com domain.' : ''
+        normalizedValue && !isValidEmail(normalizedValue) ? 'Enter a valid email address, e.g. name@example.com.' : ''
       )
     }
   }
@@ -992,7 +995,7 @@ function DashboardPage() {
           recordError('personalInfo.phone', 'Enter 9 digits.')
         }
         if (personalData.personalInfo.email && !isValidEmail(personalData.personalInfo.email)) {
-          recordError('personalInfo.email', 'Email must end with a .com domain.')
+          recordError('personalInfo.email', 'Enter a valid email address, e.g. name@example.com.')
         }
         if (isZambian(personalData.employmentInfo.nationality) && personalData.personalInfo.nrc && !isValidNRC(personalData.personalInfo.nrc)) {
           recordError('personalInfo.nrc', 'NRC must be 6 digits, slash, 2 digits, slash, then 1–2 digits.')
@@ -1014,7 +1017,7 @@ function DashboardPage() {
           recordError('employmentInfo.nextOfKinPhone', 'Enter 9 digits.')
         }
         if (personalData.employmentInfo.nextOfKinEmail && !isValidEmail(personalData.employmentInfo.nextOfKinEmail)) {
-          recordError('employmentInfo.nextOfKinEmail', 'Email must end with a .com domain.')
+          recordError('employmentInfo.nextOfKinEmail', 'Enter a valid email address, e.g. name@example.com.')
         }
       }
 
@@ -1047,7 +1050,7 @@ function DashboardPage() {
             recordError(`directorInfo.directors[${index}].phone`, 'Enter 9 digits.')
           }
           if (director.email && !isValidEmail(director.email)) {
-            recordError(`directorInfo.directors[${index}].email`, 'Email must end with a .com domain.')
+            recordError(`directorInfo.directors[${index}].email`, 'Enter a valid email address, e.g. name@example.com.')
           }
           if (director.nrc && !isValidNRC(director.nrc)) {
             recordError(`directorInfo.directors[${index}].nrc`, 'NRC must be 6 digits, slash, 2 digits, slash, then 1–2 digits.')
@@ -1074,7 +1077,7 @@ function DashboardPage() {
           recordError('directorInfo.applicantPhone', 'Enter 9 digits.')
         }
         if (businessData.directorInfo.applicantEmail && !isValidEmail(businessData.directorInfo.applicantEmail)) {
-          recordError('directorInfo.applicantEmail', 'Email must end with a .com domain.')
+          recordError('directorInfo.applicantEmail', 'Enter a valid email address, e.g. name@example.com.')
         }
         if (isZambian(businessData.directorInfo.applicantNationality) && businessData.directorInfo.applicantNrc && !isValidNRC(businessData.directorInfo.applicantNrc)) {
           recordError('directorInfo.applicantNrc', 'NRC must be 6 digits, slash, 2 digits, slash, then 1–2 digits.')
@@ -1343,7 +1346,7 @@ function DashboardPage() {
         data: extractFiles(activeData, scope).sanitized,
         loanData: loanDataWithProduct,
         referralCode: assistedBy ? null : readReferral(),
-        consents: { dataProcessing: true, location: true, crb: CRB_ENABLED && allowCrb },
+        consents: { dataProcessing: true, location: true, crb: crb.enabled && crb.askConsent && allowCrb },
         location,
         assisted: Boolean(assistedBy),
         consentCode: assistedBy ? consentCode.trim() : undefined,
@@ -1518,6 +1521,7 @@ function DashboardPage() {
                 addDirectorUpload={addDirectorUpload}
                 collateralCatalog={collateralCatalog}
                 allowCrb={allowCrb}
+                crb={crb}
                 analysisFor={analysisFor}
                 applicantEmail={applicantEmail}
                 assistedBy={assistedBy}

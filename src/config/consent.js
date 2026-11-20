@@ -34,7 +34,19 @@ export const CONSENT_NOTICES = {
     text:
       'I authorise {name} to request my credit report from a licensed credit reference bureau to assess this application.',
   },
+  // When the workspace makes the check part of every application (Settings → Credit bureau,
+  // askConsent off): shown as a notice, not a choice, and recorded as shown.
+  crb_notice: {
+    version: 'crb-notice-2026-11',
+    text: 'As part of assessing this application, {name} will request your credit report from a licensed credit reference bureau.',
+  },
 }
+
+/**
+ * Whether an application's consent rows allow a credit bureau check: the applicant ticked
+ * the consent, or was shown the notice that the check is part of every application.
+ */
+export const allowsCreditCheck = (consents = []) => consents.some((consent) => (consent.type === 'crb' || consent.type === 'crb_notice') && consent.granted)
 
 /** The wording of a notice with the brand name filled in. */
 export const consentText = (type, name = DEFAULT_BRAND_NAME) => (CONSENT_NOTICES[type]?.text || '').replaceAll('{name}', name || DEFAULT_BRAND_NAME)

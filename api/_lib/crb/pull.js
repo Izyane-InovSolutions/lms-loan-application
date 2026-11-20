@@ -1,4 +1,4 @@
-import { and, desc, eq } from 'drizzle-orm'
+import { and, desc, eq, inArray } from 'drizzle-orm'
 import kv from '../kv.js'
 import { getDb, schema } from '../db/client.js'
 import { addEvent } from '../applications.js'
@@ -14,7 +14,9 @@ const { consents, crbReports } = schema
 /*
  * Pulling a credit bureau report for a case: by an officer (Run credit check), or on its own
  * as the application arrives, as part of pre-screening (Settings → Credit bureau, autoPull).
- * Only ever with the applicant's recorded consent, for the person the application is about;
+ * Only with the applicant's recorded consent, or, where the workspace makes the check part
+ * of every application (Settings → Credit bureau), the notice they were shown saying so;
+ * for the person the application is about;
  * each pull is kept, so the case shows every enquiry made.
  */
 
@@ -59,7 +61,8 @@ export const pullCreditReport = async (application, { actor = null, req = null }
   const [consent] = await db
     .select()
     .from(consents)
-    .where(and(eq(consents.applicationId, application.id), eq(consents.type, 'crb'), eq(consents.granted, true)))
+    // The applicant's consent, or the notice they were shown when the workspace doesn't ask.
+    .where(and(eq(consents.applicationId, application.id), inArray(consents.type, ['crb', 'crb_notice']), eq(consents.granted, true)))
     .limit(1)
   if (!consent) throw new CreditPullError(403, 'The applicant has not consented to a credit bureau check.', 'no_consent')
   let identity
@@ -117,7 +120,7 @@ export const pullCreditReport = async (application, { actor = null, req = null }
 
 /**
  * Pre-screening's credit check, as an application arrives: when the workspace has it on
- * (Settings → Credit bureau), a bureau is connected and the applicant consented. Never
+ * (Settings → Credit bureau), a bureau is connected and the check is allowed. Never
  * fails the submission: a failure is on the case's timeline for an officer to retry.
  */
 export const autoPullCreditReport = async (application) => {

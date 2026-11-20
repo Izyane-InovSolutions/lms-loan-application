@@ -98,8 +98,11 @@ export const SETTING_DEFAULTS = {
     timeoutSeconds: 30,
     // UAT only: "NRC|other names|surname" of the bureau's test person. Refused in production.
     testIdentity: '',
-    // Pre-screening pulls a report as each application arrives, when the applicant consented.
+    // Pre-screening pulls a report as each application arrives, when the check is allowed.
     autoPull: true,
+    // Off: the check is part of every application, and applicants are told so rather than
+    // asked (src/config/consent.js, crb_notice). On: they choose with a consent checkbox.
+    askConsent: false,
   },
   workflow: {
     // A second person must approve what an officer recommends (four-eyes).

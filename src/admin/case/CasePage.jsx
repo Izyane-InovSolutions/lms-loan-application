@@ -47,6 +47,7 @@ import { sectionsFor } from './fields'
 import { conditionsOf } from '@/config/conditions'
 import { LegalReview } from './LegalReview'
 import { PrescreenStats } from './PrescreenStats'
+import { allowsCreditCheck } from '@/config/consent'
 
 const withinAssignmentRange = (person, amount) =>
   Number(amount) >= (person.approvalMin ?? 0) && (person.approvalMax == null || Number(amount) <= person.approvalMax)
@@ -177,7 +178,7 @@ export function CasePage() {
   useEffect(() => {
     if (state.status !== 'ready' || !may.work || autoPulledFor.current === id) return
     autoPulledFor.current = id
-    const consented = state.consents.some((consent) => consent.type === 'crb' && consent.granted)
+    const consented = allowsCreditCheck(state.consents)
     if (!state.crbProvider || !consented) return
     const latest = state.crbReports[0]
     const fresh = latest && Date.now() - new Date(latest.createdAt).getTime() < CRB_FRESH_HOURS * 3600000
@@ -205,7 +206,7 @@ export function CasePage() {
   const eligibleOfficers = officers.filter((officer) => withinAssignmentRange(officer, application.amount))
   const canTake = withinAssignmentRange(user, application.amount)
   const lastRecommendation = appraisals.find((appraisal) => appraisal.kind === 'recommendation')
-  const hasCrbConsent = consents.some((consent) => consent.type === 'crb' && consent.granted)
+  const hasCrbConsent = allowsCreditCheck(consents)
   // From the summary: show that part of the case and bring it into view.
   const showTab = (value) => {
     setTab(value)

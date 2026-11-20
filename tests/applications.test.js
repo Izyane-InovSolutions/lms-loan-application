@@ -88,7 +88,8 @@ describe('application lifecycle', () => {
     expect(detail.prescreen.facts.net_monthly_pay).toBe(10000)
     expect(detail.prescreen.facts.location_provided).toBe(true)
     expect(detail.prescreen.rulesetVersion).toBe(1)
-    expect(detail.consents.map((consent) => consent.type).sort()).toEqual(['crb', 'data_processing', 'location'])
+    // By default the credit check is part of every application: the applicant is told, not asked.
+    expect(detail.consents.map((consent) => consent.type).sort()).toEqual(['crb_notice', 'data_processing', 'location'])
     expect(detail.documents).toHaveLength(5)
     // Storage URLs never reach the browser.
     expect(JSON.stringify(detail.documents)).not.toContain('url')
@@ -276,13 +277,25 @@ describe('application lifecycle', () => {
     await admin.put('/settings/workflow', { requireSecondApproval: true, slaDays: 3, requireLegalReview: false })
   })
 
-  it('pulls a sample credit report only with consent, and re-prescreens', async () => {
-    // Without the applicant's consent, no bureau check.
-    const { token, body } = await prepareDraft('noconsent@example.com')
-    body.data.personalInfo.email = 'noconsent@example.com'
-    body.consents = { dataProcessing: true }
-    const { body: withoutConsent } = await applicant.post('/applications', body, { authorization: `Bearer ${token}` })
+  it('pulls a sample credit report only with consent when consent is asked, and re-prescreens', async () => {
+    const { crb } = (await admin.get('/settings')).body.settings
+    const submitWithoutConsent = async (email) => {
+      const { token, body } = await prepareDraft(email)
+      body.data.personalInfo.email = email
+      body.consents = { dataProcessing: true }
+      return (await applicant.post('/applications', body, { authorization: `Bearer ${token}` })).body
+    }
+    // Asked for consent (Settings → Credit bureau): without it, no bureau check.
+    expect((await admin.put('/settings/crb', { ...crb, askConsent: true, autoPull: false })).status).toBe(200)
+    expect((await applicant.get('/products')).body.creditCheck).toEqual({ bureau: true, askConsent: true })
+    const withoutConsent = await submitWithoutConsent('noconsent@example.com')
     expect((await officer.post(`/applications/${withoutConsent.id}/crb`)).body.code).toBe('no_consent')
+    // Not asked: the applicant was told, so the check runs without a tick.
+    expect((await admin.put('/settings/crb', { ...crb, askConsent: false, autoPull: false })).status).toBe(200)
+    expect((await applicant.get('/products')).body.creditCheck).toEqual({ bureau: true, askConsent: false })
+    const told = await submitWithoutConsent('told@example.com')
+    expect((await officer.post(`/applications/${told.id}/crb`)).status).toBe(200)
+    await admin.put('/settings/crb', crb)
 
     const response = await officer.post(`/applications/${applicationId}/crb`)
     expect(response.status).toBe(200)
