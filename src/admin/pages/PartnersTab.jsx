@@ -23,7 +23,7 @@ export function PartnersTab({ settings, notify, onSaved }) {
   const update = (index, changes) => group.set({ list: list.map((partner, at) => (at === index ? { ...partner, ...changes } : partner)) })
 
   return (
-    <div className="max-w-3xl space-y-6">
+    <div className="space-y-6">
       <Panel
         title="Partners"
         description="Organisations you have an MoU with. Their employees can apply for loan products pre-approved for them: the partner confirms each applicant works there, then a loan officer or sales manager issues the offer straight away."

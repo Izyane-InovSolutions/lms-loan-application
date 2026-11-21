@@ -15,6 +15,17 @@ import { fromVerdict, usePolicyVerdicts } from '@/hooks/usePolicyVerdicts'
 // Each loan type is shown with the icon of the form its applicants fill in.
 const FORM_ICONS = { personal: User, business: Briefcase }
 
+/** "12000" → "12,000": the figures are kept as digits, and shown grouped so they read as money. */
+const grouped = (digits) => (digits ? Number(digits).toLocaleString('en-ZM') : '')
+
+/** Takes the visitor to the income field, for a card's "Check if you qualify". */
+const focusIncome = () => {
+  const field = document.getElementById('qualify-income')
+  if (!field) return
+  field.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  field.focus({ preventScroll: true })
+}
+
 /** The loan types applicants can choose: those with at least one product on offer, in the order they are set up. */
 export const offeredLoanTypes = (loanTypes, products) => loanTypes.filter((type) => products.some((product) => product.loanType === type.key))
 
@@ -112,12 +123,12 @@ export function LoanProducts({ loanType: chosen, onLoanTypeChange, figures, onFi
           <div className="grid gap-4 rounded-lg border bg-card p-5 shadow-soft sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="qualify-income">{words.label} (K)</Label>
-              <Input id="qualify-income" inputMode="numeric" placeholder="e.g. 12000" value={mine.income || ''} onChange={set('income')} />
+              <Input id="qualify-income" inputMode="numeric" autoComplete="off" placeholder="e.g. 12,000" value={grouped(mine.income)} onChange={set('income')} />
               <p className="text-xs text-muted-foreground">{words.hint}</p>
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="qualify-commitments">Other loan repayments a month (K)</Label>
-              <Input id="qualify-commitments" inputMode="numeric" placeholder="0" value={mine.commitments || ''} onChange={set('commitments')} />
+              <Input id="qualify-commitments" inputMode="numeric" autoComplete="off" placeholder="0" value={grouped(mine.commitments)} onChange={set('commitments')} />
               <p className="text-xs text-muted-foreground">What you already repay on other loans. Leave blank if none.</p>
             </div>
             <p className="text-sm sm:col-span-2" aria-live="polite">
@@ -160,7 +171,7 @@ export function LoanProducts({ loanType: chosen, onLoanTypeChange, figures, onFi
           <div className="mt-10 flex flex-wrap justify-center gap-6">
             {results.map(({ product, eligibility }) => (
               <div key={product.id} className="flex w-full md:w-[calc((100%-1.5rem)/2)] xl:w-[calc((100%-3rem)/3)] [&>*]:flex-1">
-                <LoanProductCard product={product} eligibility={eligibility} onApply={onApply} />
+                <LoanProductCard product={product} eligibility={eligibility} onApply={onApply} onNeedFigures={focusIncome} />
               </div>
             ))}
           </div>
@@ -171,7 +182,7 @@ export function LoanProducts({ loanType: chosen, onLoanTypeChange, figures, onFi
         )}
 
         <p className="mx-auto mt-8 max-w-3xl text-center text-sm text-muted-foreground">
-          Total repayable = amount borrowed + interest + a one-off facility fee. Your exact monthly figure is shown on the
+          Total repayable = amount borrowed + interest + a one-off fee. Your exact monthly figure is shown on the
           Loan Terms step before you commit to anything.
         </p>
       </div>

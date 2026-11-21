@@ -16,14 +16,17 @@ import bundledLogo from '@/assets/Icon.png'
  */
 
 const STORAGE_KEY = 'los:branding'
-const DEFAULTS = { name: DEFAULT_BRAND_NAME, logoUrl: null, theme: DEFAULT_THEME }
+const NO_CONTACT = { address: '', phone: '', email: '', website: '' }
+const DEFAULTS = { name: DEFAULT_BRAND_NAME, logoUrl: null, contact: NO_CONTACT, theme: DEFAULT_THEME }
+// The public contacts (Settings → Branding → Letterhead), each a trimmed string.
+const readContact = (contact) => ({ ...NO_CONTACT, ...Object.fromEntries(Object.entries(contact || {}).filter(([key]) => key in NO_CONTACT).map(([key, value]) => [key, String(value || '').trim()])) })
 // index.html's own icon, restored when a custom logo is removed.
 const BUNDLED_FAVICON = '/assets/favicon.png'
 
 const readCached = () => {
   try {
     const cached = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || 'null')
-    return cached?.name ? { name: cached.name, logoUrl: cached.logoUrl || null, theme: normaliseTheme(cached.theme) } : DEFAULTS
+    return cached?.name ? { name: cached.name, logoUrl: cached.logoUrl || null, contact: readContact(cached.contact), theme: normaliseTheme(cached.theme) } : DEFAULTS
   } catch {
     return DEFAULTS
   }
@@ -41,7 +44,7 @@ export function BrandingProvider({ children }) {
       if (!response.ok) return
       const next = await response.json()
       if (!next?.name) return
-      const loaded = { name: next.name, logoUrl: next.logoUrl || null, theme: normaliseTheme(next.theme) }
+      const loaded = { name: next.name, logoUrl: next.logoUrl || null, contact: readContact(next.contact), theme: normaliseTheme(next.theme) }
       setBranding(loaded)
       try {
         window.localStorage.setItem(STORAGE_KEY, JSON.stringify(loaded))
@@ -87,5 +90,5 @@ export function BrandingProvider({ children }) {
   return <BrandingContext.Provider value={value}>{children}</BrandingContext.Provider>
 }
 
-/** { name, logoSrc, customLogo, theme, refresh, previewTheme } */
+/** { name, logoSrc, customLogo, contact, theme, refresh, previewTheme } */
 export const useBranding = () => useContext(BrandingContext)

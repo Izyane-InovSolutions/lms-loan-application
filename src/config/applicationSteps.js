@@ -16,13 +16,18 @@ export const LOAN_TYPES = ['personal', 'business']
 export const isLoanType = (value) => LOAN_TYPES.includes(value)
 
 export const STEP_TITLES = {
-  personal: ['Personal information', 'Residence & Employment', 'Documents', 'Loan Terms', 'Overview'],
-  business: ['Business information', 'Directors & Applicant', 'Documents', 'Loan Terms', 'Overview'],
+  personal: ['Personal information', 'Residence & Employment', 'Loan type', 'Documents', 'Loan Terms', 'Overview'],
+  business: ['Business information', 'Directors & Applicant', 'Loan type', 'Documents', 'Loan Terms', 'Overview'],
 }
 
+/*
+ * The slug is also the step's name in code: the wizard asks "is this the documents step?"
+ * (stepIndexOf(form, 'documents')) rather than counting positions, so steps can be moved.
+ * The loan is chosen before the documents, so the documents asked for are that loan's.
+ */
 export const STEP_SLUGS = {
-  personal: ['personal-information', 'residence-employment', 'documents', 'loan-terms', 'overview'],
-  business: ['business-information', 'directors-applicant', 'documents', 'loan-terms', 'overview'],
+  personal: ['personal-information', 'residence-employment', 'loan-type', 'documents', 'loan-terms', 'overview'],
+  business: ['business-information', 'directors-applicant', 'loan-type', 'documents', 'loan-terms', 'overview'],
 }
 
 const slugsFor = (type) => STEP_SLUGS[isLoanType(type) ? type : 'personal']
@@ -38,6 +43,9 @@ export const stepIndex = (type, slug) => {
 }
 
 export const isValidStepSlug = (type, slug) => slugsFor(type).includes(slug)
+
+/** The position of a named step ('loan-type', 'documents', 'loan-terms', 'overview', …) in a form's steps; -1 when it has none. */
+export const stepIndexOf = (type, slug) => slugsFor(type).indexOf(slug)
 
 /**
  * The URL's first segment names the loan product (`/apply/asset-finance/documents`); the

@@ -48,6 +48,10 @@ test('a referred personal loan goes from application to payout', async ({ browse
   await choose(applicant, 'employmentInfo.nextOfKinRelationship')
   await next(applicant)
 
+  // The loan chosen in the finder is already selected on the Loan type step.
+  await expect(applicant.getByRole('radio', { checked: true })).toBeVisible()
+  await next(applicant)
+
   await attachAll(applicant)
   await next(applicant)
 

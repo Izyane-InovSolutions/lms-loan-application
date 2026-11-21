@@ -52,8 +52,12 @@ export const brandName = async () => (await getBranding().catch(() => null))?.na
 /** Where the browser loads a custom logo; the version changes with each upload, so it can be cached for good. */
 export const logoUrl = (logo) => (logo ? `/api/v1/branding/logo?v=${encodeURIComponent(logo.version)}` : null)
 
-/** What the public site needs: the name, and the custom logo's address (null means the bundled one). */
+/**
+ * What the public site needs: the name, the custom logo's address (null means the bundled
+ * one), and the letterhead contacts, which the landing page footer shows when set.
+ */
 export const publicBranding = async () => {
-  const { name, logo, ...rest } = await getBranding()
-  return { name, logoUrl: logoUrl(logo), theme: normaliseTheme(rest) }
+  const { name, logo, address, phone, email, website, ...rest } = await getBranding()
+  const contact = { address: address || '', phone: phone || '', email: email || '', website: website || '' }
+  return { name, logoUrl: logoUrl(logo), contact, theme: normaliseTheme(rest) }
 }
