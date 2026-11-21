@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
+import { NRC_INPUT_PROPS, formatNrc } from '@/utils/nrc'
 import { checkVerification, extractDraftErrorMessage, startVerification } from '@/services/draftApi'
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -273,7 +274,10 @@ export function ConfirmItsYou({ form = 'personal', email, phone, sms = false, ky
               <legend className="mb-1 text-sm font-medium text-foreground">Your ID</legend>
               {offered.map((type) => (
                 <label key={type} className="flex items-center gap-2">
-                  <input type="radio" name="kyc-id-type" checked={idType === type} onChange={() => setIdType(type)} className="accent-[hsl(var(--primary))]" />
+                  <input type="radio" name="kyc-id-type" checked={idType === type} onChange={() => {
+                      setIdType(type)
+                      setId('')
+                    }} className="accent-[hsl(var(--primary))]" />
                   {type === 'nrc' ? 'NRC (Zambian)' : 'Passport (not Zambian)'}
                 </label>
               ))}
@@ -283,7 +287,14 @@ export function ConfirmItsYou({ form = 'personal', email, phone, sms = false, ky
             <label htmlFor="kyc-id" className="block text-sm font-medium text-foreground">
               {idType === 'tpin' ? 'The business’s TPIN' : idType === 'passport' ? 'Passport number' : 'NRC number'}
             </label>
-            <Input id="kyc-id" value={id} onChange={(event) => setId(event.target.value)} placeholder={idType === 'tpin' ? '1234567890' : idType === 'passport' ? 'ZN123456' : '123456/78/9'} autoFocus />
+            <Input
+              id="kyc-id"
+              value={id}
+              onChange={(event) => setId(idType === 'nrc' ? formatNrc(event.target.value) : event.target.value)}
+              placeholder={idType === 'tpin' ? '1234567890' : idType === 'passport' ? 'ZN123456' : '123456/78/9'}
+              {...(idType === 'nrc' ? NRC_INPUT_PROPS : {})}
+              autoFocus
+            />
           </div>
           {stepError ? (
             <p role="alert" className="text-sm text-destructive">
