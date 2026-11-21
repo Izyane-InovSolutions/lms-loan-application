@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { KYC_ID_TYPES } from '@/config/kyc'
+import { NRC_INPUT_PROPS, formatNrc } from '@/utils/nrc'
 
 /**
  * For an agent filling in an application with a customer: look them up on the
@@ -45,7 +46,10 @@ export function AgentCustomerLookup({ form = 'personal', kyc, onFound }) {
       <p className="text-sm font-medium text-foreground">Look up the customer</p>
       <div className="mt-2 flex flex-col gap-2 sm:flex-row">
         {types.length > 1 ? (
-          <Select aria-label="ID type" value={idType} onChange={(event) => setIdType(event.target.value)} className="sm:w-36">
+          <Select aria-label="ID type" value={idType} onChange={(event) => {
+            setIdType(event.target.value)
+            setId('')
+          }} className="sm:w-36">
             {types.map((type) => (
               <option key={type} value={type}>
                 {KYC_ID_TYPES[type].label}
@@ -53,7 +57,13 @@ export function AgentCustomerLookup({ form = 'personal', kyc, onFound }) {
             ))}
           </Select>
         ) : null}
-        <Input aria-label={`${KYC_ID_TYPES[idType].label} number`} value={id} onChange={(event) => setId(event.target.value)} placeholder={idType === 'tpin' ? 'TPIN' : idType === 'passport' ? 'Passport number' : 'NRC, 123456/78/9'} />
+        <Input
+          aria-label={`${KYC_ID_TYPES[idType].label} number`}
+          value={id}
+          onChange={(event) => setId(idType === 'nrc' ? formatNrc(event.target.value) : event.target.value)}
+          placeholder={idType === 'tpin' ? 'TPIN' : idType === 'passport' ? 'Passport number' : 'NRC, 123456/78/9'}
+          {...(idType === 'nrc' ? NRC_INPUT_PROPS : {})}
+        />
         <Button type="submit" variant="outline" disabled={busy || !id.trim()}>
           {busy ? <Loader2 className="animate-spin" /> : <Search />}
           Look up

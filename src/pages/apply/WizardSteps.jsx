@@ -1057,7 +1057,10 @@ export function WizardStep(props) {
   }
 
   const renderLoanTerms = () => (
-    <div className={choosingProduct ? 'grid gap-6' : 'grid gap-6 xl:grid-cols-[1.35fr_1fr]'}>
+    // Three blocks: what they earn, then the loan and its repayments, then collateral and
+    // guarantors. Wide screens put the loan beside the other two; narrow ones stack them in
+    // that order, so the amount is chosen before the collateral it decides.
+    <div className={choosingProduct ? 'grid gap-6' : 'grid gap-6 xl:grid-cols-[1.35fr_1fr] xl:grid-rows-[auto_1fr]'}>
       <div className="grid content-start gap-6">
         {matchType ? renderMatch() : (
           <>
@@ -1065,59 +1068,46 @@ export function WizardStep(props) {
             {renderIncome()}
           </>
         )}
-        {choosingProduct ? null : (
-          <>
-            <FieldGroup title="Choose your loan" description="Drag the slider or type an exact amount." icon={Wallet} columns={2}>
-              <div className="md:col-span-2">
-                <p className="text-sm text-muted-foreground">Loan amount</p>
-                <p className="mt-1 text-4xl font-bold tracking-tight text-foreground">
-                  K{loanData.amount.toLocaleString()}
-                </p>
-                <input
-                  type="range"
-                  min={minAmount}
-                  max={maxAmount}
-                  step="100"
-                  value={loanData.amount}
-                  onChange={(event) => setLoanData((prev) => ({ ...prev, amount: Number(event.target.value) }))}
-                  aria-label="Loan amount"
-                  className="mt-5 w-full accent-primary"
-                />
-                <div className="mt-2 flex justify-between text-xs font-medium text-muted-foreground">
-                  <span>K{minAmount.toLocaleString()}</span>
-                  <span>K{maxAmount.toLocaleString()}</span>
-                </div>
-              </div>
-
-              {renderField('Enter amount', loanData.amount, (value) => {
-                const amount = Number(value.replace(/[^0-9]/g, '') || 0)
-                const constrained = Math.min(Math.max(amount, minAmount), maxAmount)
-                setLoanData((prev) => ({ ...prev, amount: constrained }))
-              }, 'number', `Between ${minAmount} and ${maxAmount}`, { min: minAmount, max: maxAmount }, true)}
-
-              {renderField('Tenure (months)', loanData.tenure, (value) => {
-                const tenure = Number(value)
-                if (tenure >= minTenure && tenure <= maxTenure) {
-                  setLoanData((prev) => ({ ...prev, tenure }))
-                }
-              }, 'number', `${minTenure} to ${maxTenure}`, { min: minTenure, max: maxTenure }, true)}
-            </FieldGroup>
-
-            {collateralRule !== 'none' ? (
-              renderCollateral()
-            ) : collateralFrom ? (
-              <p className="flex items-start gap-2 rounded-md bg-accent/60 px-4 py-3 text-sm text-accent-foreground">
-                <Landmark className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
-                <span>No collateral is needed for this amount. Loans of {formatKwacha(collateralFrom)} or more need it.</span>
-              </p>
-            ) : null}
-            {asksForGuarantors(product) ? renderGuarantors() : null}
-          </>
-        )}
       </div>
 
       {choosingProduct ? null : (
-        <div className="xl:sticky xl:top-8 xl:self-start">
+        <div className="grid content-start gap-6 xl:col-start-2 xl:row-span-2 xl:row-start-1">
+          <FieldGroup title="Choose your loan" description="Drag the slider or type an exact amount." icon={Wallet} columns={2}>
+            <div className="md:col-span-2">
+              <p className="text-sm text-muted-foreground">Loan amount</p>
+              <p className="mt-1 text-4xl font-bold tracking-tight text-foreground">
+                K{loanData.amount.toLocaleString()}
+              </p>
+              <input
+                type="range"
+                min={minAmount}
+                max={maxAmount}
+                step="100"
+                value={loanData.amount}
+                onChange={(event) => setLoanData((prev) => ({ ...prev, amount: Number(event.target.value) }))}
+                aria-label="Loan amount"
+                className="mt-5 w-full accent-primary"
+              />
+              <div className="mt-2 flex justify-between text-xs font-medium text-muted-foreground">
+                <span>K{minAmount.toLocaleString()}</span>
+                <span>K{maxAmount.toLocaleString()}</span>
+              </div>
+            </div>
+
+            {renderField('Enter amount', loanData.amount, (value) => {
+              const amount = Number(value.replace(/[^0-9]/g, '') || 0)
+              const constrained = Math.min(Math.max(amount, minAmount), maxAmount)
+              setLoanData((prev) => ({ ...prev, amount: constrained }))
+            }, 'number', `Between ${minAmount} and ${maxAmount}`, { min: minAmount, max: maxAmount }, true)}
+
+            {renderField('Tenure (months)', loanData.tenure, (value) => {
+              const tenure = Number(value)
+              if (tenure >= minTenure && tenure <= maxTenure) {
+                setLoanData((prev) => ({ ...prev, tenure }))
+              }
+            }, 'number', `${minTenure} to ${maxTenure}`, { min: minTenure, max: maxTenure }, true)}
+          </FieldGroup>
+
           <div className="rounded-lg border bg-card p-6 shadow-soft">
             <div className="flex items-center gap-3 border-b border-border pb-4">
               <span className="grid size-9 shrink-0 place-items-center rounded-md bg-accent text-accent-foreground">
@@ -1147,6 +1137,20 @@ export function WizardStep(props) {
               <span className="text-lg font-bold tabular-nums">K{totalRepayable.toFixed(2)}</span>
             </div>
           </div>
+        </div>
+      )}
+
+      {choosingProduct ? null : (
+        <div className="grid content-start gap-6 xl:col-start-1 xl:row-start-2">
+          {collateralRule !== 'none' ? (
+            renderCollateral()
+          ) : collateralFrom ? (
+            <p className="flex items-start gap-2 rounded-md bg-accent/60 px-4 py-3 text-sm text-accent-foreground">
+              <Landmark className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+              <span>No collateral is needed for this amount. Loans of {formatKwacha(collateralFrom)} or more need it.</span>
+            </p>
+          ) : null}
+          {asksForGuarantors(product) ? renderGuarantors() : null}
         </div>
       )}
     </div>

@@ -43,6 +43,7 @@ import {
 } from '../services/aiApi'
 import { describeRequestError } from '../lib/requestError'
 import { documentNotes, findFormMismatches } from '../utils/documentChecks'
+import { formatNrc } from '../utils/nrc'
 import { acceptsPhotos, collateralProofs, nextCollateralSlot, readDocument, removeCollateralProof, writeDocument } from '../utils/documentSlots'
 
 import { Button } from '@/components/ui/button'
@@ -329,14 +330,7 @@ function DashboardPage() {
     }
 
     if (fieldType === 'nrc') {
-      const digits = value.replace(/\D/g, '').slice(0, 9)
-      if (digits.length <= 6) {
-        return digits
-      }
-      if (digits.length <= 8) {
-        return `${digits.slice(0, 6)}/${digits.slice(6, 8)}`
-      }
-      return `${digits.slice(0, 6)}/${digits.slice(6, 8)}/${digits.slice(8, 9)}`
+      return formatNrc(value)
     }
 
     if (fieldType === 'phone') {
