@@ -14,6 +14,25 @@ const staffRoleKeys = () => registeredRoles().map((role) => role.key)
 // Who gets a "reports to" picker: people who bring business in without leading a team (agents).
 const takesManager = (role) => roleHas(role, 'applications.assist') && !roleHas(role, 'team.lead')
 
+// Who belongs to an MoU partner: members of a role with the "partner" scope (src/config/partners.js).
+const takesPartner = (role) => registeredRoles().find((entry) => entry.key === role)?.scope === 'partner'
+
+/** The MoU partner a partner's staff member works for. */
+function PartnerField({ id, value, partners, onChange }) {
+  return (
+    <Field id={id} label="Partner" hint={partners.length ? 'They see and answer only this partner’s requests.' : 'Add the partner first, under Settings → Partners.'}>
+      <Select id={id} value={value} onChange={onChange}>
+        <option value="">Choose the partner</option>
+        {partners.map((partner) => (
+          <option key={partner.id} value={partner.id}>
+            {partner.name}
+          </option>
+        ))}
+      </Select>
+    </Field>
+  )
+}
+
 // Who gets an approval band: anyone who reviews or decides cases.
 const hasApprovalBand = (role) => roleHas(role, 'cases.work') || roleHas(role, 'cases.decide')
 import { api, toQuery } from '../api'
@@ -30,6 +49,15 @@ export function UsersPage() {
   const [editing, setEditing] = useState(null)
   const [inviteOpen, setInviteOpen] = useState(params.get('invite') === '1' && canManage)
   const [managers, setManagers] = useState([])
+  const [partners, setPartners] = useState([])
+
+  // The MoU partners, for linking a partner's staff member to theirs (src/config/partners.js).
+  useEffect(() => {
+    if (!canManage) return
+    api('/partners')
+      .then((data) => setPartners(data.partners))
+      .catch(() => setPartners([]))
+  }, [canManage])
 
   const role = params.get('role') || 'all'
   const status = params.get('status') || 'all'
@@ -257,8 +285,8 @@ export function UsersPage() {
 
       {canManage ? (
         <>
-          <InviteDialog open={inviteOpen} onOpenChange={setInviteOpen} managers={managers} onInvited={load} />
-          <EditDialog person={editing} viewer={viewer} managers={managers} onClose={() => setEditing(null)} onSaved={load} />
+          <InviteDialog open={inviteOpen} onOpenChange={setInviteOpen} managers={managers} partners={partners} onInvited={load} />
+          <EditDialog person={editing} viewer={viewer} managers={managers} partners={partners} onClose={() => setEditing(null)} onSaved={load} />
         </>
       ) : null}
     </div>
@@ -287,9 +315,9 @@ function ManualLink({ url }) {
   )
 }
 
-const EMPTY_INVITE = { name: '', email: '', role: 'loan_officer', phone: '', managerId: '' }
+const EMPTY_INVITE = { name: '', email: '', role: 'loan_officer', phone: '', managerId: '', partnerId: '' }
 
-function InviteDialog({ open, onOpenChange, managers, onInvited }) {
+function InviteDialog({ open, onOpenChange, managers, partners = [], onInvited }) {
   const notify = useToast()
   const [form, setForm] = useState(EMPTY_INVITE)
   const [error, setError] = useState('')
@@ -313,7 +341,7 @@ function InviteDialog({ open, onOpenChange, managers, onInvited }) {
     try {
       const result = await api('/users', {
         method: 'POST',
-        body: { ...form, managerId: takesManager(form.role) ? form.managerId || null : null },
+        body: { ...form, managerId: takesManager(form.role) ? form.managerId || null : null, partnerId: takesPartner(form.role) ? form.partnerId || null : null },
       })
       onInvited()
       if (result.emailed) {
@@ -376,6 +404,7 @@ function InviteDialog({ open, onOpenChange, managers, onInvited }) {
                 </Select>
               </Field>
             ) : null}
+            {takesPartner(form.role) ? <PartnerField id="invite-partner" value={form.partnerId} partners={partners} onChange={update('partnerId')} /> : null}
             <Field id="invite-phone" label="Phone (optional)">
               <Input id="invite-phone" type="tel" autoComplete="off" value={form.phone} onChange={update('phone')} />
             </Field>
@@ -396,7 +425,7 @@ function InviteDialog({ open, onOpenChange, managers, onInvited }) {
   )
 }
 
-function EditDialog({ person, viewer, managers, onClose, onSaved }) {
+function EditDialog({ person, viewer, managers, partners = [], onClose, onSaved }) {
   const notify = useToast()
   const [form, setForm] = useState(null)
   const [error, setError] = useState('')
@@ -413,6 +442,7 @@ function EditDialog({ person, viewer, managers, onClose, onSaved }) {
         phone: person.phone || '',
         role: person.role,
         managerId: person.managerId || '',
+        partnerId: person.partnerId || '',
         approvalMin: person.approvalMin ?? 0,
         approvalMax: person.approvalMax ?? '',
       })
@@ -448,6 +478,7 @@ function EditDialog({ person, viewer, managers, onClose, onSaved }) {
         phone: form.phone,
         role: form.role,
         managerId: takesManager(form.role) ? form.managerId || null : null,
+        ...(takesPartner(form.role) ? { partnerId: form.partnerId || null } : {}),
         approvalMin: form.approvalMin,
         approvalMax: form.approvalMax,
       },
@@ -525,6 +556,7 @@ function EditDialog({ person, viewer, managers, onClose, onSaved }) {
               </Select>
             </Field>
           ) : null}
+          {takesPartner(form.role) ? <PartnerField id="edit-partner" value={form.partnerId} partners={partners} onChange={update('partnerId')} /> : null}
           <Field id="edit-phone" label="Phone">
             <Input id="edit-phone" type="tel" value={form.phone} onChange={update('phone')} />
           </Field>

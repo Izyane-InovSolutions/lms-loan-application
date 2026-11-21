@@ -7,6 +7,7 @@ import { addEvent } from './applications.js'
 import { getSetting } from './settings.js'
 import { getPublishedWorkflow, getWorkflowVersion } from './workflowVersions.js'
 import { OPEN_STATUSES, WITHDRAWABLE_STATUSES, requestableSlots } from '../../src/config/applications.js'
+import { crbApplies } from '../../src/config/applicantRules.js'
 import { ACTION_KINDS, PHASES, actionPermission, caseSubject, SYSTEM_FINAL_IDS, actionTarget, appliesTo, awaitsDocuments, forwardEdges, resolveState, stateById } from '../../src/config/workflow.js'
 import { checkOtp } from './otp.js'
 import { signatureFor } from './signing.js'
@@ -17,8 +18,10 @@ import { getCollateralCatalog, getProducts } from './products.js'
 import { approvalHold, valuationHold } from '../../src/config/appraisal.js'
 import { collateralItems } from '../../src/config/collateral.js'
 import { openConditions, parseConditions } from '../../src/config/conditions.js'
+import { ACTIVE_PRE_APPROVAL_STAGES, heldForPartner, heldReason, isOnPreApprovalRoute, mayActOnHeldCase } from '../../src/config/partners.js'
+import { getCrb } from './crb/index.js'
 
-const { applications, applicationDocuments, appraisals, users } = schema
+const { applications, applicationDocuments, appraisals, users, prescreens, crbReports, consents } = schema
 
 /*
  * The workflow engine. A case follows the workflow version it started on
@@ -329,6 +332,11 @@ const runTransition = async (tx, viewer, application, flow, state, action, input
       if (!application.assignedOfficer) requireAssignmentRange(viewer, application)
       changes.assignedOfficer = application.assignedOfficer || viewer.id
       event = { type: 'status', message: 'Review started', visibleToCustomer: true }
+      // A pre-approved case taken into the usual review leaves the pre-approval route.
+      if (isOnPreApprovalRoute(application)) {
+        changes.preApproval = leftRoute(application, 'An officer started the usual review.', viewer)
+        event.message = 'Review started (taken off the pre-approval route)'
+      }
     } else {
       event = { type: state.trackProgress ? 'stage' : 'status', message: state.trackProgress ? `${stepName(state)}: done${rationale ? ` (${rationale})` : ''}` : `${action.label}${rationale ? ` (${rationale})` : ''}` }
     }
@@ -435,7 +443,126 @@ const decision = async (tx, viewer, application, action, input, rationale, setti
 // Actions available in any state
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Pre-approved partner loans (src/config/partners.js)
+// ---------------------------------------------------------------------------
+
+/** The case's pre-approval record, taken off the route to the usual review. */
+const leftRoute = (application, reason, viewer) => ({ ...application.preApproval, stage: 'review', reason, movedBy: viewer?.name || null, at: new Date().toISOString() })
+
+/** The offer state the workflow's approval leads to, for this case; null when there is none. */
+const offerTargetOf = (definition, application) => {
+  const subject = caseSubject(application)
+  for (const state of definition.states || []) {
+    for (const action of state.actions || []) {
+      if (action.kind !== 'approve') continue
+      const target = actionTarget(definition, action, subject)
+      if (target?.type === 'offer') return target
+    }
+  }
+  return null
+}
+
+/**
+ * Why the offer can't be issued on a pre-approved case yet, or null when it can: the partner
+ * has confirmed, pre-screening didn't recommend a decline, the credit report is in where a
+ * check applies, and the issuer didn't bring the case in. Approval limits don't apply: the
+ * MoU (and the product's pre-approved limit) set them.
+ */
+const issueBlocker = async (db, viewer, application, flow) => {
+  const stage = application.preApproval?.stage
+  if (stage === 'prescreen') return 'Pre-screening hasn’t finished yet.'
+  if (stage === 'partner') return `Waiting for ${application.preApproval.partnerName} to confirm the applicant works there.`
+  if (stage !== 'issue' || application.status !== 'submitted' || application.state !== flow.definition.start) return 'This case isn’t waiting for its offer.'
+  if (!offerTargetOf(flow.definition, application)) return 'The workflow has no offer to send: approvals here don’t lead to an offer.'
+  if (application.sourcedBy && application.sourcedBy === viewer.id) return 'A different person must issue the offer on a case you brought in.'
+  const [prescreen] = await db.select({ outcome: prescreens.outcome }).from(prescreens).where(eq(prescreens.applicationId, application.id)).limit(1)
+  if (!prescreen) return 'Pre-screening hasn’t finished yet.'
+  if (prescreen.outcome === 'decline') return 'The credit rules recommend a decline: send it to full review.'
+  if (getCrb() && crbApplies(application.loanType, application.data)) {
+    const [allowed] = await db
+      .select({ id: consents.id })
+      .from(consents)
+      .where(and(eq(consents.applicationId, application.id), inArray(consents.type, ['crb', 'crb_notice']), eq(consents.granted, true)))
+      .limit(1)
+    if (allowed) {
+      const [report] = await db.select({ id: crbReports.id }).from(crbReports).where(eq(crbReports.applicationId, application.id)).limit(1)
+      if (!report) return 'The credit report isn’t in yet: run the credit check first.'
+    }
+  }
+  return null
+}
+
 const UTILITY = {
+  /**
+   * Issues the offer on a pre-approved case the partner confirmed: the decision is recorded
+   * as an approval would be, and the case enters the offer state its workflow's approval
+   * leads to. The handler then sends the offer documents and tells the customer.
+   */
+  async issue_offer(tx, viewer, application, input, ctx) {
+    requireCase(viewer, 'offers.issue')
+    const blocker = await issueBlocker(tx, viewer, application, ctx.flow)
+    if (blocker) fail(blocker.startsWith('A different person') ? 403 : 409, blocker, blocker.startsWith('A different person') ? 'four_eyes' : 'invalid_state')
+    const { settings } = ctx
+    const product = productFor(application, settings.products)
+    const approved = terms(application, input, settings)
+    const cap = product.preApproval?.maxAmount
+    if (cap && approved.amount > cap) fail(400, `The pre-approved limit is K${cap.toLocaleString()}.`, 'invalid_amount')
+    const { partnerName, mouReference, partnerDecision } = application.preApproval
+    const conditions = text(input.conditions, 2000) || null
+    const rationale = `Pre-approved under the ${partnerName} MoU${mouReference ? ` (${mouReference})` : ''}; employment confirmed by ${partnerDecision?.byName || partnerName}.`
+    await tx.insert(appraisals).values({
+      applicationId: application.id,
+      kind: 'decision',
+      verdict: 'approve',
+      amount: approved.amount,
+      tenure: approved.tenure,
+      conditions,
+      rationale,
+      officerId: viewer.id,
+      officerName: viewer.name,
+    })
+    const target = offerTargetOf(ctx.flow.definition, application)
+    const { changes: entry } = entryChanges(ctx.flow, application, target.id, settings)
+    const changes = {
+      ...entry,
+      decidedAt: new Date(),
+      approvedAmount: approved.amount,
+      approvedTenure: approved.tenure,
+      assignedOfficer: application.assignedOfficer || viewer.id,
+      checks: { ...(application.checks || {}), conditions: parseConditions(conditions) },
+      preApproval: { ...application.preApproval, stage: 'issued', issued: { by: viewer.id, byName: viewer.name, at: new Date().toISOString() } },
+    }
+    if (approved.amount !== application.amount || approved.tenure !== application.tenure) {
+      const price = priceLoan(approved.amount, approved.tenure, product)
+      Object.assign(changes, { totalRepayable: price.total, monthlyInstalment: price.monthly })
+    }
+    return {
+      changes,
+      event: { type: 'decision', message: `Offer issued: K${approved.amount.toLocaleString()} over ${approved.tenure} months, pre-approved under the ${partnerName} MoU${conditions ? `. Conditions: ${conditions}` : ''}`, visibleToCustomer: true },
+      kind: 'issue_offer',
+      decided: 'approved',
+      approved: true,
+      handToLms: Boolean(target.handToLms),
+      enteredOffer: true,
+      notify: {
+        headline: 'Your loan has been approved',
+        body: `Good news: your application has been approved for K${approved.amount.toLocaleString()} over ${approved.tenure} months. Sign in to review and accept the offer within ${settings.offers.expiryDays} days.`,
+      },
+    }
+  },
+
+  /** Takes a pre-approved case off the route, to the usual review. */
+  async leave_pre_approval(tx, viewer, application, input) {
+    requireCase(viewer, 'offers.issue')
+    if (!ACTIVE_PRE_APPROVAL_STAGES.includes(application.preApproval?.stage)) fail(409, 'This case isn’t on the pre-approval route.', 'invalid_state')
+    const why = reason(input.rationale ?? input.reason, 'Say why it needs the full review.')
+    return {
+      changes: { preApproval: leftRoute(application, why, viewer) },
+      event: { type: 'status', message: `Taken off the pre-approval route for the usual review: ${why}` },
+    }
+  },
+
   /** Someone takes a case, or hands it to a colleague who reviews cases. */
   async assign(tx, viewer, application, input) {
     requireCase(viewer, 'cases.work')
@@ -605,6 +732,9 @@ export const applyAction = async (viewer, applicationId, input, context = {}) =>
     if (Number(input.version) !== application.version) {
       fail(409, 'Someone else has updated this case. Refresh to see their changes before you continue.', 'stale')
     }
+    // Held for its partner (pre-screening, then waiting for the partner): only a system
+    // administrator acts on it. Notes, and the customer's own actions, still go through.
+    if (input?.action !== 'note' && viewer.role !== 'customer' && heldForPartner(application) && !mayActOnHeldCase(viewer)) fail(409, heldReason(application), 'held_for_partner')
     const { flow, state } = await locate(application, tx)
     const ctx = { flow, state, settings }
 
@@ -738,9 +868,18 @@ export const workflowView = async (viewer, application, { recommendation = null 
   const outstanding = state.type === 'final' ? [] : await outstandingDocuments(await getDb(), application, state, await listDocumentKinds({ includeRetired: true }), definition)
   const currentStretch = new Set([state.id, ...laterStates(definition, state.id, product)])
   const appraisal = state.type === 'final' ? { legalRequired: false, valuation: null, approval: null } : await appraisalFor(application)
+  const preApproval = application.preApproval
+    ? {
+        ...application.preApproval,
+        // Why "Issue offer" can't be used yet, for this viewer; null when it can.
+        issueBlocked: !viewer.permissions?.includes('offers.issue') ? 'Your role can’t issue offers.' : await issueBlocker(await getDb(), viewer, application, flow),
+        maxAmount: productFor(application, await getProducts()).preApproval?.maxAmount ?? null,
+      }
+    : null
   return {
     version: flow.version,
     legacy: flow.legacy,
+    preApproval,
     checklist: definition.checklist || [],
     state: {
       id: state.id,

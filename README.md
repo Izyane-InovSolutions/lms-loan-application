@@ -109,7 +109,7 @@ LOS_DEV_LOG_CODES=true          # print email codes in the terminal when they ca
 LOS_ADMIN_EMAIL=you@example.com # the first admin, created on first sign-in while no staff exist
 LOS_ADMIN_PASSWORD=a-long-passphrase
 CRB_PROVIDER=demo               # try the credit bureau panel with sample scores
-VITE_CRB_ENABLED=true           # ask applicants for credit bureau consent
+VITE_CRB_ENABLED=true           # credit bureau section on the form until the server's setting loads
 ```
 
 ### Everyday tasks
@@ -127,6 +127,10 @@ VITE_CRB_ENABLED=true           # ask applicants for credit bureau consent
 Only one dev server can use `.local-pg/` at a time. PGlite holds the directory open.
 
 ## Testing
+
+For a walkthrough of the whole loan journey and a full list of test scenarios, see
+[docs/SYSTEM-WALKTHROUGH.md](docs/SYSTEM-WALKTHROUGH.md).
+
 
 | Command | What it runs |
 | --- | --- |
@@ -154,6 +158,7 @@ needed, and every change is recorded in the audit log.
 | Security | Roles that must use two-step sign-in |
 | Branding | The product's name and logo: the site header, sign-in pages, browser tab, emails, consent wording, the authenticator app and offer documents. The logo is a PNG, JPG or WebP image of up to 1 MB. |
 | Offer documents | The offer letter and loan agreement every approved loan gets: written in the workspace with fields, or your own PDF uploaded (see [Offer letter, agreement and signature](#offer-letter-agreement-and-signature)) |
+| Partners | MoU partners whose employees get pre-approved loans, and each one's staff list (CSV). A personal loan product is made pre-approved for one partner on the Loan products tab: the partner's staff confirm each applicant works there, then a loan officer or sales manager issues the offer straight away. See [docs/SYSTEM-WALKTHROUGH.md](docs/SYSTEM-WALKTHROUGH.md#pre-approved-partner-loans). |
 | Terms and privacy | The terms and privacy notice applicants accept, edited and published as numbered versions. Each application records the versions its applicant accepted. |
 
 Also in the workspace:
@@ -302,7 +307,8 @@ This shows the default settings. Also:
 3. **Reviewed.** Someone who reviews cases takes it (or is assigned it), works through the
    verification checklist, can ask the applicant for more (they answer on
    `/my-applications`), log field visits, and pull a credit report when a bureau is
-   connected and the applicant consented. Officers only get cases inside their approval
+   connected (with the applicant's consent, if *Settings → Credit bureau* asks for it).
+   Officers only get cases inside their approval
    range.
 4. **Recommended and decided.** The officer recommends approve or decline, with a reason
    and, for an approval, the amount, tenure and any conditions. Required checklist items
@@ -426,7 +432,9 @@ With `CRB_PROVIDER=product109`, **Run credit check** on the case page makes one
 Product 109 enquiry over the bureau's SOAP service (`api/_lib/crb/product109.js`),
 with the same operation and arguments as the existing Django adapter. The request goes
 only for the person the application is about (the applicant, or the applying director
-on a business loan), only if they consented, and only with an NRC in the 123456/78/9
+on a business loan), only if the application allows it (by default the check is part of
+every application and the applicant is told so; *Ask applicants for consent first* in
+Settings → Credit bureau makes it opt-in), and only with an NRC in the 123456/78/9
 format. The officer waits for the answer, up to `CRB_TIMEOUT_SECONDS`. One pull runs at
 a time per case, and failed pulls are not retried, because each call is an enquiry the
 bureau records and bills. Every pull is kept on the case. A report whose NRC differs
@@ -603,6 +611,7 @@ included: nobody can decide a case they recommended or brought in.
 | Sales manager | All applications, all staff | Everything an RM and a loan officer can do: bring customers in, lead a team, review, recommend, approve or decline within their limit, send to the LMS, mark payouts; plus the pipeline, team performance and the credit rules (read-only) |
 | Loan officer | All applications | Take, review and recommend cases; assign them; approve or decline others' recommendations within their approval limit; send to the LMS; mark payouts; read the credit rules |
 | Relationship manager | Their own, plus their agents' applications | Refer customers, fill in applications, lead a team of agents, record acceptance, see the pipeline and team performance |
+| Partner staff | None: only their partner's requests | Confirm or refuse that applicants for their partner's pre-approved loans work there (Partner requests). Linked to one partner. |
 | Direct sales agent | Applications they brought in | Refer customers, fill in applications, record acceptance, see their pipeline |
 | Customer | Their own applications | Follow progress, answer requests, accept or turn down offers, withdraw (not configurable) |
 
@@ -764,8 +773,6 @@ Without Docker, on one Linux server (nginx, local Postgres, systemd), see
   `vercel.json` is daily.
 - The default credit rule thresholds, such as debt-to-income above 0.4, are placeholders.
   Replace them with your policy in `/admin/rules`.
-- The wizard only accepts emails ending in `.com` directly after the domain name (for
-  example `name@company.com`). Addresses such as `name@company.co.zm` are rejected.
 
 ## Troubleshooting
 

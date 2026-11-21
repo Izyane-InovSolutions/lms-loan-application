@@ -135,6 +135,8 @@ export const computeFacts = (application, documents, extras = {}) => {
   // Whether the typed home address could be found on the map at all (null: not looked up).
   facts.address_found = extras.addressFound ?? null
   facts.crb_score = extras.crbScore ?? null
+  // Earlier applications with this ID and other contact details, or these details and another ID (identityFlags.js); null from before the check.
+  facts.id_contact_mismatch = Array.isArray(application.identityFlags) ? application.identityFlags.length > 0 : null
 
   return facts
 }

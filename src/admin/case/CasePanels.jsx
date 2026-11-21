@@ -11,6 +11,7 @@ import { roleLabel } from '@/config/roles'
 import { FACTS, formatFact } from '@/config/creditRules'
 import { compareIncome } from '@/config/eligibility'
 import { consentText } from '@/config/consent'
+import { CRB_NOT_APPLICABLE } from '@/config/applicantRules'
 import { useBranding } from '@/components/brand/BrandingProvider'
 import { Panel, dateTime, money, timeAgo } from '../components'
 import { LocationMap } from './LocationMap'
@@ -554,7 +555,7 @@ export function LmsPanel({ application, lmsConfigured, canAct, onSend, onReconci
 }
 
 /** `pulling` and `error` come from the case page, which also pulls on its own when the case opens. */
-export function CrbPanel({ reports, provider, hasConsent, canRun, onRun, pulling = false, error = null }) {
+export function CrbPanel({ reports, provider, hasConsent, applies = true, canRun, onRun, pulling = false, error = null }) {
   if (!provider && !reports.length) return null
   const latest = reports[0]
   return (
@@ -588,14 +589,14 @@ export function CrbPanel({ reports, provider, hasConsent, canRun, onRun, pulling
           Pulling the credit report…
         </p>
       ) : (
-        <p className="text-sm text-muted-foreground">{hasConsent ? 'No report pulled yet.' : 'The applicant did not consent to a credit bureau check.'}</p>
+        <p className="text-sm text-muted-foreground">{!applies ? CRB_NOT_APPLICABLE : hasConsent ? 'No report pulled yet.' : 'The applicant did not consent to a credit bureau check.'}</p>
       )}
       {error ? (
         <p role="alert" className="mt-2 text-sm text-destructive">
           {error}
         </p>
       ) : null}
-      {canRun && provider && hasConsent ? (
+      {canRun && provider && hasConsent && applies ? (
         <Button variant="outline" size="sm" className="mt-3" onClick={onRun} disabled={pulling}>
           {pulling ? <Loader2 className="animate-spin" /> : <ShieldAlert />}
           {pulling ? 'Pulling…' : latest ? 'Pull a fresh report' : 'Run credit check'}
@@ -906,7 +907,7 @@ export function StageDocumentsPanel({ documents, applicationId, canWork, onResen
   )
 }
 
-const CONSENT_LABELS = { data_processing: 'Terms and privacy notice', draft_contact: 'Contact about the unfinished application', location: 'Location sharing', crb: 'Credit bureau check', crb_notice: 'Credit bureau check (told, not asked)', offer: 'Loan offer accepted' }
+const CONSENT_LABELS = { data_processing: 'Terms and privacy notice', draft_contact: 'Contact about the unfinished application', location: 'Location sharing', crb: 'Credit bureau check', crb_notice: 'Credit bureau check (told, not asked)', offer: 'Loan offer accepted', partner_notice: 'Details shared with the partner (told, not asked)' }
 const METHOD_LABELS = { applicant_checkbox: 'by the applicant online', customer_code: 'by the customer’s emailed code, with an agent' }
 
 export function ConsentPanel({ consents }) {

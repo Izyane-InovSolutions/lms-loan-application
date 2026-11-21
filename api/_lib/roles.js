@@ -81,7 +81,8 @@ export const rolesWith = async (permission) => (await listRoles()).filter((role)
 
 export const roleHas = async (key, permission) => Boolean((await getRole(key))?.permissions.includes(permission))
 
-const SCOPE_RANK = { own: 0, team: 1, all: 2 }
+// A partner's staff see less than anyone's own scope: never a case page.
+const SCOPE_RANK = { partner: -1, own: 0, team: 1, all: 2 }
 
 /**
  * True when `role` gives nothing `actor` lacks: each of its permissions, and a scope no

@@ -52,9 +52,24 @@ export const PERMISSION_GROUPS = [
       },
       { key: 'cases.disburse', label: 'Send to the LMS and record payouts' },
       {
+        key: 'offers.issue',
+        label: 'Issue offers on pre-approved loans',
+        description: 'Once the partner confirms a pre-approved applicant works there, issue the offer straight away (src/config/partners.js). Never on a case they brought in.',
+      },
+      {
         key: 'legal.verify',
         label: 'Verify collateral',
         description: 'In underwriting: mark each pledged collateral item and its proof documents verified, or record an issue with them, on the case’s Collateral tab.',
+      },
+    ],
+  },
+  {
+    label: 'Partners',
+    permissions: [
+      {
+        key: 'partner.confirm',
+        label: 'Confirm partner employees',
+        description: 'For pre-approved loans: confirm, or refuse, that an applicant works for the partner. Give it to a role with the “partner” scope, for the partner’s own staff.',
       },
     ],
   },
@@ -99,10 +114,14 @@ export const SCOPES = {
   all: { label: 'Every application' },
   team: { label: 'Their own and their team’s', description: 'Applications they brought in or were assigned, plus those of agents who report to them.' },
   own: { label: 'Only their own', description: 'Applications they brought in or were assigned.' },
+  partner: {
+    label: 'Their partner’s requests only',
+    description: 'For a partner’s staff: no case pages, only the pre-approval requests of the partner they belong to (Partner requests).',
+  },
 }
 
 const RM_PERMISSIONS = ['applications.assist', 'team.lead', 'drafts.view', 'applications.note', 'offers.record', 'pipeline.view', 'reports.team', 'users.view']
-const OFFICER_PERMISSIONS = ['applications.note', 'offers.record', 'cases.work', 'cases.assign', 'cases.recommend', 'cases.decide', 'cases.disburse', 'rules.view']
+const OFFICER_PERMISSIONS = ['applications.note', 'offers.record', 'cases.work', 'cases.assign', 'cases.recommend', 'cases.decide', 'cases.disburse', 'offers.issue', 'rules.view']
 
 /** The roles every workspace has. Their label, scope and permissions can be changed; admin's cannot. */
 export const BUILT_IN_ROLES = {
@@ -135,6 +154,12 @@ export const BUILT_IN_ROLES = {
     description: 'Checks the collateral pledged on applications, and its proof documents, during underwriting. Doesn’t work or decide cases.',
     scope: 'all',
     permissions: ['legal.verify'],
+  },
+  partner_staff: {
+    label: 'Partner staff',
+    description: 'Someone at an MoU partner, usually HR: confirms whether applicants for the partner’s pre-approved loans work there. Sees nothing else.',
+    scope: 'partner',
+    permissions: ['partner.confirm'],
   },
   dsa: {
     label: 'Direct sales agent',

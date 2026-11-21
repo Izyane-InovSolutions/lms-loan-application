@@ -49,6 +49,8 @@ export const publicUser = (user) => ({
   role: user.role,
   status: user.status,
   managerId: user.managerId,
+  // Partner staff: the MoU partner they belong to (src/config/partners.js).
+  partnerId: user.partnerId ?? null,
   referralCode: user.referralCode,
   approvalMin: user.approvalMin ?? 0,
   approvalMax: user.approvalMax ?? null,

@@ -138,6 +138,12 @@ export const SETTING_DEFAULTS = {
   // Automatic decline on a failed rule. Off: rules recommend, people decide.
   prescreen: { autoDecline: false },
   /*
+   * MoU partners whose employees get pre-approved loans (src/config/partners.js):
+   * { list: [{ id, name, mouReference, mouEndsOn, active, staffList: { version, uploadedAt, uploadedByName, count } }] }.
+   * The staff lists themselves are in the partner_staff table.
+   */
+  partners: { list: [] },
+  /*
    * Loan products by id (Settings → Loan products, src/config/loanProducts.js): the two
    * built-in ones and any the workspace added, each with its pricing, documents and
    * collateral rules. Only what differs from the defaults needs to be stored.
@@ -176,6 +182,9 @@ export const SETTING_DEFAULTS = {
   customerOptions: {
     // Staff may see unfinished applications and contact the applicant to help finish them.
     helpWithFinishing: true,
+    // Applicants confirm their email or phone with a one-time code before their
+    // application is saved, against applications in someone else's name (verification.js).
+    verifyAtStart: true,
   },
   // Built-in roles an admin deleted (Team → Roles). They stay in the code, so they can be
   // brought back; until then they're left out of every list (api/_lib/roles.js).

@@ -30,7 +30,8 @@ const prepareDraft = async (email, extra = {}) => {
     documents[path] = { ...stored, filename: `${slot}.pdf`, contentType: 'application/pdf', size: PDF.length }
     dataDocuments[slot] = { __draftFile__: path }
   }
-  await kv.set(`draft:${email}`, { documents })
+  // As if the applicant confirmed their email with a code when they started (api/_lib/verification.js).
+  await kv.set(`draft:${email}`, { documents, verified: { channel: 'email', value: email, at: Date.now() } })
   await kv.set(`draftToken:${token}`, email)
   return {
     token,

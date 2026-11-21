@@ -27,6 +27,7 @@ import { BRAND_NAME_MAX } from '../../src/config/branding.js'
 import { APPLICANT_FORMS, BUILT_IN_PRODUCT_IDS, DOCUMENT_CATALOGUE, INTEREST_TYPES, LOAN_PURPOSES, LOAN_TYPE_KEY_PATTERN, OTHER_PURPOSE, OTHER_PURPOSE_MAX, PRODUCT_ID_PATTERN, STANDARD_PRODUCTS, buildLoanTypes, buildProducts, defaultDocuments, liveProducts, subcategoryOf } from '../../src/config/loanProducts.js'
 import { COLLATERAL_CODE_PATTERN, COLLATERAL_REQUIREMENTS, buildCollateralCatalog } from '../../src/config/collateral.js'
 import { GUARANTOR_REQUIREMENTS } from '../../src/config/guarantors.js'
+import { PARTNER_ID_PATTERN } from '../../src/config/partners.js'
 import { isHexColour, normaliseTheme } from '../../src/config/theme.js'
 
 /*
@@ -88,7 +89,7 @@ const validateProductDocuments = (form, value, label) => {
 }
 
 /** One product, built-in or added: its words, form, pricing, documents and collateral rules. */
-const validateProduct = (id, value, current, collateralTypes, loanTypes) => {
+const validateProduct = (id, value, current, collateralTypes, loanTypes, partners = []) => {
   const builtIn = BUILT_IN_PRODUCT_IDS.includes(id)
   const form = builtIn ? id : current?.form || STANDARD_PRODUCTS[id]?.form || value.form
   if (!APPLICANT_FORMS[form]) throw new Error(`Choose the application form "${text(value.name, 80) || id}" uses.`)
@@ -119,6 +120,7 @@ const validateProduct = (id, value, current, collateralTypes, loanTypes) => {
     // general purpose; the interest type it is sold as.
     ...purposeFields(value, form, label),
     interestType: INTEREST_TYPES[value.interestType] ? value.interestType : 'fixed',
+    preApproval: preApprovalFields(value, form, label, partners),
     // Whether applicants name guarantors (src/config/guarantors.js).
     guarantors: { requirement: GUARANTOR_REQUIREMENTS[value.guarantors?.requirement] ? value.guarantors.requirement : 'none' },
     // Who qualifies (src/config/eligibility.js).
@@ -144,6 +146,56 @@ const validateProduct = (id, value, current, collateralTypes, loanTypes) => {
   }
 }
 
+/**
+ * Pre-approval for one MoU partner's employees (src/config/partners.js): personal-loan
+ * products only, with a partner that exists, and an optional limit within the product's.
+ */
+const preApprovalFields = (value, form, label, partners) => {
+  const input = value.preApproval || {}
+  if (!input.enabled) return { enabled: false, partnerId: null, maxAmount: null }
+  if (form !== 'personal') throw new Error(`${label}: only personal loans can be pre-approved for a partner's employees.`)
+  const partner = partners.find((entry) => entry.id === input.partnerId)
+  if (!partner) throw new Error(`${label}: choose the partner whose employees it is pre-approved for.`)
+  const maxAmount = input.maxAmount === null || input.maxAmount === '' || input.maxAmount === undefined ? null : number(input.maxAmount, { min: 1, label: `${label}: the pre-approved limit` })
+  const minAmount = Number(value.minAmount)
+  const productMax = Number(value.maxAmount)
+  if (maxAmount !== null && (maxAmount < minAmount || maxAmount > productMax)) {
+    throw new Error(`${label}: the pre-approved limit must be between K${minAmount.toLocaleString()} and K${productMax.toLocaleString()}.`)
+  }
+  return { enabled: true, partnerId: partner.id, maxAmount }
+}
+
+/**
+ * MoU partners (Settings → Partners). Each partner keeps its staff list's details, which
+ * only its upload sets; one left out is removed, which is refused while a product still
+ * names it.
+ */
+const validatePartners = async (value) => {
+  const stored = (await getSetting('partners')).list || []
+  const products = buildProducts(await getSetting('products'))
+  const ids = new Set()
+  const list = (Array.isArray(value?.list) ? value.list : []).slice(0, 100).map((entry) => {
+    const name = text(entry?.name, 80)
+    if (name.length < 2) throw new Error('Every partner needs a name.')
+    const id = text(entry.id, 40) || name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)
+    if (!PARTNER_ID_PATTERN.test(id)) throw new Error(`${name}: the partner id can only use lower-case letters, numbers and dashes.`)
+    if (ids.has(id)) throw new Error(`The partner "${name}" is listed twice.`)
+    ids.add(id)
+    const mouReference = text(entry.mouReference, 60)
+    if (!mouReference) throw new Error(`${name}: give the MoU reference.`)
+    const mouEndsOn = text(entry.mouEndsOn, 10)
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(mouEndsOn) || Number.isNaN(Date.parse(mouEndsOn))) throw new Error(`${name}: give the date the MoU ends.`)
+    const current = stored.find((partner) => partner.id === id)
+    return { id, name, mouReference, mouEndsOn, active: entry.active !== false, staffList: current?.staffList || { version: 0, uploadedAt: null, uploadedByName: null, count: 0 } }
+  })
+  for (const partner of stored) {
+    if (ids.has(partner.id)) continue
+    const using = products.find((product) => !product.deleted && product.preApproval?.enabled && product.preApproval.partnerId === partner.id)
+    if (using) throw new Error(`${partner.name} is still set on the loan product “${using.name}”. Turn its pre-approval off first.`)
+  }
+  return { list }
+}
+
 /** A product's purpose: a listed one, 'other' with the admin's own wording, or general (null). */
 const purposeFields = (value, form, label) => {
   if (value.purpose === OTHER_PURPOSE) {
@@ -158,12 +210,13 @@ const validateProducts = async (value) => {
   const stored = await getSetting('products')
   const { types } = buildCollateralCatalog(await getSetting('collateral'))
   const loanTypes = buildLoanTypes(await getSetting('loanTypes'))
+  const partners = (await getSetting('partners')).list || []
   const products = {}
   for (const [id, entry] of Object.entries(value || {})) {
     if (!BUILT_IN_PRODUCT_IDS.includes(id) && !PRODUCT_ID_PATTERN.test(id)) throw new Error(`"${id}" can’t be a product id: use lower-case letters, numbers and dashes.`)
     if (id.startsWith('match-')) throw new Error(`Product ids can’t start with "match-": it is kept for “we’ll match you” applications.`)
     if (stored[id]?.deleted) throw new Error(`The product "${id}" was deleted. Give a new product another id.`)
-    products[id] = validateProduct(id, entry || {}, stored[id], types, loanTypes)
+    products[id] = validateProduct(id, entry || {}, stored[id], types, loanTypes, partners)
   }
   if (!buildProducts({ ...stored, ...products }).some((product) => product.enabled)) throw new Error('Keep at least one loan product switched on.')
   return products
@@ -485,6 +538,7 @@ const VALIDATORS = {
   }),
   prescreen: (value) => ({ autoDecline: Boolean(value.autoDecline) }),
   products: validateProducts,
+  partners: validatePartners,
   collateral: validateCollateral,
   loanTypes: validateLoanTypes,
   retention: (value) => ({
@@ -511,7 +565,7 @@ const VALIDATORS = {
       ...aiFieldValues(value),
     }
   },
-  customerOptions: (value) => ({ helpWithFinishing: value.helpWithFinishing !== false }),
+  customerOptions: (value) => ({ helpWithFinishing: value.helpWithFinishing !== false, verifyAtStart: value.verifyAtStart !== false }),
   stages: (value) => validateStagesConfig(value),
   documents: (value) => validateDocumentKinds(value),
   security: async (value) => {

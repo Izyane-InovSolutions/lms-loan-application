@@ -6,6 +6,7 @@ import { hasPermission, isStaffRole } from '@/config/roles'
 import { AuthProvider, useAuth } from './auth'
 import { ToastProvider } from './components'
 import { Shell } from './Shell'
+import { isPartnerStaff } from './navigation'
 import { ForgotPasswordPage, LoginPage, SetPasswordPage } from './pages/AuthPages'
 
 // Each page is its own chunk: charts, maps and the QR library load only where used.
@@ -23,6 +24,7 @@ const RolesPage = lazy(() => import('./pages/RolesPage').then((module) => ({ def
 const ProfilePage = lazy(() => import('./pages/ProfilePage').then((module) => ({ default: module.ProfilePage })))
 const WorkflowPage = lazy(() => import('./pages/WorkflowPage').then((module) => ({ default: module.WorkflowPage })))
 const AgentsPage = lazy(() => import('./pages/AgentsPage').then((module) => ({ default: module.AgentsPage })))
+const PartnerRequestsPage = lazy(() => import('./pages/PartnerRequestsPage').then((module) => ({ default: module.PartnerRequestsPage })))
 const AgentDetailPage = lazy(() => import('./pages/AgentDetailPage').then((module) => ({ default: module.AgentDetailPage })))
 
 /**
@@ -38,9 +40,10 @@ export default function AdminApp() {
           <Route path="forgot-password" element={<ForgotPasswordPage />} />
           <Route path="set-password" element={<SetPasswordPage />} />
           <Route element={<RequireStaff />}>
-            <Route index element={<HomePage />} />
-            <Route path="applications" element={<ApplicationsPage />} />
-            <Route path="applications/:id" element={<CasePage />} />
+            <Route index element={<PartnerStaffAway><HomePage /></PartnerStaffAway>} />
+            <Route path="applications" element={<PartnerStaffAway><ApplicationsPage /></PartnerStaffAway>} />
+            <Route path="applications/:id" element={<PartnerStaffAway><CasePage /></PartnerStaffAway>} />
+            <Route path="partner-requests" element={<RequirePermission permission="partner.confirm"><PartnerRequestsPage /></RequirePermission>} />
             <Route path="pipeline" element={<RequirePermission permission="pipeline.view"><PipelinePage /></RequirePermission>} />
             <Route path="rules" element={<RequirePermission permission={['rules.view', 'rules.manage']}><RulesPage /></RequirePermission>} />
             <Route path="settings" element={<RequirePermission permission="settings.manage"><SettingsPage /></RequirePermission>} />
@@ -85,6 +88,13 @@ function RequireStaff() {
  * Sends people to their home page when their role cannot open a page (e.g. after a demo
  * role switch). `permission` may be a list: any one of them opens the page.
  */
+/** A partner's staff only ever see Partner requests (src/config/partners.js): the dashboard and cases aren't theirs. */
+function PartnerStaffAway({ children }) {
+  const { user } = useAuth()
+  if (isPartnerStaff(user)) return <Navigate to="/admin/partner-requests" replace />
+  return children
+}
+
 function RequirePermission({ permission, children }) {
   const { user } = useAuth()
   if (![].concat(permission).some((key) => hasPermission(user, key))) return <Navigate to="/admin" replace />

@@ -16,6 +16,8 @@ const DEFAULT_CATALOG = {
   collateralCatalog: activeCatalog(DEFAULT_COLLATERAL_CATALOG),
   // The credit bureau check (Settings → Credit bureau): null until the workspace answers.
   creditCheck: null,
+  // Whether applicants confirm their email or phone with a code as they start: null until the workspace answers.
+  applicantVerification: null,
   loaded: false,
 }
 
@@ -27,8 +29,15 @@ const load = () => {
   if (!pending) {
     pending = fetch('/api/v1/products')
       .then((response) => (response.ok ? response.json() : Promise.reject(new Error(String(response.status)))))
-      .then(({ products, loanTypes, collateralCatalog, creditCheck }) => {
-        cached = { products, loanTypes: loanTypes || DEFAULT_CATALOG.loanTypes, collateralCatalog: collateralCatalog || DEFAULT_CATALOG.collateralCatalog, creditCheck: creditCheck || null, loaded: true }
+      .then(({ products, loanTypes, collateralCatalog, creditCheck, applicantVerification }) => {
+        cached = {
+          products,
+          loanTypes: loanTypes || DEFAULT_CATALOG.loanTypes,
+          collateralCatalog: collateralCatalog || DEFAULT_CATALOG.collateralCatalog,
+          creditCheck: creditCheck || null,
+          applicantVerification: applicantVerification || null,
+          loaded: true,
+        }
         listeners.forEach((listener) => listener(cached))
         return cached
       })
@@ -44,7 +53,7 @@ const load = () => {
   return pending
 }
 
-/** { products, loanTypes, collateralCatalog, creditCheck, loaded }: `loaded` turns true once the workspace's own answer (or a failure) is in. */
+/** { products, loanTypes, collateralCatalog, creditCheck, applicantVerification, loaded }: `loaded` turns true once the workspace's own answer (or a failure) is in. */
 export function useProductCatalog() {
   const [catalog, setCatalog] = useState(cached || DEFAULT_CATALOG)
 

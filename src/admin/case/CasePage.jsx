@@ -46,8 +46,11 @@ import { CaseSummary, expectedForSlot } from './CaseSummary'
 import { sectionsFor } from './fields'
 import { conditionsOf } from '@/config/conditions'
 import { LegalReview } from './LegalReview'
+import { PreApprovalPanel } from './PreApprovalPanel'
 import { PrescreenStats } from './PrescreenStats'
 import { allowsCreditCheck } from '@/config/consent'
+import { crbApplies } from '@/config/applicantRules'
+import { heldForPartner, heldReason, mayActOnHeldCase } from '@/config/partners'
 
 const withinAssignmentRange = (person, amount) =>
   Number(amount) >= (person.approvalMin ?? 0) && (person.approvalMax == null || Number(amount) <= person.approvalMax)
@@ -89,19 +92,22 @@ export function CasePage() {
     return () => clearTimeout(timer)
   }, [state, load])
 
+  // Held for its partner (pre-screening, then waiting for the partner): read-only here, but
+  // for notes, unless this is a system administrator (src/config/partners.js).
+  const held = state.status === 'ready' && heldForPartner(state.application) && !mayActOnHeldCase(user)
   // What this person's role lets them do here (Team → Roles); the server checks each again.
   const may = useMemo(
     () => ({
-      work: hasPermission(user, 'cases.work'),
-      assign: hasPermission(user, 'cases.assign'),
-      recommend: hasPermission(user, 'cases.recommend'),
-      decide: hasPermission(user, 'cases.decide'),
-      disburse: hasPermission(user, 'cases.disburse'),
-      record: hasPermission(user, 'offers.record'),
+      work: !held && hasPermission(user, 'cases.work'),
+      assign: !held && hasPermission(user, 'cases.assign'),
+      recommend: !held && hasPermission(user, 'cases.recommend'),
+      decide: !held && hasPermission(user, 'cases.decide'),
+      disburse: !held && hasPermission(user, 'cases.disburse'),
+      record: !held && hasPermission(user, 'offers.record'),
       note: hasPermission(user, 'applications.note'),
-      verify: hasPermission(user, 'legal.verify'),
+      verify: !held && hasPermission(user, 'legal.verify'),
     }),
-    [user]
+    [user, held]
   )
   useEffect(() => {
     if (!may.assign) return
@@ -226,6 +232,9 @@ export function CasePage() {
             <h1 className="text-[1.75rem] font-semibold leading-tight tracking-tight text-foreground">{application.companyName || application.applicantName}</h1>
             <StatusBadge status={application.status} label={statusLabel(application.status)} />
             {workflow && workflow.state.label !== statusLabel(application.status) ? <span className="text-sm font-medium text-muted-foreground">{workflow.state.label}</span> : null}
+            {application.preApproval && application.preApproval.stage !== 'review' ? (
+              <span className="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">Pre-approved · {application.preApproval.partnerName}</span>
+            ) : null}
           </div>
           <p className="mt-1.5 text-sm text-muted-foreground">
             {application.reference}, {(product?.name || LOAN_TYPE_LABELS[application.loanType]).toLowerCase()}
@@ -264,6 +273,17 @@ export function CasePage() {
           onShowWorkflow={() => showTab('workflow')}
         />
       </header>
+
+      <PreApprovalPanel
+        application={application}
+        preApproval={workflow?.preApproval}
+        canIssue={!held && (hasPermission(user, 'offers.issue') || mayActOnHeldCase(user))}
+        heldMessage={held ? heldReason(application) : null}
+        onIssue={(terms) => act('issue_offer', terms, 'Offer issued')}
+        onLeave={(input) => act('leave_pre_approval', input, 'Sent to full review')}
+      />
+
+      {application.identityFlags?.length ? <IdentityFlags flags={application.identityFlags} /> : null}
 
       {application.status === 'info_requested' && application.infoRequest ? (
         <div className="flex items-start gap-3 rounded-lg border border-warning/40 bg-warning/10 p-4 text-sm">
@@ -347,6 +367,7 @@ export function CasePage() {
                   reports={crbReports}
                   provider={crbProvider}
                   hasConsent={hasCrbConsent}
+                  applies={crbApplies(application.loanType, application.data)}
                   canRun={may.work}
                   pulling={crbPull.status === 'pulling'}
                   error={crbPull.status === 'error' ? crbPull.message : null}
@@ -1264,5 +1285,39 @@ function Timeline({ events, onNote }) {
         })}
       </ol>
     </div>
+  )
+}
+
+/**
+ * The ID and contact check at submission (api/_lib/identityFlags.js): earlier applications
+ * with this ID and other contact details, or these details and another ID. A warning only.
+ */
+function IdentityFlags({ flags }) {
+  return (
+    <section aria-labelledby="identity-flags-title" className="flex items-start gap-3 rounded-lg border border-warning/40 bg-warning/10 p-4 text-sm">
+      <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
+      <div className="space-y-1">
+        <h2 id="identity-flags-title" className="font-medium text-foreground">
+          Check this applicant is who they say they are
+        </h2>
+        <ul className="space-y-0.5 text-muted-foreground">
+          {flags.map((flag) => (
+            <li key={`${flag.kind}-${flag.applicationId}`}>
+              {flag.kind === 'id_other_contact'
+                ? `This ID was used on `
+                : `This ${flag.channel === 'email' ? 'email address' : 'phone number'} was used on `}
+              <Link to={`/admin/applications/${flag.applicationId}`} className="font-medium text-foreground underline underline-offset-2">
+                {flag.reference}
+              </Link>
+              {flag.kind === 'id_other_contact'
+                ? ` with a different ${flag.channel === 'email' ? 'email' : 'phone'}, ${flag.contact}`
+                : ` with a different ID, ${flag.id}`}
+              {flag.verified ? ' (confirmed with a code there)' : ''}.
+            </li>
+          ))}
+        </ul>
+        <p className="text-xs text-muted-foreground">It may be the same person with new details. Check their ID document and live photo, and call them on a number you trust.</p>
+      </div>
+    </section>
   )
 }

@@ -8,6 +8,8 @@
  * loan with the same numbers through priceLoan().
  */
 
+import { DEFAULT_PRE_APPROVAL } from './partners.js'
+
 export const DRAFT_RETENTION_DAYS = 7
 export const OTP_EXPIRY_MINUTES = 10
 
@@ -370,6 +372,7 @@ export const productDefaults = (form) => ({
   interestType: 'fixed',
   eligibility: DEFAULT_ELIGIBILITY[form],
   subcategory: null,
+  preApproval: DEFAULT_PRE_APPROVAL,
 })
 
 /** The derived fields every screen reads: the form's steps, and the documents' names for marketing copy. */
@@ -390,6 +393,8 @@ const finish = (product) => {
     loanType: product.loanType || product.form,
     // Its sub category in that loan type (subcategoryOf falls back to the type's first).
     subcategory: product.subcategory || null,
+    // Pre-approved for one MoU partner's employees (src/config/partners.js).
+    preApproval: { ...DEFAULT_PRE_APPROVAL, ...(product.preApproval || {}) },
     // Whether applicants name guarantors (src/config/guarantors.js).
     guarantors: { requirement: 'none', ...(product.guarantors || {}) },
     // Deleted, but applications were made under it: kept so they still read, never offered.

@@ -10,6 +10,7 @@ import { issuePasswordLink } from './auth.js'
 import { isStaffRole } from '../../src/config/roles.js'
 import { can } from '../_lib/rbac.js'
 import { assertRoleWithin, getRole, roleHas, rolesWith } from '../_lib/roles.js'
+import { partnerById } from '../_lib/preApproval.js'
 
 const { users, applications, applicationDrafts, applicationEvents, appraisals, auditLog, signatures, locations, crbReports, dataRequests } = schema
 const manager = alias(users, 'manager')
@@ -103,6 +104,16 @@ const listUsers = async (req, res, { query }) => {
   return { users: rows.map(toListItem) }
 }
 
+/**
+ * The partner a member of a partner-scoped role belongs to (src/config/partners.js):
+ * required for those roles, and cleared for every other.
+ */
+const partnerFor = async (role, partnerId) => {
+  if ((await getRole(role))?.scope !== 'partner') return null
+  if (!partnerId || !(await partnerById(partnerId))) fail(400, 'Choose the partner this person works for.', 'invalid_partner')
+  return partnerId
+}
+
 /** Throws unless `managerId` is an active team lead (a relationship manager, by default). */
 const assertManager = async (db, managerId) => {
   const [candidate] = await db.select().from(users).where(eq(users.id, managerId)).limit(1)
@@ -135,6 +146,7 @@ const inviteUser = async (req) => {
   await assertMayManageRole(actor, role, 'You can’t invite someone to a role with more access than your own.')
   const managerId = (await takesManager(role)) ? req.body?.managerId || null : null
   if (managerId) await assertManager(db, managerId)
+  const partnerId = await partnerFor(role, req.body?.partnerId)
 
   const [existing] = await db.select({ id: users.id, role: users.role }).from(users).where(eq(users.email, email)).limit(1)
   if (existing) {
@@ -157,6 +169,7 @@ const inviteUser = async (req) => {
       role,
       phone,
       managerId,
+      partnerId,
       status: 'invited',
       referralCode: (await refers(role)) ? await uniqueReferralCode(db) : null,
       createdBy: actor.id,
@@ -223,6 +236,9 @@ const updateUser = async (req, res, { params }) => {
       await assertManager(db, managerId)
     }
     changes.managerId = managerId
+  }
+  if (body.partnerId !== undefined || changes.role) {
+    changes.partnerId = await partnerFor(nextRole, body.partnerId === undefined ? target.partnerId : body.partnerId)
   }
 
   if (body.status !== undefined && body.status !== target.status) {

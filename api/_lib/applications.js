@@ -12,6 +12,7 @@ const { applications, applicationEvents, users } = schema
  *   team   brought in by or assigned to them, assigned to them as RM, or brought in by
  *          someone who reports to them (RM by default)
  *   own    brought in by or assigned to them (DSA by default)
+ *   partner  none: a partner's staff only see their partner's requests (api/_handlers/partners.js)
  *
  * Customers see their own, by account or by email. Returns a where-clause, or undefined
  * for "no restriction".

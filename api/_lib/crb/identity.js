@@ -1,5 +1,6 @@
 import { fail } from '../http.js'
 import { formatNrc } from './normalize.js'
+import { CRB_NOT_APPLICABLE, crbApplies } from '../../../src/config/applicantRules.js'
 
 const clean = (value) => (typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '')
 
@@ -9,6 +10,8 @@ const clean = (value) => (typeof value === 'string' ? value.trim().replace(/\s+/
  * by staff, so a report cannot be pulled for someone the case is not about.
  */
 export const identityFor = (application) => {
+  // Passport holders are never sent, whatever NRC may linger in the data.
+  if (!crbApplies(application.loanType, application.data)) fail(422, CRB_NOT_APPLICABLE, 'crb_not_applicable')
   const personal = application.loanType === 'personal'
   const source = (personal ? application.data?.personalInfo : application.data?.directorInfo) || {}
   const identity = personal

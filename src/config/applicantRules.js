@@ -89,6 +89,15 @@ export const PASSPORT_DOCUMENT = { slot: 'passportCopy', label: 'Passport copy',
 const nationalityOf = (form, data) => (form === 'personal' ? data?.employmentInfo?.nationality : data?.directorInfo?.applicantNationality)
 
 /**
+ * Whether the credit bureau can be asked about this applicant (the applying director on a
+ * business loan): only with an NRC, so only for Zambians. Anyone who gave a passport is
+ * never sent, even if an NRC typed before they changed their nationality is still in the data.
+ */
+export const crbApplies = (form, data) => isZambian(nationalityOf(form, data))
+
+export const CRB_NOT_APPLICABLE = 'The applicant gave a passport, not an NRC: the credit bureau only checks NRC holders.'
+
+/**
  * The product's documents as this applicant sees them: a passport copy in place of the
  * NRC copy for non-Zambians, and `skipped` (the reason) on those that don't apply.
  */
