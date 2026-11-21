@@ -18,6 +18,8 @@ import { templateRoutes } from '../_handlers/templates.js'
 import { brandingRoutes } from '../_handlers/branding.js'
 import { workflowConfigRoutes } from '../_handlers/workflowConfig.js'
 import { zraRoutes } from '../_handlers/zra.js'
+import { partnerRoutes } from '../_handlers/partners.js'
+import { verificationRoutes } from '../_handlers/verification.js'
 import { reportRoutes } from '../_handlers/reports.js'
 import { dataWipeRoutes } from '../_handlers/dataWipe.js'
 import { refreshCrb } from '../_lib/crb/index.js'
@@ -31,6 +33,7 @@ import { refreshCrb } from '../_lib/crb/index.js'
  */
 const router = createRouter([
   ...authRoutes,
+  ...verificationRoutes,
   ...userRoutes,
   ...auditRoutes,
   ...overviewRoutes,
@@ -50,6 +53,7 @@ const router = createRouter([
   ...brandingRoutes,
   ...workflowConfigRoutes,
   ...zraRoutes,
+  ...partnerRoutes,
   // Last: /drafts/:id must not shadow GET /drafts/file in applicationRoutes.
   ...draftRoutes,
 ])

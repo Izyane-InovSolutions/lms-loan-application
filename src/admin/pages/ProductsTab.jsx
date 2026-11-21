@@ -31,6 +31,7 @@ import { GUARANTOR_REQUIREMENTS } from '@/config/guarantors'
 import { COLLATERAL_CODE_PATTERN, COLLATERAL_REQUIREMENTS, buildCollateralCatalog, describeRequirement } from '@/config/collateral'
 import { api } from '../api'
 import { Field, FormError, Panel } from '../components'
+import { Toggle as SettingToggle } from './SettingsPage'
 
 /*
  * Settings → Loan products: the products applicants choose from, each on one of the two
@@ -87,14 +88,14 @@ export function ProductsTab({ settings, notify }) {
         ))}
       </div>
       {section === 'loanTypes' ? <LoanTypes loanTypes={loanTypes} products={products} onSaved={setLoanTypes} notify={notify} /> : null}
-      {section === 'products' ? <Products products={products} takenIds={all.map((product) => product.id)} loanTypes={loanTypes} types={types} onSaved={setStored} notify={notify} /> : null}
+      {section === 'products' ? <Products products={products} takenIds={all.map((product) => product.id)} loanTypes={loanTypes} types={types} partners={settings.partners?.list || []} onSaved={setStored} notify={notify} /> : null}
       {section === 'collateral' ? <CollateralTypes catalog={catalog} onSaved={setCatalog} notify={notify} /> : null}
       {section === 'collateralItems' ? <CollateralItems catalog={catalog} onSaved={setCatalog} notify={notify} /> : null}
     </div>
   )
 }
 
-function Products({ products, takenIds, loanTypes, types, onSaved, notify }) {
+function Products({ products, takenIds, loanTypes, types, partners = [], onSaved, notify }) {
   const [selectedId, setSelectedId] = useState(products[0]?.id)
   const [adding, setAdding] = useState(false)
   const selected = products.find((product) => product.id === selectedId) || products[0]
@@ -168,7 +169,7 @@ function Products({ products, takenIds, loanTypes, types, onSaved, notify }) {
         </Button>
       </div>
 
-      {selected ? <ProductEditor key={selected.id} product={selected} loanTypes={loanTypes} types={types} onSave={save} onDelete={remove} /> : null}
+      {selected ? <ProductEditor key={selected.id} product={selected} loanTypes={loanTypes} types={types} partners={partners} onSave={save} onDelete={remove} /> : null}
 
       <AddProductDialog
         loanTypes={loanTypes}
@@ -377,7 +378,7 @@ function PurposeField({ id, form, purpose, customPurpose, hint, onChange }) {
   )
 }
 
-function ProductEditor({ product, loanTypes, types, onSave, onDelete }) {
+function ProductEditor({ product, loanTypes, types, partners = [], onSave, onDelete }) {
   const [deleting, setDeleting] = useState(false)
   const [value, setValue] = useState(product)
   const [saving, setSaving] = useState(false)
@@ -462,6 +463,15 @@ function ProductEditor({ product, loanTypes, types, onSave, onDelete }) {
         </fieldset>
       </Panel>
 
+      {value.form === 'personal' ? (
+        <Panel
+          title="Pre-approval"
+          description="For the employees of a partner you have an MoU with: the partner confirms each applicant works there, then a loan officer or sales manager issues the offer straight away, without appraisal, review or approval."
+        >
+          <PreApprovalFields id={value.id} preApproval={value.preApproval || {}} partners={partners} onChange={(changes) => set({ preApproval: { ...(value.preApproval || {}), ...changes } })} />
+        </Panel>
+      ) : null}
+
       <Panel title="Delete this product" description="Applicants can no longer choose it. Applications already made under it keep it, so they still read as they did.">
         <Button type="button" variant="outline" className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive" onClick={() => setDeleting(true)}>
           <Trash2 />
@@ -524,6 +534,54 @@ function DeleteProductDialog({ product, open, onOpenChange, onDelete }) {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+/** Whether a personal-loan product is pre-approved for one partner's employees (src/config/partners.js), and up to what amount. */
+function PreApprovalFields({ id, preApproval, partners, onChange }) {
+  return (
+    <div className="space-y-4">
+      <SettingToggle
+        id={`${id}-pre-approval`}
+        label="Pre-approved for a partner’s employees"
+        description={
+          preApproval.enabled
+            ? 'Applications skip appraisal, review and approval. Collateral, or an amount above the limit, sends one through the usual review instead.'
+            : 'Off: applications go through the usual review.'
+        }
+        checked={Boolean(preApproval.enabled)}
+        onChange={(enabled) => onChange({ enabled, partnerId: enabled ? preApproval.partnerId || partners[0]?.id || null : null })}
+      />
+      {preApproval.enabled ? (
+        partners.length ? (
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field id={`${id}-partner`} label="Partner">
+              <Select id={`${id}-partner`} value={preApproval.partnerId || ''} onChange={(event) => onChange({ partnerId: event.target.value })}>
+                {partners.map((partner) => (
+                  <option key={partner.id} value={partner.id}>
+                    {partner.name}
+                  </option>
+                ))}
+              </Select>
+            </Field>
+            <Field id={`${id}-pre-approval-limit`} label="Pre-approved limit (K)" hint="Optional. Larger amounts go through the usual review.">
+              <Input
+                id={`${id}-pre-approval-limit`}
+                type="number"
+                min="1"
+                value={preApproval.maxAmount ?? ''}
+                onChange={(event) => onChange({ maxAmount: event.target.value === '' ? null : event.target.value })}
+              />
+            </Field>
+          </div>
+        ) : (
+          <p className="flex items-start gap-2 rounded-md bg-warning/10 p-3 text-sm text-warning">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+            Add the partner first, under Settings → Partners.
+          </p>
+        )
+      ) : null}
+    </div>
   )
 }
 

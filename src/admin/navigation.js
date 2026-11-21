@@ -1,7 +1,10 @@
-import { Activity, Columns3, FileStack, History, KeyRound, LayoutDashboard, Scale, Settings, ShieldCheck, TrendingUp, Users, Workflow } from 'lucide-react'
+import { Activity, Columns3, FileStack, Handshake, History, KeyRound, LayoutDashboard, Scale, Settings, ShieldCheck, TrendingUp, Users, Workflow } from 'lucide-react'
 import { hasPermission, isStaffRole } from '@/config/roles'
 
 const allowedTo = (permission) => (user) => hasPermission(user, permission)
+
+/** A partner's staff (scope "partner", src/config/partners.js): only Partner requests. */
+export const isPartnerStaff = (user) => user?.scope === 'partner'
 
 /**
  * Sidebar sections. An item is shown when `allow(user)` is true; the server enforces
@@ -11,8 +14,9 @@ export const NAV_SECTIONS = [
   {
     label: 'Work',
     items: [
-      { to: '/admin', label: 'Dashboard', icon: LayoutDashboard, end: true, allow: (user) => isStaffRole(user.role) },
-      { to: '/admin/applications', label: 'Applications', icon: FileStack, allow: (user) => isStaffRole(user.role) },
+      { to: '/admin', label: 'Dashboard', icon: LayoutDashboard, end: true, allow: (user) => isStaffRole(user.role) && !isPartnerStaff(user) },
+      { to: '/admin/applications', label: 'Applications', icon: FileStack, allow: (user) => isStaffRole(user.role) && !isPartnerStaff(user) },
+      { to: '/admin/partner-requests', label: 'Partner requests', icon: Handshake, allow: allowedTo('partner.confirm') },
       { to: '/admin/pipeline', label: 'Pipeline', icon: Columns3, allow: allowedTo('pipeline.view') },
     ],
   },

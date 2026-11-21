@@ -12,8 +12,10 @@ import { countAttempt, ipOf, rateKey } from './rateLimit.js'
  *   consent  agree to an agent submitting an application with you (applications.js)
  *   offer    accept an offer in person with staff (workflow.js)
  *   sign     sign and accept an offer yourself (workflow.js)
+ *   start    confirm the email or phone (by SMS) an application is started with (verification.js);
+ *            keyed by `email:<address>` or `phone:<+260…>`
  */
-export const OTP_PURPOSES = ['resume', 'login', 'consent', 'offer', 'sign']
+export const OTP_PURPOSES = ['resume', 'login', 'consent', 'offer', 'sign', 'start']
 export const OTP_TTL_SECONDS = 600
 
 const MAX_ATTEMPTS = 5

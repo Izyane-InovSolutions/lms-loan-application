@@ -19,6 +19,7 @@ vi.mock('../api/_lib/email.js', async (importOriginal) => ({
 
 const { default: handler } = await import('../api/v1/[...path].js')
 const { default: draftHandler } = await import('../api/draft/index.js')
+const { issueTicket } = await import('../api/_lib/verification.js')
 const { default: requestCode } = await import('../api/otp/request.js')
 const { default: verifyCode } = await import('../api/otp/verify.js')
 const { default: cron } = await import('../api/cron/purge-expired-drafts.js')
@@ -39,6 +40,8 @@ const personal = (email, firstName = 'Mutale') => ({
   loanData: { amount: 8000, tenure: 6, income: 20000 },
 })
 const bearer = (token) => ({ authorization: `Bearer ${token}` })
+// Starts a draft as an applicant who confirmed their email with a code (api/_lib/verification.js).
+const start = async (body, headers) => drafts.post('/draft', { ...body, verificationTicket: await issueTicket('email', body.email) }, headers)
 const lastCode = (email) => sentCodes.filter((entry) => entry.email === email).at(-1)?.code
 
 beforeAll(async () => {
@@ -51,7 +54,7 @@ afterEach(() => {
 
 describe('drafts', () => {
   it('can’t be taken over by starting one under the same email', async () => {
-    const owner = await drafts.post('/draft', personal('owner@example.com', 'Owner'))
+    const owner = await start(personal('owner@example.com', 'Owner'))
     expect(owner.status).toBe(200)
 
     const intruder = await drafts.post('/draft', personal('owner@example.com', 'Intruder'))
@@ -67,7 +70,7 @@ describe('drafts', () => {
   })
 
   it('can’t be overwritten by moving another draft onto its email', async () => {
-    const other = await drafts.post('/draft', personal('someone-else@example.com', 'Else'))
+    const other = await start(personal('someone-else@example.com', 'Else'))
     const moved = await drafts.put('/draft', personal('owner@example.com', 'Moved'), bearer(other.body.draftToken))
     expect(moved.status).toBe(409)
     expect(moved.body.code).toBe('email_in_use')
@@ -85,7 +88,7 @@ describe('drafts', () => {
 
 describe('emailed codes', () => {
   it('only work for what they were sent for', async () => {
-    await drafts.post('/draft', personal('consenting@example.com'))
+    await start(personal('consenting@example.com'))
     expect((await codes.post('/otp/request', { email: 'consenting@example.com', purpose: 'consent', agentName: 'The Bank Manager' })).status).toBe(200)
     const sent = sentCodes.at(-1)
     // The email names the signed-in agent, never one the caller made up.

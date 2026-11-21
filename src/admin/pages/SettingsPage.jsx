@@ -39,11 +39,13 @@ import { DocumentTemplatesTab } from "./DocumentTemplatesTab";
 import { BrandingTab } from "./BrandingTab";
 import { CrbTab } from "./CrbTab";
 import { ProductsTab } from "./ProductsTab";
+import { PartnersTab } from "./PartnersTab";
 import { DangerZoneTab } from "./DangerZoneTab";
 
 const TABS = [
   { id: "workflow", label: "Credit workflow" },
   { id: "products", label: "Loan products" },
+  { id: "partners", label: "Partners" },
   { id: "lms", label: "LMS connection" },
   { id: "zra", label: "ZRA Web Services" },
   { id: "crb", label: "Credit bureau" },
@@ -221,6 +223,9 @@ export function SettingsPage() {
           ) : null}
           {tab === "products" ? (
             <ProductsTab settings={state.settings} notify={notify} />
+          ) : null}
+          {tab === "partners" ? (
+            <PartnersTab settings={state.settings} notify={notify} onSaved={load} />
           ) : null}
           {tab === "lms" ? (
             <LmsTab
@@ -424,6 +429,13 @@ function WorkflowTab({ settings, notify }) {
           description="Applicants see a notice that the team may view their unfinished application and contact them to help finish it. They don’t choose. Off: unfinished applications stay private and staff can’t contact the applicant."
           checked={customer.value.helpWithFinishing !== false}
           onChange={(helpWithFinishing) => customer.set({ helpWithFinishing })}
+        />
+        <Toggle
+          id="verify-at-start"
+          label="Confirm it’s them with a code"
+          description="Before their application is saved, applicants enter a code sent to their email, or by text when an SMS provider is set up (Notifications). Guards against applications in someone else’s name. Agents’ customers confirm with their own code at submission instead."
+          checked={customer.value.verifyAtStart !== false}
+          onChange={(verifyAtStart) => customer.set({ verifyAtStart })}
         />
         <FormError message={customer.error} />
         <SaveBar

@@ -955,6 +955,7 @@ export function WizardStep(props) {
         </Button>
       </div>
       <SubmitConsents
+        partnerName={product.preApproval?.enabled ? product.preApproval.partnerName || 'your employer' : null}
         allowCrb={allowCrb}
         onAllowCrb={setAllowCrb}
         crbEnabled={crb ? crb.enabled : CRB_ENABLED}

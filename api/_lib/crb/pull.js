@@ -8,6 +8,7 @@ import { runPrescreen } from '../prescreen/run.js'
 import { getSetting } from '../settings.js'
 import { CrbError, getCrb, refreshCrb } from './index.js'
 import { identityFor } from './identity.js'
+import { CRB_NOT_APPLICABLE, crbApplies } from '../../../src/config/applicantRules.js'
 
 const { consents, crbReports } = schema
 
@@ -57,6 +58,8 @@ export const pullCreditReport = async (application, { actor = null, req = null }
   await refreshCrb({ force: true })
   const crb = getCrb()
   if (!crb) throw new CreditPullError(400, 'No credit bureau is connected.', 'crb_not_configured')
+  // Only NRC holders are sent: never someone who applied with a passport.
+  if (!crbApplies(application.loanType, application.data)) throw new CreditPullError(422, CRB_NOT_APPLICABLE, 'crb_not_applicable')
   const db = await getDb()
   const [consent] = await db
     .select()
@@ -127,6 +130,10 @@ export const autoPullCreditReport = async (application) => {
   if ((await getSetting('crb')).autoPull === false) return null
   await refreshCrb()
   if (!getCrb()) return null
+  if (!crbApplies(application.loanType, application.data)) {
+    await addEvent(await getDb(), { applicationId: application.id, actor: null, type: 'crb', message: `No credit bureau check: ${CRB_NOT_APPLICABLE}` })
+    return null
+  }
   try {
     return await pullCreditReport(application)
   } catch (error) {

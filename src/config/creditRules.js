@@ -36,6 +36,13 @@ export const FACTS = {
   location_distance_km: { label: 'Distance from stated address', unit: 'km', loanTypes: ['personal', 'business'] },
   address_found: { label: 'Home address found on the map', unit: 'boolean', yes: 'Home address was found on the map', no: 'Home address wasn’t found on the map', loanTypes: ['personal', 'business'] },
   crb_score: { label: 'Credit bureau score', unit: 'score', loanTypes: ['personal', 'business'] },
+  id_contact_mismatch: {
+    label: 'ID or contact details used before with different details',
+    unit: 'boolean',
+    yes: 'The ID or the contact details were used before with different details',
+    no: 'The ID and contact details match earlier applications',
+    loanTypes: ['personal', 'business'],
+  },
   stated_income: { label: 'Income stated when qualifying (net pay or monthly revenue)', unit: 'kwacha', loanTypes: ['personal', 'business'] },
   income_vs_stated: { label: 'Income found ÷ income stated (payslip net pay, or bank credits for a business)', unit: 'ratio', loanTypes: ['personal', 'business'] },
   collateral_value: { label: 'Collateral pledged (estimated value)', unit: 'kwacha', loanTypes: ['personal', 'business'] },

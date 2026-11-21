@@ -40,6 +40,13 @@ export const CONSENT_NOTICES = {
     version: 'crb-notice-2026-11',
     text: 'As part of assessing this application, {name} will request your credit report from a licensed credit reference bureau.',
   },
+  // A product pre-approved for an employer's staff (src/config/partners.js): shown, and recorded as shown.
+  partner_notice: {
+    version: 'partner-notice-2026-11',
+    text:
+      'This loan is pre-approved for {partner} staff. To confirm you work there, {name} shares your name, NRC or passport number, ' +
+      'date of birth, phone number, occupation and employer, with your ID copy, photo and payslips, with {partner}.',
+  },
 }
 
 /**
@@ -49,4 +56,5 @@ export const CONSENT_NOTICES = {
 export const allowsCreditCheck = (consents = []) => consents.some((consent) => (consent.type === 'crb' || consent.type === 'crb_notice') && consent.granted)
 
 /** The wording of a notice with the brand name filled in. */
-export const consentText = (type, name = DEFAULT_BRAND_NAME) => (CONSENT_NOTICES[type]?.text || '').replaceAll('{name}', name || DEFAULT_BRAND_NAME)
+export const consentText = (type, name = DEFAULT_BRAND_NAME, { partner = 'your employer' } = {}) =>
+  (CONSENT_NOTICES[type]?.text || '').replaceAll('{name}', name || DEFAULT_BRAND_NAME).replaceAll('{partner}', partner || 'your employer')

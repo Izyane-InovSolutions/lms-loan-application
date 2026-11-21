@@ -35,6 +35,7 @@ import { conditionsOf, openConditions } from '../../src/config/conditions.js'
 import { collateralItems, itemLabel } from '../../src/config/collateral.js'
 import { ensureOfferDocuments } from '../_lib/offerDocuments.js'
 import { issueStageDocuments } from '../_lib/stageDocuments.js'
+import { assertNotHeld } from '../_lib/preApproval.js'
 import { FACTS, evaluateRules, flattenPolicies, rulesToPolicies, validatePolicies } from '../../src/config/creditRules.js'
 
 const { applications, applicationDocuments, prescreens, users, locations, crbReports, consents } = schema
@@ -69,6 +70,7 @@ const handToLms = async (application, actor = null) => {
 const setCondition = async (req, res, { params }) => {
   const viewer = await requireUser(req, { anyPermission: ['cases.work', 'cases.disburse'] })
   const application = await findVisibleApplication(viewer, params.id)
+  assertNotHeld(viewer, application)
   const conditions = conditionsOf(application)
   const condition = conditions.find((entry) => entry.id === params.conditionId)
   if (!condition) fail(404, 'That condition isn’t on this offer.', 'not_found')
@@ -220,6 +222,7 @@ const verificationTarget = async (db, application, { target, id }) => {
 const verify = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'legal.verify' })
   const application = await findVisibleApplication(viewer, params.id)
+  assertNotHeld(viewer, application)
   const { status } = req.body || {}
   const note = text(req.body?.note, 500)
   if (!VERIFICATION_STATUSES[status]) fail(400, 'Choose verified, issue or clear.', 'invalid_input')
@@ -299,6 +302,7 @@ const appraisedItem = (application, index) => {
 const saveValuation = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'cases.work' })
   const application = await findVisibleApplication(viewer, params.id)
+  assertNotHeld(viewer, application)
   const { position, item } = appraisedItem(application, params.index)
   const body = req.body || {}
   const valuer = text(body.valuer, 120)
@@ -341,6 +345,7 @@ const saveValuation = async (req, res, { params }) => {
 const uploadValuationReport = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'cases.work' })
   const application = await findVisibleApplication(viewer, params.id)
+  assertNotHeld(viewer, application)
   const { position } = appraisedItem(application, params.index)
   const { file } = await readSingleUpload(req)
   const db = await getDb()
@@ -438,6 +443,7 @@ const FIGURE_LABELS = { netPay: 'Net monthly pay', averageMonthlyCredits: 'Avera
 const setFigures = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'cases.work' })
   const application = await findVisibleApplication(viewer, params.id)
+  assertNotHeld(viewer, application)
   const allowed = MANUAL_FIGURES[application.loanType] || {}
   const note = text(req.body?.note, 300) || null
   const figures = { ...(application.checks?.figures || {}) }
@@ -468,6 +474,7 @@ const setFigures = async (req, res, { params }) => {
 const rerunPrescreen = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'cases.work' })
   const application = await findVisibleApplication(viewer, params.id)
+  assertNotHeld(viewer, application)
   await runPrescreen(application.id, { actor: viewer })
   await recordAudit({ req, actor: viewer, action: 'application.prescreen_rerun', entityType: 'application', entityId: application.id })
   return loadCase(application.id, viewer)
@@ -508,6 +515,7 @@ const logVisit = async (req, res, { params }) => {
 const runCreditCheck = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'cases.work' })
   const application = await findVisibleApplication(viewer, params.id)
+  assertNotHeld(viewer, application)
   try {
     await pullCreditReport(application, { actor: viewer, req })
   } catch (error) {

@@ -11,6 +11,7 @@ import { parseSignature, signStageDocument } from '../_lib/signing.js'
 import { creditStaffIds, notifyUsers } from '../_lib/notify.js'
 import { SIGNED_COPY_SOURCE, findStageDocument, issueStageDocuments, slotFor, updateDocumentMeta } from '../_lib/stageDocuments.js'
 import { loadCase } from './applications.js'
+import { assertNotHeld } from '../_lib/preApproval.js'
 
 const { applicationDocuments } = schema
 
@@ -107,6 +108,7 @@ const uploadSignedCopy = async (req, res, { params }) => {
 const resend = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'cases.work' })
   const application = await findVisibleApplication(viewer, params.id)
+  assertNotHeld(viewer, application)
   if (CLOSED_STATUSES.includes(application.status)) fail(409, 'This case is closed.', 'invalid_state')
   const result = await issueStageDocuments(application.id, { origin: appOrigin(req), actor: viewer, req, resend: true })
   if (result.error) fail(502, result.error, 'email_failed')
@@ -119,6 +121,7 @@ const resend = async (req, res, { params }) => {
 const markReceived = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'cases.work' })
   const application = await findVisibleApplication(viewer, params.id)
+  assertNotHeld(viewer, application)
   const found = await findStageDocument(application.id, params.documentId)
   if (!found) fail(404, 'Document not found.', 'not_found')
   if (found.document.done) fail(409, found.document.status === 'signed' ? 'This document is already signed online.' : 'This document is already marked received.', 'already_done')

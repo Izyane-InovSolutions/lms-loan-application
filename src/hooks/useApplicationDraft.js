@@ -8,6 +8,7 @@ import {
   uploadDraftDocument,
   extractDraftErrorMessage,
   draftConflictCode,
+  isVerificationRequired,
 } from '../services/draftApi'
 import { describeRequestError, isInvalidTokenError } from '../lib/requestError'
 
@@ -127,9 +128,19 @@ export function useApplicationDraft({
   // kept on the server only, never in this browser.
   keepLocalCopy = true,
   skipLocalCheck = false,
+  // The workspace asks applicants to confirm their email or phone with a code before the
+  // draft is first saved (Settings → Customer options). Never for an agent's draft.
+  verifyFirst = false,
 }) {
   const [localDraftSummary, setLocalDraftSummary] = useState(null)
   const [draftToken, setDraftTokenState] = useState(null)
+  // A ticket from confirming the email or phone (api/_lib/verification.js), sent with the
+  // next save: it starts the draft, or confirms a changed contact. Used once.
+  const verificationTicketRef = useRef(null)
+  // Set when the server asked for it though the catalog didn't say (an older answer, or none).
+  const [serverWantsVerification, setServerWantsVerification] = useState(false)
+  const verifyFirstRef = useRef(false)
+  verifyFirstRef.current = !assisted && (verifyFirst || serverWantsVerification)
   // Mirrors draftToken for the save queue: a save queued behind the one that minted a
   // token runs before React re-renders, and must PUT with that token, not POST again.
   const draftTokenRef = useRef(null)
@@ -266,6 +277,8 @@ export function useApplicationDraft({
   const saveRemoteDraftRef = useRef(null)
   saveRemoteDraftRef.current = async () => {
     if (autosavePausedRef.current || choicePendingRef.current || !canSyncRemotely) return null
+    // Not started until the applicant has confirmed it's them; the form is kept locally meanwhile.
+    if (verifyFirstRef.current && !draftTokenRef.current && !verificationTicketRef.current) return null
     // Already refused for this address; asking again gets the same 409.
     if (syncConflictRef.current?.email === normalizedSyncEmail) return null
 
@@ -282,6 +295,8 @@ export function useApplicationDraft({
       ...(assisted ? { assisted: true } : {}),
       ...(referralCode ? { referralCode } : {}),
     }
+    const ticket = verificationTicketRef.current
+    if (ticket) payload.verificationTicket = ticket
 
     try {
       const token = await withRetry(async () => {
@@ -303,6 +318,7 @@ export function useApplicationDraft({
         const result = await createDraft({ email: syncEmail, ...payload })
         return result.draftToken
       })
+      if (ticket && verificationTicketRef.current === ticket) verificationTicketRef.current = null
       if (autosavePausedRef.current) return token
       if (token !== draftTokenRef.current) {
         // Documents sent under the old token may never have been stored, and the
@@ -316,6 +332,13 @@ export function useApplicationDraft({
       if (syncConflictRef.current) setSyncConflict(null)
       return token
     } catch (error) {
+      if (ticket && verificationTicketRef.current === ticket) verificationTicketRef.current = null
+      if (isVerificationRequired(error)) {
+        // Not an error the applicant can fix by retrying: the form asks them to confirm.
+        setServerWantsVerification(true)
+        setRemoteSyncError(null)
+        return null
+      }
       const conflict = draftConflictCode(error)
       if (conflict) {
         console.warn(`Draft sync refused: ${describeRequestError(error)}`)
@@ -357,6 +380,18 @@ export function useApplicationDraft({
     clearTimeout(remoteSaveTimer.current)
     return queueRemoteSave()
   }, [queueRemoteSave])
+
+  /**
+   * Saves with the ticket from confirming the email or phone: starts the draft, or records
+   * a changed contact as confirmed. Resolves to the draft token, or null.
+   */
+  const confirmContact = useCallback(
+    (ticket) => {
+      verificationTicketRef.current = ticket
+      return flushRemoteDraft()
+    },
+    [flushRemoteDraft]
+  )
 
   useEffect(() => {
     if (!canSyncRemotely || autosavePausedRef.current || choicePending) return undefined
@@ -603,5 +638,8 @@ export function useApplicationDraft({
     documentSyncError,
     // Also authorises the AI document checks and prescreen (api/ai/*).
     draftToken,
+    // Nothing is saved to the server until the applicant confirms their email or phone.
+    needsVerification: !assisted && (verifyFirst || serverWantsVerification) && !draftToken,
+    confirmContact,
   }
 }

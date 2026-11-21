@@ -180,17 +180,18 @@ const officer = client(handler)
 const manager = client(handler)
 const dsa = client(handler)
 
-const submit = async (email, { nrc = '123456/78/9', crb = true } = {}) => {
+const submit = async (email, { nrc = '123456/78/9', crb = true, nationality, passportNumber } = {}) => {
   const token = crypto.randomBytes(12).toString('hex')
   const documents = {}
   const dataDocuments = {}
-  for (const slot of ['payslips', 'bankStatements', 'passportPhoto', 'tpin', 'nrcCopy']) {
+  for (const slot of ['payslips', 'bankStatements', 'passportPhoto', 'tpin', nationality ? 'passportCopy' : 'nrcCopy']) {
     const path = `personal.documents.${slot}`
     const stored = await putBlob(`drafts/${email}/${slot}-file.pdf`, PDF, { contentType: 'application/pdf' })
     documents[path] = { ...stored, filename: `${slot}.pdf`, contentType: 'application/pdf', size: PDF.length }
     dataDocuments[slot] = { __draftFile__: path }
   }
-  await kv.set(`draft:${email}`, { documents })
+  // As if the applicant confirmed their email with a code when they started (api/_lib/verification.js).
+  await kv.set(`draft:${email}`, { documents, verified: { channel: 'email', value: email, at: Date.now() } })
   await kv.set(`draftToken:${token}`, email)
   const response = await applicant.post(
     '/applications',
@@ -201,14 +202,14 @@ const submit = async (email, { nrc = '123456/78/9', crb = true } = {}) => {
       consents: { dataProcessing: true, location: true, crb },
       location: { latitude: -15.41, longitude: 28.28, accuracy: 20 },
       data: {
-        personalInfo: { firstName: 'Ada', middleName: 'Mwila', surname: 'Banda', phone: '971234567', email, nrc, birthDate: '1990-05-01' },
-        employmentInfo: { residentialAddress: 'Lusaka', occupation: 'Teacher', employerName: 'MoE' },
+        personalInfo: { firstName: 'Ada', middleName: 'Mwila', surname: 'Banda', phone: '971234567', email, nrc, birthDate: '1990-05-01', ...(passportNumber ? { passportNumber } : {}) },
+        employmentInfo: { residentialAddress: 'Lusaka', occupation: 'Teacher', employerName: 'MoE', ...(nationality ? { nationality } : {}) },
         documents: dataDocuments,
       },
     },
     { authorization: `Bearer ${token}` }
   )
-  expect(response.status).toBe(200)
+  expect(response.status, JSON.stringify(response.body)).toBe(200)
   return response.body.id
 }
 
@@ -297,6 +298,8 @@ describe('Product 109 report processing', () => {
     })
     expect(() => identityFor({ loanType: 'personal', data: { personalInfo: { nrc: '123456/78/9', firstName: 'Ada' } } })).toThrow(/surname/)
     expect(() => identityFor({ loanType: 'personal', data: { personalInfo: { nrc: '1234/5/6', firstName: 'Ada', surname: 'Banda' } } })).toThrow(/format/)
+    expect(() => identityFor({ loanType: 'personal', data: { personalInfo: { nrc: '123456/78/9', firstName: 'Ada', surname: 'Banda' }, employmentInfo: { nationality: 'Kenya' } } })).toThrow(/passport/)
+    expect(() => identityFor({ loanType: 'business', data: { directorInfo: { applicantNrc: '654321/11/1', applicantFirstName: 'Chola', applicantLastName: 'Phiri', applicantNationality: 'Malawi' } } })).toThrow(/passport/)
     expect(formatNrc('123456-78-9')).toBe('123456/78/9')
   })
 })
@@ -478,6 +481,20 @@ describe('pre-screening’s own credit check', () => {
     expect(bureau.calls).toHaveLength(0)
     expect(await eventsOf(off)).toEqual([])
     await admin.put('/settings/crb', { ...crb, autoPull: true })
+  })
+
+  it('never sends someone who applied with a passport, even with an NRC left in the data', async () => {
+    bureau.calls = []
+    // Typed an NRC, then chose another nationality and gave a passport: the NRC stays in the data.
+    const id = await submit('crb.passport@example.com', { nationality: 'Kenya', passportNumber: 'AK1234567' })
+    const [event] = await crbEvents(id)
+    expect(event.message).toMatch(/^No credit bureau check: The applicant gave a passport/)
+    const { consents } = (await officer.get(`/applications/${id}`)).body
+    expect(consents.some((consent) => consent.type === 'crb' || consent.type === 'crb_notice')).toBe(false)
+    const response = await officer.post(`/applications/${id}/crb`)
+    expect(response.status).toBe(422)
+    expect(response.body.code).toBe('crb_not_applicable')
+    expect(bureau.calls).toHaveLength(0)
   })
 })
 

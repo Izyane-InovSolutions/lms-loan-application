@@ -35,6 +35,17 @@ const send = async ({ to, subject, text, attachments = [], ...layout }) => {
 const DO_NOT_SHARE = 'If you didn’t ask for this code, ignore this email and don’t share the code with anyone. We will never ask you for it by phone.'
 
 export const sendOtpEmail = async (email, code, { purpose = 'resume', agentName = '' } = {}) => {
+  if (purpose === 'start') {
+    return send({
+      to: email,
+      subject: 'Your code to start your loan application',
+      text: `Your code to start your loan application is ${code}. It expires in 10 minutes. If you did not start an application, someone may be trying to use your email: do not share this code.`,
+      preheader: `${code} is your verification code`,
+      eyebrow: 'Verification code',
+      title: 'Confirm it’s you',
+      blocks: [paragraph('Enter this code on the application form to confirm this is your email address.'), codeBlock(code), notice(DO_NOT_SHARE, { tone: 'warning' })],
+    })
+  }
   if (purpose === 'sign') {
     return send({
       to: email,

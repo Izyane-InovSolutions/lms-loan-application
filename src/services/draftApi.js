@@ -22,6 +22,13 @@ export const verifyOtp = (email, code) => draftApiClient.post('/otp/verify', { e
 export const verifyEmailOtp = (email, code) =>
   draftApiClient.post('/otp/verify-email', { email, code }).then((r) => r.data)
 
+// Confirming the applicant's email or phone as they start (api/_handlers/verification.js).
+export const startVerification = (contact) => draftApiClient.post('/v1/verification/start', contact).then((r) => r.data)
+export const checkVerification = (contact, code) => draftApiClient.post('/v1/verification/check', { ...contact, code }).then((r) => r.data)
+
+/** The server wants the applicant's email or phone confirmed first (POST /draft 401, or 409 at submit). */
+export const isVerificationRequired = (error) => error?.response?.data?.code === 'verification_required'
+
 export const createDraft = (payload) => draftApiClient.post('/draft', payload).then((r) => r.data)
 
 export const updateDraft = (token, payload) =>

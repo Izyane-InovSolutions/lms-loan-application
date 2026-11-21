@@ -1,5 +1,5 @@
 import React from 'react'
-import { Loader2, MapPin, ShieldCheck, UserCheck } from 'lucide-react'
+import { Handshake, Loader2, MapPin, ShieldCheck, UserCheck } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -24,6 +24,7 @@ export function SubmitConsents({
   onConsentCode,
   consentCodeState,
   onSendConsentCode,
+  partnerName = null,
 }) {
   const { name } = useBranding()
   return (
@@ -44,6 +45,17 @@ export function SubmitConsents({
           </span>
         </span>
       </div>
+
+      {/* A product pre-approved for an employer's staff: the employer confirms they work there. */}
+      {partnerName ? (
+        <div className="flex items-start gap-3">
+          <Handshake className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <span className="text-sm">
+            <span className="block font-medium text-foreground">{partnerName} confirms you work there</span>
+            <span className="mt-0.5 block text-muted-foreground">{consentText('partner_notice', name, { partner: partnerName })}</span>
+          </span>
+        </div>
+      ) : null}
 
       {crbEnabled && !crbAskConsent ? (
         <div className="flex items-start gap-3">

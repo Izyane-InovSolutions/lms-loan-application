@@ -31,7 +31,7 @@ import { asksForCollateral, collateralErrors, collateralRequirement, MAX_COLLATE
 import { affordabilityError, eligibilityFor } from '../config/eligibility'
 import { fromVerdict, usePolicyVerdicts } from '../hooks/usePolicyVerdicts'
 import { MAX_GUARANTORS, guarantorErrors } from '../config/guarantors'
-import { EMPLOYMENT_OPTIONS, businessPeople, employerField, isValidPassportNumber, isZambian, positionsFor, presentDocuments } from '../config/applicantRules'
+import { EMPLOYMENT_OPTIONS, businessPeople, crbApplies, employerField, isValidPassportNumber, isZambian, positionsFor, presentDocuments } from '../config/applicantRules'
 import { useApplicationDraft } from '../hooks/useApplicationDraft'
 import { useDocumentAnalysis } from '../hooks/useDocumentAnalysis'
 import {
@@ -61,6 +61,8 @@ import {
 } from '@/config/applicationSteps'
 import { WizardStep } from './apply/WizardSteps'
 import { DraftContactConsent } from '@/components/application/DraftContactConsent'
+import { ConfirmItsYou, VerifyContactDialog } from '@/components/application/VerifyContactDialog'
+import { isVerificationRequired } from '@/services/draftApi'
 import { useCustomerOptions } from '@/hooks/useCustomerOptions'
 import { CRB_ENABLED, businessInitial, personalInitial } from './apply/formDefaults'
 
@@ -102,9 +104,9 @@ function DashboardPage() {
   // the draft layer restores the answers. The product's form (personal or business)
   // decides the steps, the questions and the checks; the product its name, pricing,
   // documents and collateral.
-  const { products: offered, loanTypes, collateralCatalog, creditCheck, loaded: productsLoaded } = useProductCatalog()
+  const { products: offered, loanTypes, collateralCatalog, creditCheck, applicantVerification, loaded: productsLoaded } = useProductCatalog()
   // The credit bureau check: the workspace's answer once loaded, else the build's setting.
-  const crb = { enabled: creditCheck ? creditCheck.bureau : CRB_ENABLED, askConsent: creditCheck ? creditCheck.askConsent : true }
+  const crbSetting = { enabled: creditCheck ? creditCheck.bureau : CRB_ENABLED, askConsent: creditCheck ? creditCheck.askConsent : true }
   // The products on offer, and each loan type's "we'll match you" application (match-<type>, loanProducts.js).
   const products = useMemo(() => [...offered, ...loanTypes.map((type) => matchingProduct(type, offered)).filter(Boolean)], [offered, loanTypes])
   const routeProduct = products.find((entry) => entry.id === typeParam)
@@ -235,6 +237,8 @@ function DashboardPage() {
     syncConflictMessage,
     documentSyncError,
     draftToken,
+    needsVerification,
+    confirmContact,
   } = useApplicationDraft({
     selectedLoanType,
     currentStep,
@@ -255,6 +259,8 @@ function DashboardPage() {
     keepLocalCopy: !assistedBy && !isAssistedFlagSet(),
     // Agents start every customer's application afresh on their device.
     skipLocalCheck: Boolean(resumedDraft || prefilledApplication || isAssistedFlagSet()),
+    // Confirm the email or phone with a code before anything is saved (Settings → Customer options).
+    verifyFirst: Boolean(applicantVerification?.required) && !isAssistedFlagSet(),
   })
 
   useEffect(() => {
@@ -458,6 +464,8 @@ function DashboardPage() {
   // The form's answers and documents for the product's form.
   const activeData = selectedLoanType === 'personal' ? personalData : businessData
   const setActiveData = selectedLoanType === 'personal' ? setPersonalData : setBusinessData
+  // No credit bureau check (so no consent or notice) for an applicant who gives a passport.
+  const crb = { ...crbSetting, enabled: crbSetting.enabled && crbApplies(selectedLoanType, activeData) }
   // Asked for at the amount chosen: a product can require it only from a certain amount up.
   const collateralAsked = collateralRequirement(product, loanData.amount) !== 'none'
   const collateralRows = collateralAsked ? activeData.collateral?.items || [] : []
@@ -1125,9 +1133,58 @@ function DashboardPage() {
     })
   }
 
+  // "Confirm it's you" (VerifyContactDialog): open with what to do once confirmed.
+  const [verifyDialog, setVerifyDialog] = useState(null)
+  const contactDetails =
+    selectedLoanType === 'personal'
+      ? { email: personalData.personalInfo.email, phone: personalData.personalInfo.phone }
+      : { email: businessData.directorInfo.applicantEmail, phone: businessData.directorInfo.applicantPhone }
+  const onContactVerified = async (ticket) => {
+    const token = await confirmContact(ticket)
+    if (!token) throw new Error(syncConflictMessage() || 'We couldn’t save your application to our server. Check your connection and try again.')
+    const after = verifyDialog?.after
+    setVerifyDialog(null)
+    after?.()
+  }
+
+  // Nothing is asked until the applicant confirms it's them; not for an agent's customer, nor
+  // while the "resume or start fresh" choice for this device's copy is open.
+  const confirmFirst = needsVerification && !assistedBy && !isAssistedFlagSet() && !localDraftSummary
+  // The start screen (ConfirmItsYou): confirmed details go into the form first, then the
+  // draft is saved with the ticket once the form holds them (the save reads the form).
+  const [startTicket, setStartTicket] = useState(null)
+  const [startError, setStartError] = useState('')
+  const onStartVerified = ({ ticket, email, phone }) => {
+    setStartError('')
+    const phoneValue = String(phone || '').replace(/\D/g, '').slice(-9)
+    if (selectedLoanType === 'personal') {
+      setPersonalData((prev) => ({ ...prev, personalInfo: { ...prev.personalInfo, email, ...(phoneValue ? { phone: phoneValue } : {}) } }))
+    } else {
+      setBusinessData((prev) => ({ ...prev, directorInfo: { ...prev.directorInfo, applicantEmail: email, ...(phoneValue ? { applicantPhone: phoneValue } : {}) } }))
+    }
+    setStartTicket({ ticket, email: email.toLowerCase() })
+  }
+  useEffect(() => {
+    if (!startTicket || String(contactDetails.email || '').trim().toLowerCase() !== startTicket.email) return
+    let live = true
+    confirmContact(startTicket.ticket).then((token) => {
+      if (!live) return
+      if (!token) setStartError(syncConflictMessage() || 'We couldn’t start your application. Check your connection and try again.')
+      setStartTicket(null)
+    })
+    return () => {
+      live = false
+    }
+  }, [startTicket, contactDetails.email, confirmContact, syncConflictMessage])
+
   const handleNext = () => {
     if (!validateCurrentStep()) {
       revealValidationErrors()
+      return
+    }
+    // Nothing is saved until the applicant confirms it's them.
+    if (needsVerification && canSyncRemotely) {
+      setVerifyDialog({ reason: 'start', after: () => navigateToStep(product, currentStep + 1) })
       return
     }
 
@@ -1162,7 +1219,17 @@ function DashboardPage() {
       // Local first (always succeeds, instant), then push to the server so the
       // application can be picked up on another device. Awaiting the remote call is
       // the point: leaving used to cancel the pending sync, so nothing was stored.
+      // Still on the start screen: nothing to keep.
+      if (confirmFirst) {
+        navigate('/')
+        return
+      }
       await flushLocalDraft()
+      // Kept on this device only until they confirm it's them; confirming saves it to the server too.
+      if (needsVerification && canSyncRemotely) {
+        setVerifyDialog({ reason: 'start', after: () => navigate(assistedBy ? '/admin/pipeline' : '/') })
+        return
+      }
       const synced = await flushRemoteDraft()
       // Staying put on a failed sync is deliberate: the banner explains the draft
       // only exists on this device, so the applicant can retry rather than discover
@@ -1322,8 +1389,13 @@ function DashboardPage() {
    * confirmed in draft storage first, then one submit call that the server makes
    * idempotent with the submission key. The LMS hand-off happens server-side.
    */
-  const onAcceptTerms = async () => {
+  // `verified`: called again once the applicant confirmed (this render's needsVerification is stale then).
+  const onAcceptTerms = async ({ verified = false } = {}) => {
     setShowTerms(false)
+    if (!verified && needsVerification && canSyncRemotely) {
+      setVerifyDialog({ reason: 'start', after: () => onAcceptTerms({ verified: true }) })
+      return
+    }
     setSubmitting(true)
     setSubmitError(null)
     try {
@@ -1357,6 +1429,11 @@ function DashboardPage() {
       submissionKeyRef.current = newSubmissionKey()
       clearDraft({ remote: false })
     } catch (error) {
+      // They changed the email or phone they confirmed: confirm the new one, then submit.
+      if (isVerificationRequired(error)) {
+        setVerifyDialog({ reason: 'changed', after: () => onAcceptTerms({ verified: true }) })
+        return
+      }
       if (error?.response?.status === 401) invalidateDraftToken()
       setSubmitError(error?.response ? extractApiError(error) : error.message)
     } finally {
@@ -1376,6 +1453,15 @@ function DashboardPage() {
 
   return (
     <div className="flex min-h-screen flex-col bg-secondary/30">
+      <VerifyContactDialog
+        open={Boolean(verifyDialog)}
+        email={contactDetails.email}
+        phone={contactDetails.phone}
+        sms={Boolean(applicantVerification?.sms)}
+        reason={verifyDialog?.reason}
+        onVerified={onContactVerified}
+        onClose={() => setVerifyDialog(null)}
+      />
       <main className="container flex-1 py-8">
         <div className="mx-auto max-w-6xl">
           {/* No site chrome on the wizard — a single deliberate exit lives here,
@@ -1489,6 +1575,21 @@ function DashboardPage() {
             </div>
           ) : null}
 
+          {/* Before any question: confirm it's them (Settings → Credit workflow → Applicant experience). */}
+          {confirmFirst ? (
+            <ConfirmItsYou
+              email={contactDetails.email}
+              phone={contactDetails.phone}
+              sms={Boolean(applicantVerification?.sms)}
+              saving={Boolean(startTicket)}
+              error={startError}
+              onVerified={onStartVerified}
+              onResume={handleResumeExisting}
+            />
+          ) : null}
+
+          {confirmFirst ? null : (
+          <>
           <div className="mt-6 rounded-lg border bg-card p-5 shadow-soft sm:p-6 print:hidden">
             <StepProgress steps={stepTitles} currentStep={currentStep} onStepSelect={goToStep} />
           </div>
@@ -1604,6 +1705,8 @@ function DashboardPage() {
               )}
             </div>
           </form>
+          </>
+          )}
         </div>
       </main>
 

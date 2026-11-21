@@ -120,6 +120,20 @@
       "when": 1793649477932,
       "tag": "0016_collateral_valuations",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1795199716099,
+      "tag": "0017_pre_approval",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1795259390745,
+      "tag": "0018_applicant_verification",
+      "breakpoints": true
     }
   ]
 }

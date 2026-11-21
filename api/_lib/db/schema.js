@@ -46,6 +46,8 @@ export const users = pgTable(
     managerId: uuid('manager_id').references(() => users.id, { onDelete: 'set null' }),
     // Stamped on applications that arrive through this person's link (Phase 5).
     referralCode: text('referral_code'),
+    // Partner staff (roles with the "partner" scope): the MoU partner they confirm employees for (settings.partners).
+    partnerId: text('partner_id'),
     // The band of loan amounts this person may give final approval to. approvalMax null
     // means no upper limit. Administrators are never limited, whatever these hold.
     approvalMin: integer('approval_min').notNull().default(0),
@@ -219,6 +221,15 @@ export const applications = pgTable(
     // Appraisal: each pledged collateral item's valuation, by item index —
     // { valuer, valuedOn, marketValue, forcedSaleValue, inspectedOn, notes, reportId, by, byName, at }.
     valuations: jsonb('valuations').notNull().default(sql`'{}'::jsonb`),
+    // Pre-approved partner loans (src/config/partners.js): null for other products, else
+    // { partnerId, partnerName, mouReference, stage: partner | issue | issued | review,
+    //   staffMatch, partnerDecision, issued, reason }.
+    preApproval: jsonb('pre_approval'),
+    // The contact the applicant confirmed with a code as they started: { channel, value, at }
+    // (api/_lib/verification.js). Null for agent-assisted applications and those from before.
+    contactVerification: jsonb('contact_verification'),
+    // Earlier applications whose ID or contact details don't match this one's (identityFlags.js).
+    identityFlags: jsonb('identity_flags'),
     // Where the case is in its workflow (workflow_versions): the state's id, and the
     // version it follows. `status` is that state's reporting category (src/config/workflow.js).
     state: text('state'),
@@ -254,12 +265,31 @@ export const applications = pgTable(
     index('applications_product_idx').on(table.productId),
     index('applications_state_idx').on(table.workflowVersion, table.state),
     index('applications_email_idx').on(table.applicantEmail),
+    index('applications_phone_idx').on(table.applicantPhone),
     index('applications_sourced_by_idx').on(table.sourcedBy),
     index('applications_assigned_rm_idx').on(table.assignedRm),
     index('applications_assigned_officer_idx').on(table.assignedOfficer),
     index('applications_submitted_at_idx').on(table.submittedAt),
     index('applications_lms_sync_idx').on(table.lmsSyncStatus),
   ]
+)
+
+/**
+ * A partner's staff list (Settings → Partners), uploaded as CSV. Each upload is a new
+ * `list_version` and replaces the last; the NRC is stored normalised (no spaces).
+ */
+export const partnerStaff = pgTable(
+  'partner_staff',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    partnerId: text('partner_id').notNull(),
+    listVersion: integer('list_version').notNull(),
+    nrc: text('nrc').notNull(),
+    employeeNumber: text('employee_number'),
+    name: text('name'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [index('partner_staff_lookup_idx').on(table.partnerId, table.nrc)]
 )
 
 /**

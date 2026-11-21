@@ -6,6 +6,7 @@ import { attributionFor, resolveReferral } from '../_lib/attribution.js'
 import { DRAFT_TTL_SECONDS, ensureDraftId, indexDraft, unindexDraft } from '../_lib/drafts.js'
 import { CONSENT_NOTICES } from '../../src/config/consent.js'
 import { getSetting } from '../_lib/settings.js'
+import { contactOf, redeemTicket, verificationRequired } from '../_lib/verification.js'
 // Each alias is a full copy written on every save, so the list is capped rather than
 // growing once per edit to the email field. Keeping the most recent few covers the
 // realistic case (a typo corrected once or twice) without unbounded writes.
@@ -68,6 +69,22 @@ const withContactConsent = async (draft) => {
 
 const prepare = async (req, draft) => ensureDraftId(await withContactConsent(await withAttribution(req, draft)))
 
+/** The form's email and phone, from a draft body. */
+const formContact = (draft) => contactOf(draft.loanType, draft.loanType === 'business' ? { directorInfo: draft.businessData?.directorInfo } : { personalInfo: draft.personalData?.personalInfo })
+
+/**
+ * Redeems the applicant's ticket (api/_lib/verification.js) for the contact it confirmed,
+ * which must be the form's email or phone. Returns { channel, value, at }, or null.
+ */
+const verifiedBy = async (ticket, draft) => {
+  const entry = ticket ? await redeemTicket(ticket) : null
+  if (!entry || formContact(draft)[entry.channel] !== entry.value) return null
+  return { channel: entry.channel, value: entry.value, at: Date.now() }
+}
+
+const verificationRequiredResponse = (res) =>
+  res.status(401).json({ code: 'verification_required', message: 'Confirm your email address or phone number with the code we send you before your application is saved.' })
+
 const resolveTokenAuth = async (req) => {
   const auth = req.headers.authorization || ''
   const token = auth.startsWith('Bearer ') ? auth.slice(7).trim() : null
@@ -99,6 +116,13 @@ export default async function handler(req, res) {
       ...pickDraftFields(req.body),
       savedAt: Date.now(),
     })
+    // Started in their own name: confirmed with a code first, unless an agent is filling it in
+    // with the customer (who confirms at submission), or the draft was already confirmed.
+    if (!draft.verified) {
+      const verified = await verifiedBy(req.body?.verificationTicket, draft)
+      if (verified) draft.verified = verified
+      else if (!draft.attribution?.startedByStaff && (await verificationRequired())) return verificationRequiredResponse(res)
+    }
     if (existing) {
       await kv.set(`draft:${email}`, draft, { ex: DRAFT_TTL_SECONDS })
     } else if (!(await kv.set(`draft:${email}`, draft, { ex: DRAFT_TTL_SECONDS, nx: true }))) {
@@ -128,6 +152,12 @@ export default async function handler(req, res) {
       ...pickDraftFields(req.body),
       savedAt: Date.now(),
     })
+    // A changed email or phone confirmed again (checked at submission).
+    if (req.body?.verificationTicket) {
+      const verified = await verifiedBy(req.body.verificationTicket, draft)
+      if (!verified) return res.status(400).json({ code: 'invalid_ticket', message: 'That confirmation has expired, or was for other contact details. Ask for a new code.' })
+      draft.verified = verified
+    }
 
     // The draft is keyed by an address the applicant can still edit, so correcting a
     // typo mid-application changes where it belongs. Every address used so far is kept

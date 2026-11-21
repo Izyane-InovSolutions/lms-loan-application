@@ -15,6 +15,7 @@ vi.mock('../api/_lib/email.js', async (importOriginal) => ({
 
 const { default: handler } = await import('../api/v1/[...path].js')
 const { default: draftHandler } = await import('../api/draft/index.js')
+const { issueTicket } = await import('../api/_lib/verification.js')
 const { putBlob } = await import('../api/_lib/blob.js')
 
 const prepareDraft = draftPreparer(kv, putBlob)
@@ -42,8 +43,9 @@ const tokens = new Map()
 
 /** Saves a draft as the wizard does; `as` is a staff client for an assisted save. */
 const saveDraft = async (body, { as } = {}) => {
-  const payload = as ? { ...body, assisted: true } : body
   const token = tokens.get(body.email)
+  // The applicant confirmed their email with a code before the first save; an agent's customer doesn't.
+  const payload = as ? { ...body, assisted: true } : token ? body : { ...body, verificationTicket: await issueTicket('email', body.email) }
   const headers = { ...(as ? { cookie: as.cookie } : {}), ...(token ? { authorization: `Bearer ${token}` } : {}) }
   const response = token ? await drafts.put('/draft', payload, headers) : await drafts.post('/draft', payload, headers)
   expect(response.status, JSON.stringify(response.body)).toBe(200)

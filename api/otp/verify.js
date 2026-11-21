@@ -32,6 +32,13 @@ export default async function handler(req, res) {
   // different errors for one problem, with a fresh code needed after every attempt.
   await consumeOtp('resume', email)
 
+  // The code proved the email: a draft started before codes were asked for counts as confirmed by it.
+  if (!draft.verified && draft.id) {
+    draft.verified = { channel: 'email', value: email, at: Date.now() }
+    const keys = [...new Set([...(draft.aliases || []), email])]
+    await Promise.all(keys.map((key) => kv.set(`draft:${key}`, draft, { ex: DRAFT_TTL_SECONDS })))
+  }
+
   const token = generateToken()
   await kv.set(`draftToken:${token}`, email, { ex: DRAFT_TTL_SECONDS })
 

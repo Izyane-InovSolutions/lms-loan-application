@@ -23,6 +23,9 @@ import { queueCondition, workflowView } from '../_lib/workflow.js'
 import { resolveState } from '../../src/config/workflow.js'
 import { runPrescreen } from '../_lib/prescreen/run.js'
 import { autoPullCreditReport } from '../_lib/crb/pull.js'
+import { enterPreApproval, initialPreApproval, listPartners } from '../_lib/preApproval.js'
+import { contactOf, smsAvailable, stillVerified, verificationRequired } from '../_lib/verification.js'
+import { describeFlags, identityFlags } from '../_lib/identityFlags.js'
 import { verifyApplicationWithZra } from '../_lib/zra/verifyApplication.js'
 import { BUILT_IN_PRODUCT_IDS, buildLoanTypes, priceLoan, productFor } from '../../src/config/loanProducts.js'
 import { getApplicationProduct, getCollateralCatalog, getProductConfig, getProducts } from '../_lib/products.js'
@@ -33,6 +36,7 @@ import { checkSubmission, matchDraft } from '../_lib/matching.js'
 import { openConditions } from '../../src/config/conditions.js'
 import { asksForGuarantors, cleanGuarantors, guarantorErrors } from '../../src/config/guarantors.js'
 import { isMatchingId } from '../../src/config/loanProducts.js'
+import { crbApplies } from '../../src/config/applicantRules.js'
 import { isStaffRole } from '../../src/config/roles.js'
 import { CONSENT_NOTICES } from '../../src/config/consent.js'
 import { checkOtp, consumeOtp } from '../_lib/otp.js'
@@ -167,6 +171,18 @@ const submitApplication = async (req) => {
     fail(409, 'The email on your application changed since it was last saved. Wait a moment and submit again.', 'email_changed')
   }
   const draft = await kv.get(`draft:${draftEmail}`)
+  // Started in their own name: the email or phone they verified with a code is still the
+  // one on the form (api/_lib/verification.js). An agent's customer confirms with their own code.
+  const contactVerification = draft?.verified && stillVerified(draft.verified, contactOf(loanType, data)) ? draft.verified : null
+  if (!staff && !contactVerification && (await verificationRequired())) {
+    fail(
+      409,
+      draft?.verified
+        ? `You changed your ${draft.verified.channel === 'phone' ? 'phone number' : 'email address'} after confirming it. Confirm the new one with a code before you submit.`
+        : 'Confirm your email address or phone number with a code before you submit.',
+      'verification_required'
+    )
+  }
   const attached = attachedDraftPaths(data)
   const slotRefs = {}
   Object.entries(draft?.documents || {}).forEach(([path, ref]) => {
@@ -279,6 +295,9 @@ const submitApplication = async (req) => {
   // The terms and privacy notice versions in force right now are what the applicant saw.
   const dataProcessingVersion = await currentConsentVersion()
   const crbConsent = await getSetting('crb')
+  const preApproval = await initialPreApproval(product)
+  // This ID with other contact details before, or these contact details with another ID (identityFlags.js).
+  const flags = await identityFlags(db, { loanType, data, email: applicant.email, phone: applicant.phone })
   const application = await db.transaction(async (tx) => {
     const reference = await nextReference(tx)
     const [row] = await tx
@@ -305,6 +324,10 @@ const submitApplication = async (req) => {
         workflowVersion: flow.version,
         stateEnteredAt: new Date(),
         lmsSyncStatus: lmsConfigured ? 'waiting' : 'not_configured',
+        // A pre-approved product's case is held for its partner from the start (src/config/partners.js).
+        ...(preApproval ? { preApproval } : {}),
+        contactVerification,
+        identityFlags: flags,
       })
       .returning()
     if (documentRows.length) await tx.insert(applicationDocuments).values(documentRows)
@@ -316,7 +339,10 @@ const submitApplication = async (req) => {
       { type: 'location', granted: true },
       // With a bureau connected: the applicant's choice, or (Settings → Credit bureau, consent
       // not asked) the notice they were shown that the check is part of the application.
-      ...(getCrb() ? [crbConsent.askConsent ? { type: 'crb', granted: Boolean(wanted.crb) } : { type: 'crb_notice', granted: true }] : []),
+      // Never for a passport holder: the bureau only checks NRC holders.
+      // A pre-approved product: told their details and documents go to the partner to confirm employment.
+      ...(preApproval ? [{ type: 'partner_notice', granted: true }] : []),
+      ...(getCrb() && crbApplies(loanType, data) ? [crbConsent.askConsent ? { type: 'crb', granted: Boolean(wanted.crb) } : { type: 'crb_notice', granted: true }] : []),
     ].map((consent) => ({
       ...consent,
       applicationId: id,
@@ -348,6 +374,9 @@ const submitApplication = async (req) => {
         detail: { latitude: Number(point.latitude), longitude: Number(point.longitude), accuracy: Number(point.accuracy) || null },
       })
     }
+    if (flags.length) {
+      await addEvent(tx, { applicationId: id, actor: null, type: 'note', message: `ID and contact check: ${describeFlags(flags)}. Make sure the applicant is who they say they are.` })
+    }
     await addEvent(tx, {
       applicationId: id,
       actor: staff,
@@ -370,6 +399,8 @@ const submitApplication = async (req) => {
     await runPrescreen(application.id)
     // Pre-screening's credit check, when it is allowed (Settings → Credit bureau).
     await autoPullCreditReport(application)
+    // A pre-approved product's case goes to the partner to confirm employment (src/config/partners.js).
+    await enterPreApproval(application.id, { origin })
     const who = application.companyName || application.applicantName
     await notifyUsers(await creditStaffIds(), { type: 'new_application', title: `New application ${application.reference}`, body: `${who}, K${application.amount.toLocaleString()}`, applicationId: application.id }, { origin })
     if (application.assignedRm && application.assignedRm !== application.sourcedBy) {
@@ -580,7 +611,7 @@ const getApplication = async (req, res, { params }) => {
 // never run script on our origin.
 const INLINE_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp', 'image/gif'])
 
-const sendFile = (res, { data, contentType, filename }) => {
+export const sendFile = (res, { data, contentType, filename }) => {
   const type = (contentType || '').split(';')[0].trim().toLowerCase()
   const inline = INLINE_TYPES.has(type)
   const safeName = String(filename || 'document').replace(/["\\\r\n]/g, '')
@@ -864,16 +895,26 @@ const matchProducts = async (req) => {
   return result
 }
 
+/** A pre-approved product names its partner, for the notice applicants are shown (src/config/consent.js). */
+const withPartnerNames = async (products) => {
+  const partners = await listPartners()
+  return products.map((product) =>
+    product.preApproval?.enabled ? { ...product, preApproval: { ...product.preApproval, partnerName: partners.find((partner) => partner.id === product.preApproval.partnerId)?.name || null } } : product
+  )
+}
+
 /** Public: the products applicants can choose, with current pricing. */
 // Public: what applicants can apply for, grouped by loan type, and the collateral they can pledge (active types and items).
 const listProducts = async () => {
   await refreshCrb()
   return {
-    products: (await getProducts()).filter((product) => product.enabled),
+    products: await withPartnerNames((await getProducts()).filter((product) => product.enabled)),
     loanTypes: buildLoanTypes(await getSetting('loanTypes')),
     collateralCatalog: activeCatalog(await getCollateralCatalog()),
     // Whether the apply form asks for credit bureau consent, or only says the check is made.
     creditCheck: { bureau: Boolean(getCrb()), askConsent: Boolean((await getSetting('crb')).askConsent) },
+    // Whether applicants confirm their email or phone with a code as they start, and whether by text.
+    applicantVerification: { required: await verificationRequired(), sms: await smsAvailable() },
   }
 }
 
