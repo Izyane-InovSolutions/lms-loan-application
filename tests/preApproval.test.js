@@ -74,6 +74,7 @@ describe('partners and pre-approved products', () => {
     expect(partnerActive({ active: true, mouEndsOn: '2000-01-01' })).toBe(false)
   })
 
+
   it('checks partners and the product’s pre-approval', async () => {
     expect((await admin.put('/settings/partners', { list: [{ ...ZESCO, mouEndsOn: 'soon' }] })).body.message).toMatch(/date the MoU ends/)
     expect((await officer.put('/settings/partners', { list: [ZESCO] })).status).toBe(403)

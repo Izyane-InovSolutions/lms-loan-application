@@ -115,6 +115,9 @@ const HEADERS = {
   name: ['name', 'full name', 'full_name', 'employee name'],
 }
 
+/** The columns of a staff list, as the template names them (parseStaffCsv also reads the other spellings in HEADERS; src/admin/staffListFile.js). */
+export const STAFF_CSV_COLUMNS = ['nrc', 'employee_number', 'name']
+
 /**
  * A partner's staff list from CSV. The first row names the columns (any case): `nrc` is
  * required, `employee_number` and `name` optional. Returns the rows it could read, NRCs
