@@ -21,7 +21,7 @@ import SuccessModal from '../components/SuccessModal'
 const FaceCaptureCamera = lazy(() => import('../components/FaceCaptureCamera').then((module) => ({ default: module.FaceCaptureCamera })))
 import dayjs from 'dayjs'
 import footerLogo from '../assets/izyane-black.svg'
-import { submitApplication, fetchSession, requestConsentCode, extractApiError, matchLoanProducts } from '../services/applicationsApi'
+import { submitApplication, fetchSession, requestConsentCode, extractApiError, matchLoanProducts, fetchPrefill } from '../services/applicationsApi'
 import { extractFiles } from '../utils/fileTree'
 import { readReferral } from '../lib/referral'
 import { isAssistedFlagSet, clearAssistedFlag } from '../lib/assisted'
@@ -63,6 +63,8 @@ import { WizardStep } from './apply/WizardSteps'
 import { DraftContactConsent } from '@/components/application/DraftContactConsent'
 import { ConfirmItsYou, VerifyContactDialog } from '@/components/application/VerifyContactDialog'
 import { isVerificationRequired } from '@/services/draftApi'
+import { fillEmptySections, fillForm } from '@/config/kyc'
+import { AgentCustomerLookup } from '@/components/application/AgentCustomerLookup'
 import { useCustomerOptions } from '@/hooks/useCustomerOptions'
 import { CRB_ENABLED, businessInitial, personalInitial } from './apply/formDefaults'
 
@@ -104,7 +106,7 @@ function DashboardPage() {
   // the draft layer restores the answers. The product's form (personal or business)
   // decides the steps, the questions and the checks; the product its name, pricing,
   // documents and collateral.
-  const { products: offered, loanTypes, collateralCatalog, creditCheck, applicantVerification, loaded: productsLoaded } = useProductCatalog()
+  const { products: offered, loanTypes, collateralCatalog, creditCheck, applicantVerification, kyc: kycLookups, loaded: productsLoaded } = useProductCatalog()
   // The credit bureau check: the workspace's answer once loaded, else the build's setting.
   const crbSetting = { enabled: creditCheck ? creditCheck.bureau : CRB_ENABLED, askConsent: creditCheck ? creditCheck.askConsent : true }
   // The products on offer, and each loan type's "we'll match you" application (match-<type>, loanProducts.js).
@@ -215,9 +217,7 @@ function DashboardPage() {
   }, [])
 
   const resumedDraft = location.state?.resumedDraft
-  const prefilledApplication = location.state?.prefilledApplication
   const hydratedResumedDraftRef = useRef(false)
-  const hydratedPrefilledApplicationRef = useRef(false)
   const errorSummaryRef = useRef(null)
 
   const {
@@ -239,6 +239,7 @@ function DashboardPage() {
     draftToken,
     needsVerification,
     confirmContact,
+    attachKycReference,
   } = useApplicationDraft({
     selectedLoanType,
     currentStep,
@@ -258,7 +259,7 @@ function DashboardPage() {
     // before the session has confirmed the agent.
     keepLocalCopy: !assistedBy && !isAssistedFlagSet(),
     // Agents start every customer's application afresh on their device.
-    skipLocalCheck: Boolean(resumedDraft || prefilledApplication || isAssistedFlagSet()),
+    skipLocalCheck: Boolean(resumedDraft || isAssistedFlagSet()),
     // Confirm the email or phone with a code before anything is saved (Settings → Customer options).
     verifyFirst: Boolean(applicantVerification?.required) && !isAssistedFlagSet(),
   })
@@ -270,39 +271,7 @@ function DashboardPage() {
     }
   }, [resumedDraft, hydrateResumedDraft])
 
-  useEffect(() => {
-    if (!prefilledApplication || hydratedPrefilledApplicationRef.current || resumedDraft) return
-    hydratedPrefilledApplicationRef.current = true
-    setPersonalData(prefilledApplication.personalData)
-    setBusinessData(prefilledApplication.businessData)
-    setLoanData(prefilledApplication.loanData)
-  }, [prefilledApplication, resumedDraft])
 
-  // Email captured on the landing page. Seeding it here means useApplicationDraft
-  // has a sync key immediately, rather than only once the applicant reaches the
-  // email field (step 1 personal / step 2 business). Never overrides a resumed
-  // draft or an address the applicant has already typed.
-  const startEmail = location.state?.startEmail
-  const seededEmailRef = useRef(false)
-
-  useEffect(() => {
-    if (!startEmail || seededEmailRef.current || resumedDraft) return
-    seededEmailRef.current = true
-
-    if (selectedLoanType === 'personal') {
-      setPersonalData((prev) =>
-        prev.personalInfo.email
-          ? prev
-          : { ...prev, personalInfo: { ...prev.personalInfo, email: startEmail } }
-      )
-    } else {
-      setBusinessData((prev) =>
-        prev.directorInfo.applicantEmail
-          ? prev
-          : { ...prev, directorInfo: { ...prev.directorInfo, applicantEmail: startEmail } }
-      )
-    }
-  }, [startEmail, selectedLoanType, resumedDraft])
 
   // What they told the loan finder they earn (LoanProducts): it decides what they qualify
   // for, so it travels with the loan terms. A draft that already has figures keeps them.
@@ -1154,16 +1123,64 @@ function DashboardPage() {
   // draft is saved with the ticket once the form holds them (the save reads the form).
   const [startTicket, setStartTicket] = useState(null)
   const [startError, setStartError] = useState('')
-  const onStartVerified = ({ ticket, email, phone }) => {
+  // `fill`: the customer's record (Settings → Customer records), once they confirmed a code.
+  const onStartVerified = ({ ticket, email, phone, channel, value, fill }) => {
     setStartError('')
-    const phoneValue = String(phone || '').replace(/\D/g, '').slice(-9)
+    const confirmedPhone = channel === 'phone' ? value : phone
+    const phoneValue = String(confirmedPhone || '').replace(/\D/g, '').slice(-9)
+    const filled = (data) => (fill ? fillForm(data, fill.values, { idField: fill.idField, id: fill.id }) : data)
     if (selectedLoanType === 'personal') {
-      setPersonalData((prev) => ({ ...prev, personalInfo: { ...prev.personalInfo, email, ...(phoneValue ? { phone: phoneValue } : {}) } }))
+      setPersonalData((prev) => {
+        const next = filled(prev)
+        return { ...next, personalInfo: { ...next.personalInfo, email, ...(phoneValue ? { phone: phoneValue } : {}) } }
+      })
     } else {
-      setBusinessData((prev) => ({ ...prev, directorInfo: { ...prev.directorInfo, applicantEmail: email, ...(phoneValue ? { applicantPhone: phoneValue } : {}) } }))
+      setBusinessData((prev) => {
+        const next = filled(prev)
+        return { ...next, directorInfo: { ...next.directorInfo, applicantEmail: email, ...(phoneValue ? { applicantPhone: phoneValue } : {}) } }
+      })
     }
+    const fromRecord = Boolean(fill && Object.keys(fill.values || {}).length)
+    if (fromRecord) setFilledFromRecord(true)
+    // An NRC is a Zambian's: the form then asks for it, not a passport.
+    if (fill?.idField === 'personalInfo.nrc') {
+      setPersonalData((prev) => (prev.employmentInfo.nationality ? prev : { ...prev, employmentInfo: { ...prev.employmentInfo, nationality: 'Zambia' } }))
+    }
+    // What was confirmed at the start isn't asked again: shown on the form, locked.
+    const form = selectedLoanType === 'personal' ? 'personal' : 'business'
+    const confirmed = new Set()
+    if (channel !== 'phone') confirmed.add(form === 'personal' ? 'personalInfo.email' : 'directorInfo.applicantEmail')
+    if (channel === 'phone') confirmed.add(form === 'personal' ? 'personalInfo.phone' : 'directorInfo.applicantPhone')
+    if (fromRecord && fill.idField) confirmed.add(fill.idField)
+    setConfirmedFields(confirmed)
     setStartTicket({ ticket, email: email.toLowerCase() })
+    // No record from the institution: offer their last loan, once the draft is saved as theirs.
+    if (!fromRecord) setLookForLastLoan(true)
   }
+  // Their last loan with us, offered once they've confirmed it's them (Settings → Credit
+  // workflow → Applicant experience): the server answers only for the confirmed draft.
+  const [lookForLastLoan, setLookForLastLoan] = useState(false)
+  const [lastLoan, setLastLoan] = useState(null)
+  useEffect(() => {
+    if (!lookForLastLoan || !draftToken || !customerOptions.prefillFromLastLoan) return
+    setLookForLastLoan(false)
+    fetchPrefill(draftToken, selectedLoanType)
+      .then((result) => {
+        if (result?.formState) setLastLoan(result)
+      })
+      .catch(() => {})
+  }, [lookForLastLoan, draftToken, customerOptions.prefillFromLastLoan, selectedLoanType])
+  const fillFromLastLoan = () => {
+    const source = selectedLoanType === 'personal' ? lastLoan.formState.personalData : lastLoan.formState.businessData
+    const apply = (data) => fillEmptySections(data, source)
+    if (selectedLoanType === 'personal') setPersonalData(apply)
+    else setBusinessData(apply)
+    setPrefilledFromPrevious(true)
+    setLastLoan(null)
+  }
+  const [filledFromRecord, setFilledFromRecord] = useState(false)
+  const [prefilledFromPrevious, setPrefilledFromPrevious] = useState(false)
+  const [confirmedFields, setConfirmedFields] = useState(() => new Set())
   useEffect(() => {
     if (!startTicket || String(contactDetails.email || '').trim().toLowerCase() !== startTicket.email) return
     let live = true
@@ -1568,7 +1585,7 @@ function DashboardPage() {
             </div>
           ) : null}
 
-          {prefilledApplication && currentStep < stepTitles.length - 1 ? (
+          {prefilledFromPrevious && currentStep < stepTitles.length - 1 ? (
             <div className="mt-6 rounded-lg border border-primary/25 bg-accent/60 p-4 text-sm text-accent-foreground print:hidden">
               Your application has been auto-filled from your existing application. Kindly edit where necessary and
               upload all the required fresh documents.
@@ -1578,6 +1595,8 @@ function DashboardPage() {
           {/* Before any question: confirm it's them (Settings → Credit workflow → Applicant experience). */}
           {confirmFirst ? (
             <ConfirmItsYou
+              form={selectedLoanType}
+              kyc={kycLookups}
               email={contactDetails.email}
               phone={contactDetails.phone}
               sms={Boolean(applicantVerification?.sms)}
@@ -1611,7 +1630,44 @@ function DashboardPage() {
 
               {currentStep === 0 && !assistedBy && customerOptions.helpWithFinishing ? <DraftContactConsent /> : null}
 
+              {/* An agent with a customer: fill the form from the institution's records (Settings → Customer records). */}
+              {currentStep === 0 && assistedBy && kycLookups ? (
+                <AgentCustomerLookup
+                  form={selectedLoanType}
+                  kyc={kycLookups}
+                  onFound={({ reference, fill }) => {
+                    const apply = (data) => fillForm(data, fill.values, { idField: fill.idField, id: fill.id })
+                    if (selectedLoanType === 'personal') setPersonalData(apply)
+                    else setBusinessData(apply)
+                    attachKycReference(reference)
+                  }}
+                />
+              ) : null}
+
+              {lastLoan && currentStep === 0 ? (
+                <div className="flex flex-col gap-3 rounded-lg border border-primary/25 bg-primary/5 p-4 text-sm sm:flex-row sm:items-center sm:justify-between print:hidden">
+                  <p className="text-foreground">
+                    We found your last application{lastLoan.from?.reference ? ` (${lastLoan.from.reference}${lastLoan.from.submittedAt ? `, ${new Date(lastLoan.from.submittedAt).toLocaleDateString()}` : ''})` : ''}. Fill this one in from it? You can change anything, and documents are uploaded afresh.
+                  </p>
+                  <div className="flex shrink-0 gap-2">
+                    <Button type="button" variant="outline" size="sm" onClick={() => setLastLoan(null)}>
+                      No thanks
+                    </Button>
+                    <Button type="button" size="sm" onClick={fillFromLastLoan}>
+                      Fill from my last loan
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+
+              {filledFromRecord && currentStep === 0 ? (
+                <p className="rounded-lg border border-primary/25 bg-primary/5 p-4 text-sm text-foreground print:hidden">
+                  We’ve filled in what we hold on our records. Check every step, and correct anything that’s out of date.
+                </p>
+              ) : null}
+
               <WizardStep
+                confirmedFields={confirmedFields}
                 addCollateralItem={addCollateralItem}
                 addGuarantor={addGuarantor}
                 updateGuarantor={updateGuarantor}

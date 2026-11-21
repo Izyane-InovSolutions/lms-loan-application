@@ -36,6 +36,13 @@ export const FACTS = {
   location_distance_km: { label: 'Distance from stated address', unit: 'km', loanTypes: ['personal', 'business'] },
   address_found: { label: 'Home address found on the map', unit: 'boolean', yes: 'Home address was found on the map', no: 'Home address wasn’t found on the map', loanTypes: ['personal', 'business'] },
   crb_score: { label: 'Credit bureau score', unit: 'score', loanTypes: ['personal', 'business'] },
+  kyc_confirmed_on_record: {
+    label: 'Confirmed with a contact on the customer’s record',
+    unit: 'boolean',
+    yes: 'Confirmed with a contact on the customer’s record (or looked up by an agent)',
+    no: 'On the customer records, but confirmed with another contact (or the ID was changed)',
+    loanTypes: ['personal', 'business'],
+  },
   id_contact_mismatch: {
     label: 'ID or contact details used before with different details',
     unit: 'boolean',

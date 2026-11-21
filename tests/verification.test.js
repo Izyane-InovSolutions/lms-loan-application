@@ -202,3 +202,42 @@ describe('ID and contact check', () => {
     expect(other.application.identityFlags).toEqual([expect.objectContaining({ kind: 'contact_other_id', reference: clean.application.reference, channel: 'phone', id: '…3333' })])
   })
 })
+
+describe('filling the form from their last loan', () => {
+  it('answers only for a confirmed draft, by the contact it was confirmed with, and only when offered', async () => {
+    const email = 'returning@example.com'
+    const first = await submit(email, { nrc: '555555/55/5', phone: '966555444' })
+    expect(first.response.status, JSON.stringify(first.response.body)).toBe(200)
+    const reference = (await caseOf(first.response.body.id)).application.reference
+
+    // No token: nothing, whatever email is asked about.
+    expect((await visitor.get(`/prefill?type=personal&email=${email}`)).status).toBe(401)
+
+    // Their new draft, confirmed by email.
+    const { token } = await prepareDraft(email)
+    const byEmail = await visitor.get('/prefill?type=personal', { authorization: `Bearer ${token}` })
+    expect(byEmail.body).toMatchObject({ from: { reference }, formState: { personalData: { personalInfo: { nrc: '555555/55/5' } } } })
+    expect(JSON.stringify(byEmail.body)).not.toMatch(/__draftFile__/)
+
+    // Confirmed by phone instead: found by the phone, not the email.
+    const other = 'newaddress@example.com'
+    const byPhoneDraft = await prepareDraft(other)
+    await kv.set(`draft:${other}`, { ...(await kv.get(`draft:${other}`)), verified: { channel: 'phone', value: '+260966555444', at: Date.now() } })
+    expect((await visitor.get('/prefill?type=personal', { authorization: `Bearer ${byPhoneDraft.token}` })).body.from.reference).toBe(reference)
+
+    // Not confirmed: nothing.
+    const unconfirmed = await prepareDraft('unconfirmed@example.com')
+    const draft = await kv.get('draft:unconfirmed@example.com')
+    delete draft.verified
+    await kv.set('draft:unconfirmed@example.com', draft)
+    expect((await visitor.get('/prefill?type=personal', { authorization: `Bearer ${unconfirmed.token}` })).body.formState).toBeNull()
+
+    // Switched off by the workspace.
+    const options = (await admin.get('/settings')).body.settings.customerOptions
+    expect(options.prefillFromLastLoan).toBe(true)
+    await admin.put('/settings/customerOptions', { ...options, prefillFromLastLoan: false })
+    expect((await visitor.get('/prefill?type=personal', { authorization: `Bearer ${token}` })).body.formState).toBeNull()
+    expect((await visitor.get('/customer-options')).body.prefillFromLastLoan).toBe(false)
+    await admin.put('/settings/customerOptions', options)
+  })
+})

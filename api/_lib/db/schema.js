@@ -230,6 +230,9 @@ export const applications = pgTable(
     contactVerification: jsonb('contact_verification'),
     // Earlier applications whose ID or contact details don't match this one's (identityFlags.js).
     identityFlags: jsonb('identity_flags'),
+    // The customer's record on the institution's platform, if they were looked up as they
+    // started, and how they confirmed (api/_lib/kyc/lookups.js applicationKyc). Mapped fields only.
+    kyc: jsonb('kyc'),
     // Where the case is in its workflow (workflow_versions): the state's id, and the
     // version it follows. `status` is that state's reporting category (src/config/workflow.js).
     state: text('state'),

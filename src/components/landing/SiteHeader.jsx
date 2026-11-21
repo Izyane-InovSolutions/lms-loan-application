@@ -11,7 +11,7 @@ const NAV_LINKS = [
   { href: '#faq', label: 'FAQ' },
 ]
 
-export function SiteHeader({ onApply, onResume }) {
+export function SiteHeader({ onApply, onMatch, onResume }) {
   const { name } = useBranding()
   return (
     <header className="sticky top-0 z-40 w-full border-b border-border/70 bg-background/85 backdrop-blur supports-[backdrop-filter]:bg-background/70">
@@ -37,6 +37,12 @@ export function SiteHeader({ onApply, onResume }) {
           <Button variant="ghost" size="sm" className="hidden sm:inline-flex" onClick={onResume}>
             Resume application
           </Button>
+          {/* Apply first, and the documents decide which loans fit ("we'll match you"). */}
+          {onMatch ? (
+            <Button variant="outline" size="sm" className="hidden md:inline-flex lg:hidden xl:inline-flex" onClick={onMatch}>
+              Apply and get matched
+            </Button>
+          ) : null}
           <Button size="sm" onClick={() => onApply('personal')}>
             Apply now
           </Button>

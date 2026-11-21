@@ -95,6 +95,7 @@ export const factReasonDetails = (application, documents, facts, context = {}) =
     reasons.crb_score = !crbApplies(application.loanType, application.data)
       ? reason(`There is no credit bureau score: ${CRB_NOT_APPLICABLE.charAt(0).toLowerCase()}${CRB_NOT_APPLICABLE.slice(1)}`)
       : context.crbProvider ? reason('No credit bureau report has been pulled yet.', 'Run a credit check on this case.', 'run_crb') : reason('No credit bureau is connected, so there is no score.', 'Connect one under Settings → Credit bureau.', 'settings')
+  if (unknown('kyc_confirmed_on_record')) reasons.kyc_confirmed_on_record = reason(application.kyc ? 'The applicant wasn’t found on the customer records.' : 'The applicant wasn’t looked up on the customer records.')
   if (unknown('id_contact_mismatch')) reasons.id_contact_mismatch = reason('The application was made before IDs and contact details were checked against earlier applications.')
   if (unknown('stated_income')) reasons.stated_income = reason('The application was made before applicants stated their income to qualify.')
   if (unknown('income_vs_stated'))

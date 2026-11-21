@@ -47,6 +47,7 @@ import { sectionsFor } from './fields'
 import { conditionsOf } from '@/config/conditions'
 import { LegalReview } from './LegalReview'
 import { PreApprovalPanel } from './PreApprovalPanel'
+import { KycPanel } from './KycPanel'
 import { PrescreenStats } from './PrescreenStats'
 import { allowsCreditCheck } from '@/config/consent'
 import { crbApplies } from '@/config/applicantRules'
@@ -384,7 +385,10 @@ export function CasePage() {
           <Details
             application={application}
             collateralCatalog={collateralCatalog}
-            cards={consents.length ? [<ConsentPanel key="consent" consents={consents} />] : []}
+            cards={[
+              ...(application.kyc ? [<KycPanel key="kyc" application={application} />] : []),
+              ...(consents.length ? [<ConsentPanel key="consent" consents={consents} />] : []),
+            ]}
             wide={<LocationPanel points={locations} facts={prescreen?.facts} onLogVisit={may.note ? (position) => post('/visits', position, 'Visit logged') : null} />}
           />
         ) : null}

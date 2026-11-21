@@ -100,6 +100,17 @@ refreshing the page work as expected.
 - An agent's customer doesn't do this. They confirm with their own code at submission instead.
 - Admins can turn it off under Settings → Credit workflow → Applicant experience.
 
+**Customer records.** When Settings → Customer records is set up, the start screen first asks for the NRC or passport (a TPIN for a business).
+- If the institution's platform has a record, the code goes to the **mobile or email on that record**, shown masked. After the code, the form opens filled from the record.
+- If those contacts are out of date, the applicant can use another one. What they then get is a setting: nothing filled, chosen fields, everything, or not allowed.
+- Agents get a *Look up the customer* box that fills the form at once, with no code. Each lookup is in the audit log.
+- Documents are always uploaded by hand.
+
+**Nothing is asked twice.** *Apply* goes straight to the start screen. There is no separate email step on the website. Once confirmed:
+- The form opens with the confirmed email or phone filled in and locked ("Confirmed when you started").
+- If the record came from the customer records, the looked-up ID is locked too.
+- If there's no record, they're offered **"Fill from my last loan"**: their most recent application with the lender, found by the email or phone they just confirmed (or in the LMS, by email). They choose; documents are uploaded afresh. Admins can turn this off under Settings → Credit workflow → Applicant experience → *Fill from their last loan*.
+
 A code only proves the applicant controls that email or phone. So at submission the system also checks the NRC (or passport) and the contact details against earlier applications (see Pre-screening).
 
 | Individual (personal form) | Company (business form) |
@@ -170,6 +181,7 @@ Straight after submission:
 4. The **ZRA taxpayer check** runs in the background.
 5. **ID and contact check** (at submission). Earlier applications are searched for two things: this NRC or passport with different contact details, and this email or phone with a different NRC or passport.
    - Matches show as a warning at the top of the case, with the earlier references and the other details masked, plus a timeline note.
+   - The case's Details tab shows a **Customer record** panel when the applicant was looked up. It says how they confirmed and lists each field on record next to what was submitted, with differences marked. The `kyc_confirmed_on_record` fact lets a rule refer applicants who used a different contact.
    - They also set the `id_contact_mismatch` fact. No rule uses it by default; add one under Policy rules to refer these cases.
 
 The case page shows a **pre-screening stats** row while the case is at this stage: income,
@@ -289,7 +301,8 @@ All of these are in the workspace. No deploy is needed.
 | Settings → Loan products | Loan categories and sub categories. Per product: on/off, purpose (a listed one, or **Other** with your own wording), amounts, tenures, rate, fee, documents, collateral rules, guarantors. The collateral catalog (types and items). |
 | Settings → Partners | MoU partners (MoU reference, end date, paused or not), each partner's staff list (CSV upload, *Check an NRC*) |
 | Settings → Loan products → Pre-approval | Pre-approved for one partner's employees, with an optional pre-approved limit (personal loans only) |
-| Settings → Credit workflow → Applicant experience | *Help with finishing*, *Confirm it's them with a code* (on by default) |
+| Settings → Credit workflow → Applicant experience | *Help with finishing*, *Confirm it's them with a code*, *Fill from their last loan* (both on by default) |
+| Settings → Customer records | The institution's KYC platform: connection and sign-in, lookups by NRC, passport and TPIN, how to read the answer, field mapping, what a different contact gets, and *Test lookup*. Presets: iZyane KYC hub, Standard format. |
 | Settings → Credit bureau | Which bureau, its connection, *Pull a report as each application arrives*, *Ask applicants for consent first* |
 | Settings → LMS connection / ZRA Web Services | Integrations, each with a connection test |
 | Settings → Notifications and SMS | Staff emails, customer texts |
@@ -374,6 +387,14 @@ Unless a scenario says otherwise, start from default settings.
 | B23 | 2 | Codes off | Turn off *Confirm it's them with a code*, start an application | The form opens straight away |
 | B25 | 2 | Email already in progress | On the start screen, confirm an email that has an unfinished application | Told one is in progress, with *Resume with a code* |
 | B24 | 2 | Agent-assisted | As an agent, start an application for a customer | No dialog at the start; the customer's consent code at submission as before |
+| B26 | 1 | Filled from the records | With customer records set up, start an application with an NRC on the platform, choose the mobile on record | A code goes by text to that mobile. After it, the form opens filled ("We've filled in what we hold…"). Occupation and next of kin (name, phone, relationship) are filled too; photo and signature never are. |
+| B27 | 1 | Not on the records | Start with an NRC the platform doesn't know | "We couldn't find your details", then the usual email or phone code, and an empty form |
+| B28 | 2 | Contacts out of date | Choose *I don't have these any more* | Depends on the setting: an empty form, only the ticked fields, everything, or (when not allowed) the option isn't offered |
+| B29 | 1 | Agent lookup | As an agent, *Look up the customer* by NRC | The form fills at once with no code. The audit log has the lookup. |
+| B30 | 2 | Platform down | Point the base URL at something that doesn't answer, start an application | The applicant falls back to the usual flow without seeing the error. It appears in System health. |
+| B31 | 2 | Fill from last loan | Apply again with the email of an earlier application, confirm the code | "We found your last application (LOS-…)" with *Fill from my last loan*. Choosing it fills empty fields only. |
+| B32 | 2 | Last loan off | Turn off *Fill from their last loan*, repeat B31 | No offer |
+| B33 | 2 | Get matched from the header | On the website, click *Apply and get matched* in the header | The "we'll match you" application for the loan category chosen in the finder |
 | B19 | 2 | Staff see drafts | As a loan officer, open Pipeline → Draft | Drafts whose customers agreed to contact are listed. *Email a reminder* works at most once a day. |
 
 ### C. Submission and consents

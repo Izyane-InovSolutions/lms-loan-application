@@ -134,6 +134,13 @@
       "when": 1795259390745,
       "tag": "0018_applicant_verification",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1795262902702,
+      "tag": "0019_kyc_lookup",
+      "breakpoints": true
     }
   ]
 }

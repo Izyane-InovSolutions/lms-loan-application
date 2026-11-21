@@ -7,6 +7,7 @@ import { DRAFT_TTL_SECONDS, ensureDraftId, indexDraft, unindexDraft } from '../_
 import { CONSENT_NOTICES } from '../../src/config/consent.js'
 import { getSetting } from '../_lib/settings.js'
 import { contactOf, redeemTicket, verificationRequired } from '../_lib/verification.js'
+import { attachToDraft, forgetDraftLookup, getLookup } from '../_lib/kyc/lookups.js'
 // Each alias is a full copy written on every save, so the list is capped rather than
 // growing once per edit to the email field. Keeping the most recent few covers the
 // realistic case (a typo corrected once or twice) without unbounded writes.
@@ -79,7 +80,19 @@ const formContact = (draft) => contactOf(draft.loanType, draft.loanType === 'bus
 const verifiedBy = async (ticket, draft) => {
   const entry = ticket ? await redeemTicket(ticket) : null
   if (!entry || formContact(draft)[entry.channel] !== entry.value) return null
+  // A customer lookup confirmed with the same code is kept with the draft (kyc/lookups.js).
+  if (entry.kyc) draft.kyc = (await attachToDraft(draft.id, entry.kyc.reference, entry.kyc.contact)) || draft.kyc
   return { channel: entry.channel, value: entry.value, at: Date.now() }
+}
+
+/** An agent's own lookup (POST /kyc/lookup/assisted), kept with the draft they're filling in. */
+const withAgentLookup = async (req, draft) => {
+  const reference = req.body?.kycReference
+  if (!reference || !draft.attribution?.startedByStaff) return
+  const session = await staffWith(req, 'applications.assist')
+  const lookup = session ? await getLookup(reference) : null
+  if (!lookup || lookup.by !== session.id) return
+  draft.kyc = (await attachToDraft(draft.id, reference, 'agent')) || draft.kyc
 }
 
 const verificationRequiredResponse = (res) =>
@@ -123,6 +136,7 @@ export default async function handler(req, res) {
       if (verified) draft.verified = verified
       else if (!draft.attribution?.startedByStaff && (await verificationRequired())) return verificationRequiredResponse(res)
     }
+    await withAgentLookup(req, draft)
     if (existing) {
       await kv.set(`draft:${email}`, draft, { ex: DRAFT_TTL_SECONDS })
     } else if (!(await kv.set(`draft:${email}`, draft, { ex: DRAFT_TTL_SECONDS, nx: true }))) {
@@ -158,6 +172,7 @@ export default async function handler(req, res) {
       if (!verified) return res.status(400).json({ code: 'invalid_ticket', message: 'That confirmation has expired, or was for other contact details. Ask for a new code.' })
       draft.verified = verified
     }
+    await withAgentLookup(req, draft)
 
     // The draft is keyed by an address the applicant can still edit, so correcting a
     // typo mid-application changes where it belongs. Every address used so far is kept
@@ -198,6 +213,7 @@ export default async function handler(req, res) {
     const draft = await kv.get(`draft:${tokenAuth.email}`)
     if (draft) {
       await deleteBlobsForDraft(draft)
+      await forgetDraftLookup(draft.id)
     }
     // Clearing has to reach every address the record was written under, or a leftover
     // copy would let a submitted or discarded application resume from the dead.

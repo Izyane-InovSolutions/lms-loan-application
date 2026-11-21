@@ -38,6 +38,7 @@ import {
 import { DocumentTemplatesTab } from "./DocumentTemplatesTab";
 import { BrandingTab } from "./BrandingTab";
 import { CrbTab } from "./CrbTab";
+import { KycTab } from "./KycTab";
 import { ProductsTab } from "./ProductsTab";
 import { PartnersTab } from "./PartnersTab";
 import { DangerZoneTab } from "./DangerZoneTab";
@@ -48,6 +49,7 @@ const TABS = [
   { id: "partners", label: "Partners" },
   { id: "lms", label: "LMS connection" },
   { id: "zra", label: "ZRA Web Services" },
+  { id: "kyc", label: "Customer records" },
   { id: "crb", label: "Credit bureau" },
   { id: "notifications", label: "Notifications and SMS" },
   { id: "ai", label: "AI document checks" },
@@ -243,6 +245,9 @@ export function SettingsPage() {
               onSaved={load}
             />
           ) : null}
+          {tab === "kyc" ? (
+            <KycTab settings={state.settings} notify={notify} />
+          ) : null}
           {tab === "crb" ? (
             <CrbTab
               settings={state.settings}
@@ -436,6 +441,13 @@ function WorkflowTab({ settings, notify }) {
           description="Before their application is saved, applicants enter a code sent to their email, or by text when an SMS provider is set up (Notifications). Guards against applications in someone else’s name. Agents’ customers confirm with their own code at submission instead."
           checked={customer.value.verifyAtStart !== false}
           onChange={(verifyAtStart) => customer.set({ verifyAtStart })}
+        />
+        <Toggle
+          id="prefill-from-last-loan"
+          label="Fill from their last loan"
+          description="Once an applicant has confirmed it’s them with a code, offer to fill the form from their most recent application here (or in the LMS). They choose; documents are always uploaded afresh. Customer records (KYC), when set up, come first."
+          checked={customer.value.prefillFromLastLoan !== false}
+          onChange={(prefillFromLastLoan) => customer.set({ prefillFromLastLoan })}
         />
         <FormError message={customer.error} />
         <SaveBar

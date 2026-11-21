@@ -15,8 +15,9 @@ export const matchLoanProducts = (draftToken, body) =>
   client.post('/match', body, { headers: draftToken ? { Authorization: `Bearer ${draftToken}` } : {}, timeout: 30000 }).then((r) => r.data)
 
 /** Form values from the applicant's previous application of this type, or null. */
-export const fetchPrefill = (email, type) =>
-  client.get('/prefill', { params: { email, type } }).then((r) => r.data.formState)
+/** Their last loan to fill the form from, with the draft token of a confirmed draft: { formState, from } or nulls. */
+export const fetchPrefill = (token, type) =>
+  client.get('/prefill', { params: { type }, headers: { Authorization: `Bearer ${token}` } }).then((r) => r.data)
 
 /** Who a referral code belongs to (first name and role), or null. */
 export const fetchReferrer = (code) =>
