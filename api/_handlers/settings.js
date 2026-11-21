@@ -28,6 +28,8 @@ import { APPLICANT_FORMS, BUILT_IN_PRODUCT_IDS, DOCUMENT_CATALOGUE, INTEREST_TYP
 import { COLLATERAL_CODE_PATTERN, COLLATERAL_REQUIREMENTS, buildCollateralCatalog } from '../../src/config/collateral.js'
 import { GUARANTOR_REQUIREMENTS } from '../../src/config/guarantors.js'
 import { PARTNER_ID_PATTERN } from '../../src/config/partners.js'
+import { AUTH_TYPES, CONTACT_TARGETS, FORM_TARGETS, KYC_ID_TYPES, KYC_PRESETS, LOOKUP_LIMIT_RANGE, OTHER_CONTACT_POLICIES, TIDY_UPS } from '../../src/config/kyc.js'
+import { KycConfigError, clearKycTokenCache, kycLookup, redactRaw, requestUrl } from '../_lib/kyc/client.js'
 import { isHexColour, normaliseTheme } from '../../src/config/theme.js'
 
 /*
@@ -408,7 +410,86 @@ const aiField = (field, raw) => {
 const aiFieldValues = (value, { onlyPresent = false } = {}) =>
   Object.fromEntries(AI_FIELDS.filter((field) => !onlyPresent || value[field.key]).map((field) => [field.key, aiField(field, value[field.key])]))
 
+/**
+ * Settings → Customer records: the connection, three lookups, how to read the answer, the
+ * field mappings and what an applicant who confirms another contact gets (src/config/kyc.js).
+ * Secrets left blank keep what is stored (setSetting).
+ */
+const lookupLimit = (entry, fallback) => {
+  const number = Math.round(Number(entry))
+  if (entry === undefined || entry === null || entry === '') return fallback
+  if (!Number.isFinite(number) || number < LOOKUP_LIMIT_RANGE.min || number > LOOKUP_LIMIT_RANGE.max) {
+    throw new Error(`Lookup limits must be between ${LOOKUP_LIMIT_RANGE.min} and ${LOOKUP_LIMIT_RANGE.max} an hour.`)
+  }
+  return number
+}
+
+const validateKyc = (value) => {
+  const line = (entry, max = 300) => String(entry ?? '').trim().slice(0, max)
+  const enabled = Boolean(value.enabled)
+  const baseUrl = line(value.baseUrl, 500)
+  if (baseUrl) {
+    try {
+      requestUrl({ baseUrl }, '', '')
+    } catch (error) {
+      throw new Error(error instanceof KycConfigError ? error.message : 'The base URL isn’t a valid address.')
+    }
+  }
+  const authType = Object.hasOwn(AUTH_TYPES, value.authType) ? value.authType : 'none'
+  const lookups = Object.fromEntries(
+    Object.keys(KYC_ID_TYPES).map((type) => {
+      const entry = value.lookups?.[type] || {}
+      const path = line(entry.path, 500)
+      if (entry.enabled && !path.includes('{id}')) throw new Error(`The ${KYC_ID_TYPES[type].label} lookup must put {id} where the number goes.`)
+      return [type, { enabled: Boolean(entry.enabled), method: entry.method === 'POST' ? 'POST' : 'GET', path, body: String(entry.body ?? '').slice(0, 2000) }]
+    })
+  )
+  if (enabled && !baseUrl) throw new Error('Enter the platform’s base URL.')
+  if (enabled && !Object.values(lookups).some((entry) => entry.enabled)) throw new Error('Turn on at least one lookup.')
+  const mapping = (rows, form) =>
+    (Array.isArray(rows) ? rows : []).slice(0, 60).flatMap((row) => {
+      const field = String(row?.field || '')
+      const path = line(row?.path, 200)
+      if (!field || !path) return []
+      if (!Object.hasOwn(FORM_TARGETS[form], field) && !Object.hasOwn(CONTACT_TARGETS, field)) throw new Error(`Unknown form field: ${field}.`)
+      return [{ field, path, tidy: Object.hasOwn(TIDY_UPS, row.tidy) ? row.tidy : 'none' }]
+    })
+  const policy = Object.hasOwn(OTHER_CONTACT_POLICIES, value.otherContact?.policy) ? value.otherContact.policy : 'none'
+  const allFields = new Set([...Object.keys(FORM_TARGETS.personal), ...Object.keys(FORM_TARGETS.business)])
+  return {
+    enabled,
+    preset: Object.hasOwn(KYC_PRESETS, value.preset) ? value.preset : 'custom',
+    baseUrl,
+    timeoutSeconds: Math.min(Math.max(Math.round(Number(value.timeoutSeconds) || 10), 1), 60),
+    authType,
+    apiKeyHeader: line(value.apiKeyHeader, 100) || 'X-API-Key',
+    apiKey: value.apiKey === null ? null : line(value.apiKey, 1000),
+    bearerToken: value.bearerToken === null ? null : line(value.bearerToken, 4000),
+    username: line(value.username, 200),
+    password: value.password === null ? null : line(value.password, 1000),
+    tokenUrl: line(value.tokenUrl, 500),
+    clientId: line(value.clientId, 300),
+    clientSecret: value.clientSecret === null ? null : line(value.clientSecret, 1000),
+    scope: line(value.scope, 300),
+    headers: (Array.isArray(value.headers) ? value.headers : [])
+      .slice(0, 10)
+      .map((header) => ({ name: line(header?.name, 100), value: line(header?.value, 1000) }))
+      .filter((header) => /^[A-Za-z0-9-]+$/.test(header.name)),
+    lookups,
+    foundPath: line(value.foundPath, 200),
+    foundValue: line(value.foundValue, 200),
+    recordPath: line(value.recordPath, 200),
+    mappings: { personal: mapping(value.mappings?.personal, 'personal'), business: mapping(value.mappings?.business, 'business') },
+    limits: {
+      perIdPerHour: lookupLimit(value.limits?.perIdPerHour, 5),
+      perIpPerHour: lookupLimit(value.limits?.perIpPerHour, 20),
+    },
+    otherContact: { policy, fields: policy === 'fields' ? (Array.isArray(value.otherContact?.fields) ? value.otherContact.fields : []).filter((field) => allFields.has(field)) : [] },
+  }
+}
+
 const VALIDATORS = {
+  kyc: validateKyc,
   // The name only: the logo is set by its own upload endpoint (branding.js), never from a
   // body here, which could otherwise point it at any stored file.
   // Each panel of Settings → Branding (name, letterhead, theme) saves only its own fields;
@@ -565,7 +646,7 @@ const VALIDATORS = {
       ...aiFieldValues(value),
     }
   },
-  customerOptions: (value) => ({ helpWithFinishing: value.helpWithFinishing !== false, verifyAtStart: value.verifyAtStart !== false }),
+  customerOptions: (value) => ({ helpWithFinishing: value.helpWithFinishing !== false, verifyAtStart: value.verifyAtStart !== false, prefillFromLastLoan: value.prefillFromLastLoan !== false }),
   stages: (value) => validateStagesConfig(value),
   documents: (value) => validateDocumentKinds(value),
   security: async (value) => {
@@ -618,6 +699,7 @@ const saveSetting = async (req, res, { params }) => {
   }
   if (params.key === 'security') clearTwoFactorCache()
   if (params.key === 'crb') await refreshCrb({ force: true })
+  if (params.key === 'kyc') clearKycTokenCache()
   // These still describe the workflow until someone publishes one from the editor.
   if (LEGACY_WORKFLOW_KEYS.includes(params.key)) await regenerateLegacyWorkflow(actor)
   await recordAudit({ req, actor, action: 'settings.updated', entityType: 'setting', entityId: params.key, detail: { before, after: saved } })
@@ -836,6 +918,41 @@ const stagesForStaff = async (req) => {
   return { stages: await getSetting('stages'), requireAcceptance: (await getSetting('offers')).requireAcceptance }
 }
 
+/**
+ * Test lookup (Settings → Customer records): one ID against the saved connection, or the
+ * form's values before saving. Secrets left blank come from the saved ones only for the
+ * saved address, as testLms does, so a test pointed elsewhere never carries our credentials.
+ */
+const KYC_SECRETS = ['apiKey', 'bearerToken', 'password', 'clientSecret']
+const testKyc = async (req) => {
+  const actor = await requireUser(req, { permission: 'settings.manage' })
+  const saved = await getSetting('kyc')
+  let config = saved
+  if (req.body?.form) {
+    let form
+    try {
+      form = validateKyc({ ...req.body.form, enabled: false })
+    } catch (error) {
+      fail(400, error.message, 'invalid_input')
+    }
+    const sameHost = (() => {
+      try {
+        return new URL(form.baseUrl).host === new URL(saved.baseUrl).host && (!form.tokenUrl || form.tokenUrl === saved.tokenUrl)
+      } catch {
+        return false
+      }
+    })()
+    config = { ...form }
+    for (const field of KYC_SECRETS) if (!config[field]) config[field] = sameHost ? saved[field] : ''
+  }
+  const idType = Object.hasOwn(KYC_ID_TYPES, req.body?.idType) ? req.body.idType : 'nrc'
+  const id = text(req.body?.id, 60)
+  if (!id) fail(400, 'Enter an ID number to look up.', 'invalid_input')
+  const result = await kycLookup(config, idType, id)
+  await recordAudit({ req, actor, action: 'settings.kyc_tested', entityType: 'setting', entityId: 'kyc', detail: { idType, status: result.status, httpStatus: result.httpStatus } })
+  return { status: result.status, httpStatus: result.httpStatus, ms: result.ms, error: result.error || null, raw: result.raw === undefined ? null : redactRaw(result.raw), values: result.values || {}, contacts: result.contacts || {} }
+}
+
 export const settingsRoutes = [
   ['GET', '/settings', getSettings],
   ['GET', '/stages', stagesForStaff],
@@ -845,6 +962,7 @@ export const settingsRoutes = [
   ['POST', '/settings/zra/test', testZra],
   ['POST', '/settings/crb/test', testCrb],
   ['POST', '/settings/sms/test', testSms],
+  ['POST', '/settings/kyc/test', testKyc],
   ['POST', '/settings/ai/test', testAi],
   ['GET', '/legal/:kind', publishedLegal],
   ['GET', '/admin/legal/:kind', legalForAdmin],

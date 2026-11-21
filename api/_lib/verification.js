@@ -49,9 +49,10 @@ export const verificationRequired = async () => (await getSetting('customerOptio
 
 export const smsAvailable = async () => Boolean(await getSms())
 
-export const issueTicket = async (channel, value) => {
+/** `extra`: { kyc: { reference, contact } } when it came with a customer lookup. */
+export const issueTicket = async (channel, value, extra = {}) => {
   const ticket = generateToken()
-  await kv.set(ticketKey(ticket), { channel, value }, { ex: TICKET_TTL_SECONDS })
+  await kv.set(ticketKey(ticket), { channel, value, ...extra }, { ex: TICKET_TTL_SECONDS })
   return ticket
 }
 

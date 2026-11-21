@@ -20,6 +20,7 @@ import { workflowConfigRoutes } from '../_handlers/workflowConfig.js'
 import { zraRoutes } from '../_handlers/zra.js'
 import { partnerRoutes } from '../_handlers/partners.js'
 import { verificationRoutes } from '../_handlers/verification.js'
+import { kycRoutes } from '../_handlers/kyc.js'
 import { reportRoutes } from '../_handlers/reports.js'
 import { dataWipeRoutes } from '../_handlers/dataWipe.js'
 import { refreshCrb } from '../_lib/crb/index.js'
@@ -34,6 +35,7 @@ import { refreshCrb } from '../_lib/crb/index.js'
 const router = createRouter([
   ...authRoutes,
   ...verificationRoutes,
+  ...kycRoutes,
   ...userRoutes,
   ...auditRoutes,
   ...overviewRoutes,

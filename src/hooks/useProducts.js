@@ -18,6 +18,8 @@ const DEFAULT_CATALOG = {
   creditCheck: null,
   // Whether applicants confirm their email or phone with a code as they start: null until the workspace answers.
   applicantVerification: null,
+  // Which customer lookups the start screen offers (Settings → Customer records): null when off.
+  kyc: null,
   loaded: false,
 }
 
@@ -29,13 +31,14 @@ const load = () => {
   if (!pending) {
     pending = fetch('/api/v1/products')
       .then((response) => (response.ok ? response.json() : Promise.reject(new Error(String(response.status)))))
-      .then(({ products, loanTypes, collateralCatalog, creditCheck, applicantVerification }) => {
+      .then(({ products, loanTypes, collateralCatalog, creditCheck, applicantVerification, kyc }) => {
         cached = {
           products,
           loanTypes: loanTypes || DEFAULT_CATALOG.loanTypes,
           collateralCatalog: collateralCatalog || DEFAULT_CATALOG.collateralCatalog,
           creditCheck: creditCheck || null,
           applicantVerification: applicantVerification || null,
+          kyc: kyc || null,
           loaded: true,
         }
         listeners.forEach((listener) => listener(cached))

@@ -3,24 +3,10 @@
  * (DashboardPage.tailwind.jsx) and its step screens (WizardSteps.jsx).
  */
 
-import { BUSINESS_STRUCTURES } from '@/config/applicantRules'
+import { BUSINESS_STRUCTURES, GENDER_OPTIONS, MARITAL_STATUS_OPTIONS, NATIONALITY_OPTIONS, RELATIONSHIP_OPTIONS } from '@/config/applicantRules'
 
-export const GENDER_OPTIONS = ['Male', 'Female']
-export const MARITAL_STATUS_OPTIONS = ['Single', 'Married', 'Widowed', 'Divorced', 'Separated']
-export const NATIONALITY_OPTIONS = ['Kenya', 'Malawi', 'Rwanda', 'Uganda', 'Zambia', 'Zimbabwe']
-export const RELATIONSHIP_OPTIONS = [
-  'Parent',
-  'Sibling',
-  'Spouse',
-  'Child',
-  'Grandparent',
-  'Grandchild',
-  'Uncle/Aunt',
-  'Nephew/Niece',
-  'Cousin',
-  'Guardian',
-  'Friend',
-]
+// Kept in applicantRules.js, where the server can read them too (customer records, kyc.js).
+export { GENDER_OPTIONS, MARITAL_STATUS_OPTIONS, NATIONALITY_OPTIONS, RELATIONSHIP_OPTIONS }
 // The legal forms, from applicantRules.js, which says what each one is asked for.
 export const BUSINESS_TYPE_OPTIONS = BUSINESS_STRUCTURES.map((entry) => entry.value)
 

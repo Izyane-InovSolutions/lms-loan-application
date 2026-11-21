@@ -26,6 +26,8 @@ import { autoPullCreditReport } from '../_lib/crb/pull.js'
 import { enterPreApproval, initialPreApproval, listPartners } from '../_lib/preApproval.js'
 import { contactOf, smsAvailable, stillVerified, verificationRequired } from '../_lib/verification.js'
 import { describeFlags, identityFlags } from '../_lib/identityFlags.js'
+import { applicationKyc, draftLookup, forgetDraftLookup, kycAvailability } from '../_lib/kyc/lookups.js'
+import { readPath } from '../../src/config/kyc.js'
 import { verifyApplicationWithZra } from '../_lib/zra/verifyApplication.js'
 import { BUILT_IN_PRODUCT_IDS, buildLoanTypes, priceLoan, productFor } from '../../src/config/loanProducts.js'
 import { getApplicationProduct, getCollateralCatalog, getProductConfig, getProducts } from '../_lib/products.js'
@@ -298,6 +300,9 @@ const submitApplication = async (req) => {
   const preApproval = await initialPreApproval(product)
   // This ID with other contact details before, or these contact details with another ID (identityFlags.js).
   const flags = await identityFlags(db, { loanType, data, email: applicant.email, phone: applicant.phone })
+  // The customer's record from the institution's platform, if they were looked up (kyc/lookups.js).
+  const kycEntry = await draftLookup(draft?.id)
+  const kyc = applicationKyc(kycEntry, readPath(data, kycEntry?.idField))
   const application = await db.transaction(async (tx) => {
     const reference = await nextReference(tx)
     const [row] = await tx
@@ -328,6 +333,7 @@ const submitApplication = async (req) => {
         ...(preApproval ? { preApproval } : {}),
         contactVerification,
         identityFlags: flags,
+        kyc,
       })
       .returning()
     if (documentRows.length) await tx.insert(applicationDocuments).values(documentRows)
@@ -389,6 +395,7 @@ const submitApplication = async (req) => {
   })
 
   if (staff) await consumeOtp('consent', applicant.email)
+  await forgetDraftLookup(draft?.id)
   await deleteDraft(draftEmail, draft, token)
   await recordAudit({ req, actor: staff, action: 'application.submitted', entityType: 'application', entityId: application.id, detail: { reference: application.reference, channel: attribution.channel } })
 
@@ -827,19 +834,31 @@ const myApplication = async (req, res, { params }) => {
 const EMPTY_LOAN = { amount: 4000, tenure: 6 }
 
 /**
- * Form values from the applicant's most recent application of this type — from this
- * portal first, then the LMS. Unauthenticated by the product owner's decision; files are
- * never included and must be attached again.
+ * Their last loan, to fill the new form from: the most recent application of this type
+ * from this portal (by the email or phone they confirmed with a code as they started), else
+ * the LMS (by email). Only with the caller's own draft token, once the draft is confirmed
+ * (api/_lib/verification.js), and only where the workspace offers it (Settings → Credit
+ * workflow → Applicant experience). Files are never included and must be attached again.
  */
 const prefill = async (req, res, { query }) => {
-  const email = parseEmail(query.get('email'))
   const loanType = query.get('type')
-  if (!email || !['personal', 'business'].includes(loanType)) fail(400, 'Email and loan type are required.', 'invalid_input')
+  if (!['personal', 'business'].includes(loanType)) fail(400, 'Choose a loan type.', 'invalid_input')
+  const email = await draftEmailFor(bearer(req))
+  if (!email) fail(401, 'Confirm it’s you first.', 'invalid_token')
+  if ((await getSetting('customerOptions')).prefillFromLastLoan === false) return { formState: null }
+  const draft = await kv.get(`draft:${email}`)
+  const verified = draft?.verified
+  // Only what the code proved: their email, or their phone.
+  if (!verified) return { formState: null }
   const db = await getDb()
+  const sameContact =
+    verified.channel === 'email'
+      ? eq(applications.applicantEmail, verified.value)
+      : sql`right(regexp_replace(coalesce(${applications.applicantPhone}, ''), '[^0-9]', '', 'g'), 9) = ${String(verified.value).replace(/\D/g, '').slice(-9)}`
   const [latest] = await db
-    .select({ data: applications.data })
+    .select({ data: applications.data, reference: applications.reference, submittedAt: applications.submittedAt })
     .from(applications)
-    .where(and(eq(applications.applicantEmail, email), eq(applications.loanType, loanType)))
+    .where(and(sameContact, eq(applications.loanType, loanType)))
     .orderBy(desc(applications.submittedAt))
     .limit(1)
 
@@ -852,14 +871,15 @@ const prefill = async (req, res, { query }) => {
         personalData: loanType === 'personal' ? data : blank.personalData,
         businessData: loanType === 'business' ? data : blank.businessData,
       },
+      from: { reference: latest.reference, submittedAt: latest.submittedAt },
     }
   }
 
-  const lms = await getLms()
+  const lms = verified.channel === 'email' ? await getLms() : null
   if (!lms) return { formState: null }
   try {
-    const found = selectLatestApplication(await lms.listByEmail(email), loanType)
-    return { formState: found ? mapApplicationToFormState(found, loanType) : null }
+    const found = selectLatestApplication(await lms.listByEmail(verified.value), loanType)
+    return { formState: found ? mapApplicationToFormState(found, loanType) : null, from: found ? { reference: null, submittedAt: null } : null }
   } catch (error) {
     console.warn(`[prefill] LMS lookup failed: ${error?.message}`)
     return { formState: null }
@@ -915,6 +935,8 @@ const listProducts = async () => {
     creditCheck: { bureau: Boolean(getCrb()), askConsent: Boolean((await getSetting('crb')).askConsent) },
     // Whether applicants confirm their email or phone with a code as they start, and whether by text.
     applicantVerification: { required: await verificationRequired(), sms: await smsAvailable() },
+    // Which customer lookups the start screen offers (Settings → Customer records); null when off.
+    kyc: await kycAvailability(),
   }
 }
 

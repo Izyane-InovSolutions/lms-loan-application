@@ -137,6 +137,8 @@ export function useApplicationDraft({
   // A ticket from confirming the email or phone (api/_lib/verification.js), sent with the
   // next save: it starts the draft, or confirms a changed contact. Used once.
   const verificationTicketRef = useRef(null)
+  // An agent's customer lookup (POST /kyc/lookup/assisted), sent with saves so the draft keeps it.
+  const kycReferenceRef = useRef(null)
   // Set when the server asked for it though the catalog didn't say (an older answer, or none).
   const [serverWantsVerification, setServerWantsVerification] = useState(false)
   const verifyFirstRef = useRef(false)
@@ -297,6 +299,7 @@ export function useApplicationDraft({
     }
     const ticket = verificationTicketRef.current
     if (ticket) payload.verificationTicket = ticket
+    if (kycReferenceRef.current) payload.kycReference = kycReferenceRef.current
 
     try {
       const token = await withRetry(async () => {
@@ -385,6 +388,15 @@ export function useApplicationDraft({
    * Saves with the ticket from confirming the email or phone: starts the draft, or records
    * a changed contact as confirmed. Resolves to the draft token, or null.
    */
+  /** Keeps an agent's customer lookup with the draft (the server checks it was theirs). */
+  const attachKycReference = useCallback(
+    (reference) => {
+      kycReferenceRef.current = reference
+      return flushRemoteDraft()
+    },
+    [flushRemoteDraft]
+  )
+
   const confirmContact = useCallback(
     (ticket) => {
       verificationTicketRef.current = ticket
@@ -641,5 +653,6 @@ export function useApplicationDraft({
     // Nothing is saved to the server until the applicant confirms their email or phone.
     needsVerification: !assisted && (verifyFirst || serverWantsVerification) && !draftToken,
     confirmContact,
+    attachKycReference,
   }
 }

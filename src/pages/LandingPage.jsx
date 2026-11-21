@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
+import React, { useCallback, useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { UserCheck } from 'lucide-react'
 
@@ -12,12 +12,11 @@ import { Faq } from '@/components/landing/Faq'
 import { CallToAction } from '@/components/landing/CallToAction'
 import { SiteFooter } from '@/components/landing/SiteFooter'
 import { ResumeApplicationDialog } from '@/components/landing/ResumeApplicationDialog'
-import { StartApplicationDialog } from '@/components/landing/StartApplicationDialog'
 import { applyPath } from '@/config/applicationSteps'
 import { useProductCatalog } from '@/hooks/useProducts'
 import { MATCHING_PREFIX, isMatchingId, matchingProduct } from '@/config/loanProducts'
 import { roleLabel } from '@/config/roles'
-import { fetchPrefill, fetchReferrer } from '@/services/applicationsApi'
+import { fetchReferrer } from '@/services/applicationsApi'
 import { readReferral, rememberReferral } from '@/lib/referral'
 
 // What the visitor typed into the loan finder, kept for this browser tab only (it is about their pay).
@@ -39,19 +38,20 @@ const saveFigures = (figures) => {
 
 function LandingPage() {
   const [resumeOpen, setResumeOpen] = useState(false)
-  // The product being started (its id), while the email step is open.
-  const [pendingProductId, setPendingProductId] = useState(null)
   // The loan finder (LoanProducts): who is borrowing, and what they earn, per loan type.
   const [loanType, setLoanType] = useState('personal')
   const [figures, setFigures] = useState(readSavedFigures)
   const { products, loanTypes } = useProductCatalog()
   // A product chosen in the finder, or a loan type's "we'll match you" application (loanProducts.js).
-  const pendingProduct = useMemo(() => {
-    const found = products.find((product) => product.id === pendingProductId)
-    if (found || !isMatchingId(pendingProductId)) return found || null
-    const type = loanTypes.find((entry) => `${MATCHING_PREFIX}${entry.key}` === pendingProductId)
-    return type ? matchingProduct(type, products) : null
-  }, [products, loanTypes, pendingProductId])
+  const productFor = useCallback(
+    (productId) => {
+      const found = products.find((product) => product.id === productId)
+      if (found || !isMatchingId(productId)) return found || null
+      const type = loanTypes.find((entry) => `${MATCHING_PREFIX}${entry.key}` === productId)
+      return type ? matchingProduct(type, products) : null
+    },
+    [products, loanTypes]
+  )
   const [referrer, setReferrer] = useState(null)
   const [searchParams] = useSearchParams()
   const navigate = useNavigate()
@@ -69,9 +69,16 @@ function LandingPage() {
     if (searchParams.get('resume') === '1') setResumeOpen(true)
   }, [searchParams])
 
-  // Every "apply" entry point asks for an email first so the draft can sync from
-  // the very first field; the wizard prefills it and carries on.
-  const handleApply = useCallback((productId) => setPendingProductId(productId), [])
+  // "Apply": straight to the application, which starts by confirming it's them (their ID,
+  // then a code to the contact on record, or one they give), so nothing is asked twice.
+  const handleApply = useCallback(
+    (productId) => {
+      const product = productFor(productId) || products[0]
+      // The figures they qualified on go with them: the wizard caps the amount by them, and submits them.
+      navigate(applyPath(product.id, 0, product.form), { state: { eligibility: figures[product.loanType] || null } })
+    },
+    [productFor, products, figures, navigate]
+  )
 
   // "Apply" from the header, hero and footer: the loan finder, on the type chosen (its first, if that one isn't offered).
   const handleChooseType = useCallback((type) => {
@@ -87,33 +94,6 @@ function LandingPage() {
     })
   }, [])
 
-  const handleStart = useCallback(
-    async (email) => {
-      const product = pendingProduct || products[0]
-      const start = applyPath(product.id, 0, product.form)
-      // The figures they qualified on go with them: the wizard caps the amount by them, and submits them.
-      const eligibility = figures[product.loanType] || null
-      if (!email) {
-        setPendingProductId(null)
-        navigate(start, { state: { eligibility } })
-        return
-      }
-
-      // A failed lookup just means starting blank, never a blocked start. Earlier
-      // applications are looked up by form: the same questions, whatever the product.
-      const formState = await fetchPrefill(email, product.form).catch(() => null)
-      if (!formState) {
-        setPendingProductId(null)
-        navigate(start, { state: { startEmail: email, eligibility } })
-        return
-      }
-
-      setPendingProductId(null)
-      navigate(start, { state: { startEmail: email, prefilledApplication: formState, eligibility } })
-    },
-    [navigate, pendingProduct, products, figures]
-  )
-
   const handleResume = useCallback(() => setResumeOpen(true), [])
 
   const handleCheckStatus = useCallback((email) => navigate('/my-applications', { state: { email } }), [navigate])
@@ -127,7 +107,8 @@ function LandingPage() {
 
   return (
     <div className="flex min-h-screen flex-col bg-background">
-      <SiteHeader onApply={handleChooseType} onResume={handleResume} />
+      {/* "Apply and get matched": the loan category chosen in the finder (personal at first). */}
+      <SiteHeader onApply={handleChooseType} onMatch={() => handleApply(`${MATCHING_PREFIX}${loanType}`)} onResume={handleResume} />
 
       {referrer ? (
         <div className="border-b bg-primary/5">
@@ -151,14 +132,6 @@ function LandingPage() {
 
       <SiteFooter />
 
-      <StartApplicationDialog
-        open={Boolean(pendingProductId)}
-        onOpenChange={(open) => {
-          if (!open) setPendingProductId(null)
-        }}
-        productName={pendingProduct?.matching ? `${pendingProduct.name.toLowerCase()} application` : pendingProduct?.name}
-        onStart={handleStart}
-      />
 
       <ResumeApplicationDialog open={resumeOpen} onOpenChange={setResumeOpen} onResumed={handleResumed} />
 

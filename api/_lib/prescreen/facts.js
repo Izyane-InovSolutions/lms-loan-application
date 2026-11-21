@@ -136,6 +136,9 @@ export const computeFacts = (application, documents, extras = {}) => {
   facts.address_found = extras.addressFound ?? null
   facts.crb_score = extras.crbScore ?? null
   // Earlier applications with this ID and other contact details, or these details and another ID (identityFlags.js); null from before the check.
+  // Found on the institution's records, and confirmed with a contact on that record (or by an
+  // agent); false when they used another contact or changed the ID; null when not looked up or not found.
+  facts.kyc_confirmed_on_record = application.kyc?.found ? ['record', 'agent'].includes(application.kyc.contact) : null
   facts.id_contact_mismatch = Array.isArray(application.identityFlags) ? application.identityFlags.length > 0 : null
 
   return facts

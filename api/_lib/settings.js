@@ -7,6 +7,7 @@ import { AI_FIELDS, AI_SECRET_FIELDS } from '../../src/config/aiProviders.js'
 import { DEFAULT_STAGES_CONFIG } from '../../src/config/stages.js'
 import { DEFAULT_BRAND_NAME } from '../../src/config/branding.js'
 import { DEFAULT_THEME } from '../../src/config/theme.js'
+import { DEFAULT_KYC } from '../../src/config/kyc.js'
 
 /*
  * Admin-editable configuration. Each key has a default here, so a fresh database
@@ -17,6 +18,8 @@ import { DEFAULT_THEME } from '../../src/config/theme.js'
  * to the browser; the admin sees whether one is set, not its value.
  */
 export const SETTING_DEFAULTS = {
+  // The institution's customer records platform, to fill application forms (src/config/kyc.js).
+  kyc: DEFAULT_KYC,
   /*
    * The name and logo applicants and staff see (Settings → Branding). `logo` is the stored
    * file ({ pathname, url, contentType, size, filename, version }), or null for the
@@ -185,6 +188,8 @@ export const SETTING_DEFAULTS = {
     // Applicants confirm their email or phone with a one-time code before their
     // application is saved, against applications in someone else's name (verification.js).
     verifyAtStart: true,
+    // Once confirmed, applicants may fill the form from their last loan (portal or LMS).
+    prefillFromLastLoan: true,
   },
   // Built-in roles an admin deleted (Team → Roles). They stay in the code, so they can be
   // brought back; until then they're left out of every list (api/_lib/roles.js).
@@ -217,6 +222,7 @@ const SECRET_FIELDS = {
   zra: ['apiKey', 'username', 'password'],
   crb: ['transportPassword', 'messagePassword'],
   sms: ['apiKey'],
+  kyc: ['apiKey', 'bearerToken', 'password', 'clientSecret'],
   ai: AI_SECRET_FIELDS,
 }
 

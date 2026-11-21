@@ -71,6 +71,11 @@ export const documentSkipReason = (slot, form) => {
   return ''
 }
 
+export const GENDER_OPTIONS = ['Male', 'Female']
+export const MARITAL_STATUS_OPTIONS = ['Single', 'Married', 'Widowed', 'Divorced', 'Separated']
+export const NATIONALITY_OPTIONS = ['Kenya', 'Malawi', 'Rwanda', 'Uganda', 'Zambia', 'Zimbabwe']
+export const RELATIONSHIP_OPTIONS = ['Parent', 'Sibling', 'Spouse', 'Child', 'Grandparent', 'Grandchild', 'Uncle/Aunt', 'Nephew/Niece', 'Cousin', 'Guardian', 'Friend']
+
 /** Zambians give their NRC; anyone else their passport. Blank (not chosen yet, or from before) counts as Zambian. */
 export const isZambian = (nationality) => !nationality || nationality === 'Zambia'
 

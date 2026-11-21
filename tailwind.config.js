@@ -9,8 +9,9 @@ export default {
       center: true,
       padding: { DEFAULT: '1.25rem', lg: '2rem' },
       // Explicit per-breakpoint caps: the shadcn default only sets `2xl`, which
-      // leaves the container full-bleed on every screen below 1536px.
-      screens: { sm: '640px', md: '768px', lg: '1024px', xl: '1200px', '2xl': '1280px' },
+      // leaves the container full-bleed on every screen below 1536px. Wide enough on
+      // large screens for the landing header's links and actions on one line.
+      screens: { sm: '640px', md: '768px', lg: '1024px', xl: '1280px', '2xl': '1440px' },
     },
     extend: {
       colors: {

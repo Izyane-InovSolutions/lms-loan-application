@@ -86,6 +86,7 @@ const datePickerSlotProps = (id) => ({
  */
 export function WizardStep(props) {
   const {
+    confirmedFields = new Set(),
     addCollateralItem,
     addGuarantor,
     updateGuarantor,
@@ -153,8 +154,11 @@ export function WizardStep(props) {
 
   const renderField = (label, value, onChange, type = 'text', placeholder = '', inputProps = {}, required = false, errorKey = '') => {
     const name = errorKey || label
+    // Confirmed with a code at the start (or the ID looked up on the customer's record): not asked again.
+    const confirmed = confirmedFields.has(errorKey) && String(value ?? '').trim()
+    if (confirmed) inputProps = { ...inputProps, readOnly: true }
     return (
-      <FormField key={label} name={name} label={label} required={required} error={validationErrors[errorKey]}>
+      <FormField key={label} name={name} label={label} required={required} error={validationErrors[errorKey]} hint={confirmed ? 'Confirmed when you started.' : undefined}>
         {(field) => (
           type === 'tel' ? (
             <div className="flex h-11 overflow-hidden rounded-md border border-input bg-background transition-colors focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2 has-[input[aria-invalid=true]]:border-destructive">
