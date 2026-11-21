@@ -115,6 +115,10 @@ export function WizardStep(props) {
     onChooseProduct,
     missingDocuments,
     documentIncome,
+    documentIncomeValid = false,
+    documentIncomeProblem = null,
+    incomeManual = false,
+    setIncomeManual = () => {},
     step,
     stepAt,
     products = [],
@@ -519,7 +523,16 @@ export function WizardStep(props) {
           Your {source} {selectedLoanType === 'personal' ? 'shows' : 'show'} <span className="font-semibold">{formatKwacha(check.found)}</span>, but you entered{' '}
           <span className="font-semibold">{formatKwacha(check.stated)}</span>. An officer will compare them before deciding.
         </span>
-        <Button type="button" variant="outline" size="sm" onClick={() => setLoanData((prev) => ({ ...prev, income: String(Math.floor(check.found)) }))}>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => {
+            // Back to the document's figure (kept in step with it while it is valid).
+            if (documentIncomeValid) setIncomeManual(false)
+            setLoanData((prev) => ({ ...prev, income: String(Math.floor(check.found)) }))
+          }}
+        >
           Use {formatKwacha(Math.floor(check.found))}
         </Button>
       </div>
@@ -531,16 +544,45 @@ export function WizardStep(props) {
   /** What they earn (from the loan finder, or entered here): it sets what they qualify for and the largest amount. */
   const renderIncome = () => {
     const words = INCOME_LABELS[selectedLoanType]
+    const source = selectedLoanType === 'personal' ? 'payslip' : 'bank statements'
     const setFigure = (field) => (event) => setLoanData((prev) => ({ ...prev, [field]: event.target.value.replace(/[^0-9]/g, '') }))
     return (
       <FieldGroup title="What you earn" description="This decides what you qualify for. We check it against your documents." icon={Wallet} columns={2}>
-        <FormField name="loanData.income" label={`${words.label} (K)`} required error={validationErrors['loanData.income']} hint={words.hint}>
-          {(field) => <Input {...field} inputMode="numeric" value={loanData.income || ''} placeholder="e.g. 12000" onChange={setFigure('income')} />}
-        </FormField>
+        {documentIncomeValid && !incomeManual ? (
+          // Read from a valid payslip (or bank statements): shown, not typed.
+          <div id="field-loanData.income" tabIndex={-1} className="space-y-1.5">
+            <p className="text-sm font-medium text-foreground">{words.label} (K)</p>
+            <p className="flex items-center gap-2 text-2xl font-bold tracking-tight text-foreground">
+              {formatKwacha(Math.floor(documentIncome))}
+              <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-0.5 text-xs font-medium text-success">
+                <CheckCircle2 className="size-3.5" aria-hidden="true" />
+                From your {source}
+              </span>
+            </p>
+            <button
+              type="button"
+              onClick={() => setIncomeManual(true)}
+              className="rounded text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              Enter a different figure
+            </button>
+            {validationErrors['loanData.income'] ? <p role="alert" className="text-sm font-medium text-destructive">{validationErrors['loanData.income']}</p> : null}
+          </div>
+        ) : (
+          <FormField
+            name="loanData.income"
+            label={`${words.label} (K)`}
+            required
+            error={validationErrors['loanData.income']}
+            hint={documentIncome && documentIncomeProblem && documentIncomeProblem !== 'unread' ? `We couldn’t use the figure on your ${source}: ${documentIncomeProblem} ${words.hint}` : words.hint}
+          >
+            {(field) => <Input {...field} inputMode="numeric" value={loanData.income || ''} placeholder="e.g. 12000" onChange={setFigure('income')} />}
+          </FormField>
+        )}
         <FormField name="loanData.commitments" label="Other loan repayments a month (K)" hint="What you already repay on other loans. Leave blank if none.">
           {(field) => <Input {...field} inputMode="numeric" value={loanData.commitments || ''} placeholder="0" onChange={setFigure('commitments')} />}
         </FormField>
-        {renderIncomeCheck()}
+        {documentIncomeValid && !incomeManual ? null : renderIncomeCheck()}
         {eligibility?.status === 'eligible' ? (
           <p className="text-sm text-foreground md:col-span-2">
             You qualify for up to <span className="font-semibold">{formatKwacha(eligibility.maxAmount)}</span>, with repayments of up to {formatKwacha(eligibility.budget)} a month.

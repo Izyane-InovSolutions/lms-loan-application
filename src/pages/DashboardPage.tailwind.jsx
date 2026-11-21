@@ -585,12 +585,38 @@ function DashboardPage() {
 
   // What the documents show the applicant earns (the AI's reading of their payslip, or a
   // business's bank statements), to set beside the figure they type on Loan Terms.
+  const incomeSlot = selectedLoanType === 'personal' ? 'payslips' : 'bankStatements'
   const documentIncome = (() => {
-    const entry = documentAnalyses[selectedLoanType === 'personal' ? 'payslips' : 'bankStatements']
+    const entry = documentAnalyses[incomeSlot]
     const read = entry?.analysis?.extracted?.[selectedLoanType === 'personal' ? 'netPay' : 'averageMonthlyCredits']
     const amount = Number(String(read ?? '').replace(/[^0-9.]/g, ''))
     return amount > 0 ? amount : null
   })()
+
+  /*
+   * Whether that figure can be used as what they earn, and if not why: the document must be
+   * the one asked for, clearly legible, not expired or outdated, and carry the applicant's
+   * own name (and NRC). The same checks the upload field's notes show.
+   */
+  const documentIncomeProblem = (() => {
+    const analysis = documentAnalyses[incomeSlot]?.status === 'done' ? documentAnalyses[incomeSlot].analysis : null
+    if (!analysis || !documentIncome) return 'unread'
+    if (analysis.matchesExpectedType === false || analysis.issues?.some((issue) => issue.code === 'wrong_document')) return 'It doesn’t look like the document asked for.'
+    if ((analysis.legibility && analysis.legibility !== 'clear') || analysis.issues?.some((issue) => issue.code === 'illegible')) return 'It isn’t clear enough to read with confidence.'
+    if (analysis.issues?.some((issue) => issue.code === 'expired' || issue.code === 'outdated')) return 'It isn’t recent enough.'
+    const mismatches = findFormMismatches(analysis, expectedForSlot(incomeSlot))
+    return mismatches.length ? mismatches.join(' ') : null
+  })()
+  const documentIncomeValid = documentIncomeProblem === null
+
+  // A valid document's figure is what they earn, unless they choose to enter another
+  // ("Enter a different figure"); the officer then sees both side by side.
+  const [incomeManual, setIncomeManual] = useState(false)
+  useEffect(() => {
+    if (step !== 'loan-terms' || matchType || !documentIncomeValid || incomeManual) return
+    const figure = String(Math.floor(documentIncome))
+    setLoanData((prev) => (prev.income === figure ? prev : { ...prev, income: figure }))
+  }, [step, matchType, documentIncomeValid, documentIncome, incomeManual])
 
   /** What FileUploadField shows for a slot, with form mismatches computed against current answers. */
   const analysisFor = (fieldKey) => {
@@ -1730,6 +1756,10 @@ function DashboardPage() {
                 onChooseProduct={chooseMatchedProduct}
                 missingDocuments={missingDocuments}
                 documentIncome={documentIncome}
+                documentIncomeValid={documentIncomeValid}
+                documentIncomeProblem={documentIncomeProblem}
+                incomeManual={incomeManual}
+                setIncomeManual={setIncomeManual}
                 maxTenure={maxTenure}
                 minAmount={minAmount}
                 minTenure={minTenure}
