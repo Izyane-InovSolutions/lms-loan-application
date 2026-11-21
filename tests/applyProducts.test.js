@@ -6,10 +6,11 @@ import { extractFiles } from '../src/utils/fileTree.js'
 
 describe('wizard URLs for products', () => {
   it('keeps the built-in products’ paths and gives added ones their form’s steps', () => {
-    expect(applyPath('personal', 2)).toBe('/apply/personal/documents')
+    expect(applyPath('personal', 3)).toBe('/apply/personal/documents')
     expect(applyPath('business', 1)).toBe('/apply/business/directors-applicant')
     expect(applyPath('asset-finance', 0, 'business')).toBe('/apply/asset-finance/business-information')
-    expect(applyPath('civil-servant', 3, 'personal')).toBe('/apply/civil-servant/loan-terms')
+    expect(applyPath('civil-servant', 4, 'personal')).toBe('/apply/civil-servant/loan-terms')
+    expect(applyPath('civil-servant', 2, 'personal')).toBe('/apply/civil-servant/loan-type')
   })
 
   it('falls back to the personal form for an unknown form or a bad product id', () => {

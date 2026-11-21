@@ -3,6 +3,8 @@ import {
   Briefcase,
   Building2,
   Calculator,
+  CheckCircle2,
+  FileSearch,
   Eye,
   FileText,
   Loader2,
@@ -25,7 +27,8 @@ import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs'
 import dayjs from 'dayjs'
 import { aiFailureMessage, isRetryableAiFailure } from '../../services/aiApi'
 import { COLLATERAL_REQUIREMENTS, MAX_COLLATERAL_ITEMS, acceptedItems, collateralLendingValue, collateralRequirement, collateralValue, describeTerms, itemLabel, lendingValue, pledgeTerms, typeLabel } from '@/config/collateral'
-import { formatKwacha } from '@/config/loanProducts'
+import { describeInterest, formatKwacha, subcategoryOf } from '@/config/loanProducts'
+import { cn } from '@/lib/utils'
 import { INCOME_LABELS, compareIncome } from '@/config/eligibility'
 import { GUARANTOR_REQUIREMENTS, MAX_GUARANTORS, RELATIONSHIPS, asksForGuarantors, guarantorsOf } from '@/config/guarantors'
 import { acceptsPhotos, collateralProofs, readDocument } from '@/utils/documentSlots'
@@ -112,7 +115,11 @@ export function WizardStep(props) {
     onChooseProduct,
     missingDocuments,
     documentIncome,
-    currentStep,
+    step,
+    stepAt,
+    products = [],
+    loanTypes = [],
+    onSelectProduct,
     getUploadStatus,
     goToStep,
     handleDirectorDocumentInputChange,
@@ -287,6 +294,7 @@ export function WizardStep(props) {
   ]
 
   const loanTermRows = [
+    renderSummaryRow('Loan', product.name),
     renderSummaryRow('Loan amount', `K${loanData.amount.toLocaleString()}`),
     renderSummaryRow('Tenure', `${loanData.tenure} months`),
     renderSummaryRow('Monthly repayment', `K${monthlyRepayment.toFixed(2)}`),
@@ -627,7 +635,7 @@ export function WizardStep(props) {
                       </ul>
                     ) : null}
                     {problems.length ? (
-                      <Button type="button" variant="outline" size="sm" onClick={() => goToStep(2)}>
+                      <Button type="button" variant="outline" size="sm" onClick={() => goToStep(stepAt('documents'))}>
                         Replace {problems.length === 1 ? 'the document' : 'the documents'}
                       </Button>
                     ) : noneFit ? (
@@ -690,7 +698,7 @@ export function WizardStep(props) {
             <span>
               The {product.name} also needs: <span className="font-medium">{missingDocuments.map((document) => document.label).join(', ')}</span>.
             </span>
-            <Button type="button" variant="outline" size="sm" onClick={() => goToStep(2)}>
+            <Button type="button" variant="outline" size="sm" onClick={() => goToStep(stepAt('documents'))}>
               Add {missingDocuments.length === 1 ? 'it' : 'them'}
             </Button>
           </div>
@@ -855,10 +863,166 @@ export function WizardStep(props) {
         )
       : null
 
+  /**
+   * The Loan type step: the loans of this form, by loan type, and each type's "we'll match
+   * you" application. The next step asks for the documents of the loan chosen here.
+   */
+  const renderLoanType = () => {
+    const types = loanTypes.filter((type) => type.form === selectedLoanType && products.some((entry) => !entry.matching && entry.loanType === type.key))
+    const card = (option, body) => {
+      const chosen = option.id === product.id
+      return (
+        <button
+          key={option.id}
+          type="button"
+          role="radio"
+          aria-checked={chosen}
+          onClick={() => onSelectProduct(option.id)}
+          className={cn(
+            'flex h-full flex-col gap-1 rounded-lg border bg-card p-4 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            option.matching && 'border-dashed',
+            chosen ? 'border-primary ring-1 ring-primary' : 'hover:bg-muted/40'
+          )}
+        >
+          {body}
+        </button>
+      )
+    }
+    return (
+      <div className="grid gap-6">
+        {types.map((type) => {
+          const options = products.filter((entry) => !entry.matching && entry.loanType === type.key)
+          const matcher = products.find((entry) => entry.matching && entry.loanType === type.key)
+          return (
+            <FieldGroup key={type.key} title={type.label} description="Choose the loan you are applying for. The next step asks for the documents it needs." icon={Wallet} columns={2}>
+              <div role="radiogroup" aria-label={type.label} className="grid gap-3 md:col-span-2 md:grid-cols-2">
+                {options.map((option) => {
+                  const required = (option.documents || []).filter((document) => document.required).length
+                  return card(
+                    option,
+                    <>
+                      <span className="flex items-start justify-between gap-2">
+                        <span className="font-semibold text-foreground">{option.name}</span>
+                        {option.id === product.id ? <CheckCircle2 className="size-5 shrink-0 text-primary" aria-hidden="true" /> : null}
+                      </span>
+                      <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{subcategoryOf(option, loanTypes)?.label}</span>
+                      {option.description ? <span className="text-sm text-muted-foreground">{option.description}</span> : null}
+                      <span className="mt-2 text-sm text-foreground">
+                        {formatKwacha(option.minAmount)} – {formatKwacha(option.maxAmount)} · {option.minTenure} to {option.maxTenure} months
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        Interest {describeInterest(option)} · {required} {required === 1 ? 'document' : 'documents'} to upload
+                      </span>
+                    </>
+                  )
+                })}
+                {matcher
+                  ? card(
+                      matcher,
+                      <>
+                        <span className="flex items-start justify-between gap-2">
+                          <span className="flex items-center gap-2 font-semibold text-foreground">
+                            <FileSearch className="size-4 text-primary" aria-hidden="true" />
+                            Not sure which? We’ll match you
+                          </span>
+                          {matcher.id === product.id ? <CheckCircle2 className="size-5 shrink-0 text-primary" aria-hidden="true" /> : null}
+                        </span>
+                        <span className="text-sm text-muted-foreground">
+                          Upload your documents and we show the {type.label.toLowerCase()} they qualify you for, so you can choose one.
+                        </span>
+                      </>
+                    )
+                  : null}
+              </div>
+            </FieldGroup>
+          )
+        })}
+      </div>
+    )
+  }
+
+  /**
+   * A loan chosen on the Loan type step, checked against the documents uploaded (the server's
+   * product eligibility rules, as for "we'll match you"). When they rule it out, the loans of
+   * its type the documents do qualify them for are offered instead. Never blocking: the
+   * officer sees the same checks on the case.
+   */
+  const renderDocumentCheck = () => {
+    const ready = match.status === 'ready' || match.status === 'refreshing'
+    if (match.status === 'loading') return <p className="text-sm text-muted-foreground">Checking your documents against this loan…</p>
+    if (!ready) return null
+    const own = match.products.find((result) => result.id === product.id)
+    if (!own || own.status === 'unknown') return null
+    const nameOf = (id) => products.find((entry) => entry.id === id)?.name || id
+    if (own.status === 'eligible') {
+      return (
+        <p role="status" className="flex items-start gap-2 rounded-md bg-success/10 px-4 py-3 text-sm text-foreground">
+          <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-success" aria-hidden="true" />
+          <span>
+            Your documents qualify you for the {product.name}, up to <span className="font-semibold">{formatKwacha(own.maxAmount)}</span>.
+          </span>
+        </p>
+      )
+    }
+    const alternatives = match.products.filter((result) => result.id !== product.id && result.status === 'eligible')
+    const problems = match.documentProblems || []
+    return (
+      <div role="status" className="space-y-3 rounded-lg border border-warning/40 bg-warning/10 p-4 text-sm">
+        <div>
+          <p className="font-semibold text-foreground">Your documents don’t meet the {product.name}’s requirements</p>
+          {own.reasons.length ? (
+            <ul className="mt-1 list-disc space-y-0.5 pl-5 text-foreground">
+              {own.reasons.map((reason) => (
+                <li key={reason}>{reason}</li>
+              ))}
+            </ul>
+          ) : null}
+        </div>
+        {problems.length ? (
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="text-muted-foreground">
+              {problems.map((entry) => `${entry.label}: ${entry.problems.join(' ')}`).join(' ')}
+            </span>
+            <Button type="button" variant="outline" size="sm" onClick={() => goToStep(stepAt('documents'))}>
+              Replace {problems.length === 1 ? 'the document' : 'the documents'}
+            </Button>
+          </div>
+        ) : null}
+        {alternatives.length ? (
+          <div>
+            <p className="font-medium text-foreground">Based on your documents, you qualify for:</p>
+            <ul className="mt-2 divide-y rounded-md border bg-card">
+              {alternatives.map((result) => (
+                <li key={result.id} className="flex flex-wrap items-center justify-between gap-3 p-3">
+                  <span>
+                    <span className="block font-medium text-foreground">{nameOf(result.id)}</span>
+                    <span className="block text-success">
+                      Up to {formatKwacha(result.maxAmount)}, repaying up to {formatKwacha(result.budget)} a month.
+                    </span>
+                  </span>
+                  <Button type="button" size="sm" onClick={() => onChooseProduct(result.id)}>
+                    Switch to this loan
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : (
+          <p className="text-muted-foreground">None of our other loans of this type fit your documents either. You can still apply: an officer will look at it.</p>
+        )}
+      </div>
+    )
+  }
+
   const renderLoanTerms = () => (
     <div className={choosingProduct ? 'grid gap-6' : 'grid gap-6 xl:grid-cols-[1.35fr_1fr]'}>
       <div className="grid content-start gap-6">
-        {matchType ? renderMatch() : renderIncome()}
+        {matchType ? renderMatch() : (
+          <>
+            {renderDocumentCheck()}
+            {renderIncome()}
+          </>
+        )}
         {choosingProduct ? null : (
           <>
             <FieldGroup title="Choose your loan" description="Drag the slider or type an exact amount." icon={Wallet} columns={2}>
@@ -1009,11 +1173,11 @@ export function WizardStep(props) {
           renderSummaryRow('Relationship', personalData.employmentInfo.nextOfKinRelationship),
         ], 1)}
 
-          <SummarySection title="Documents" stepIndex={2} onEdit={goToStep} plain>
+          <SummarySection title="Documents" stepIndex={stepAt('documents')} onEdit={goToStep} plain>
             <AttachmentList attachments={personalAttachments} onPreview={setPreviewAttachment} />
           </SummarySection>
 
-          {renderSummarySection('Loan terms', loanTermRows, 3)}
+          {renderSummarySection('Loan terms', loanTermRows, stepAt('loan-terms'))}
           {renderCollateralSummary()}
           {renderGuarantorSummary()}
         </div>
@@ -1059,11 +1223,11 @@ export function WizardStep(props) {
             1
           )}
 
-          <SummarySection title="Documents" stepIndex={2} onEdit={goToStep} plain>
+          <SummarySection title="Documents" stepIndex={stepAt('documents')} onEdit={goToStep} plain>
             <AttachmentList attachments={businessAttachments} onPreview={setPreviewAttachment} />
           </SummarySection>
 
-          {renderSummarySection('Loan terms', loanTermRows, 3)}
+          {renderSummarySection('Loan terms', loanTermRows, stepAt('loan-terms'))}
           {renderCollateralSummary()}
           {renderGuarantorSummary()}
         </div>
@@ -1073,8 +1237,8 @@ export function WizardStep(props) {
 
   const renderStepContent = () => {
     if (selectedLoanType === 'personal') {
-      switch (currentStep) {
-        case 0:
+      switch (step) {
+        case 'personal-information':
           return (
             <div className="grid gap-6">
               <FieldGroup title="Your name" description="Enter your names exactly as they appear on your NRC or passport." icon={User} columns={3}>
@@ -1100,7 +1264,7 @@ export function WizardStep(props) {
               </FieldGroup>
             </div>
           )
-        case 1:
+        case 'residence-employment':
           return (
             <div className="grid gap-6">
               <FieldGroup title="Residence & employment" description="Where you live and what you do." icon={Briefcase} columns={3}>
@@ -1122,24 +1286,26 @@ export function WizardStep(props) {
               </FieldGroup>
             </div>
           )
-        case 2:
+        case 'loan-type':
+          return renderLoanType()
+        case 'documents':
           return (
             <FieldGroup title="Supporting documents" description="Attach each document below. They are sent when you submit the application." icon={FolderOpen} columns={2}>
               {renderProductDocuments()}
               {collateralNext}
             </FieldGroup>
           )
-        case 3:
+        case 'loan-terms':
           return renderLoanTerms()
-        case 4:
+        case 'overview':
           return renderPersonalOverview()
         default:
           return null
       }
     }
 
-    switch (currentStep) {
-      case 0:
+    switch (step) {
+      case 'business-information':
         return (
           <div className="grid gap-6">
             <FieldGroup title="Company details" description="As registered with PACRA." icon={Building2} columns={2}>
@@ -1156,7 +1322,7 @@ export function WizardStep(props) {
             </FieldGroup>
           </div>
         )
-      case 1:
+      case 'directors-applicant':
         return (
           <div className="grid gap-6">
             <fieldset className="rounded-lg border bg-card p-5 shadow-soft sm:p-6">
@@ -1239,7 +1405,9 @@ export function WizardStep(props) {
             </FieldGroup>
           </div>
         )
-      case 2:
+      case 'loan-type':
+        return renderLoanType()
+      case 'documents':
         return (
           <div className="grid gap-6">
             <FieldGroup title="Company documents" description="Attach each document below. They are sent when you submit the application." icon={FolderOpen} columns={2}>
@@ -1319,9 +1487,9 @@ export function WizardStep(props) {
             </fieldset>
           </div>
         )
-      case 3:
+      case 'loan-terms':
         return renderLoanTerms()
-      case 4:
+      case 'overview':
         return renderBusinessOverview()
       default:
         return null

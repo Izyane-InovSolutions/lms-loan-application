@@ -91,7 +91,7 @@ approve an amount above their own approval limit (set per person in **Team**).
 
 ### 2. Filling in the application (draft)
 
-The form has five steps. Each step has its own address, so the browser's Back button and
+The form has six steps. Each step has its own address, so the browser's Back button and
 refreshing the page work as expected.
 
 **Confirming it's them.** Before any question is asked, the applicant sees "First, confirm it's you". They enter their email (and mobile number, when texts can be sent) and confirm one of them with a 6-digit code. The form then opens with those details filled in, and the application is saved to the server from then on. Someone with an application already in progress can resume it from the same screen.
@@ -117,6 +117,7 @@ A code only proves the applicant controls that email or phone. So at submission 
 | --- | --- |
 | Personal information | Business information |
 | Residence & Employment | Directors & Applicant |
+| Loan type | Loan type |
 | Documents | Documents |
 | Loan Terms | Loan Terms |
 | Overview | Overview |
@@ -137,11 +138,19 @@ What happens along the way:
 - **AI document checks.** Each upload is checked (right document, readable, name and NRC
   match, figures such as net pay read from payslips). The notes guide the officer and
   never decide anything.
+- **Loan type.** The applicant chooses the loan before uploading anything, so the next
+  step asks only for that loan's documents. A loan picked on the website is already
+  selected. Each loan type also offers *Not sure which? We'll match you*: the applicant
+  uploads the type's documents and chooses from the loans they qualify for on Loan Terms.
 - **Documents.** Each product sets the documents it asks for and which are required. Only
   real PDFs and photos are accepted. Uploads are limited to 4 MB per file (3 MB for photos).
 - **Loan Terms.** Amount and tenure within the product's limits (capped by what the
   customer can afford), **collateral** (items from the catalog, with an estimated value
-  and optional proof) and **guarantors**, if the product asks for them.
+  and optional proof) and **guarantors**, if the product asks for them. The chosen loan
+  is first checked against the uploaded documents (the product eligibility rules). If they
+  rule it out, the reasons are shown with the loans of the same type the documents do
+  qualify for, each with *Switch to this loan*. Switching files the application as matched.
+  The check doesn't block: the applicant can still apply for the loan they chose.
 - **Email addresses** must be in a normal format with any domain (`.com`, `.net`,
   `.co.zm`, ...).
 
@@ -363,7 +372,7 @@ Unless a scenario says otherwise, start from default settings.
 
 | ID | P | Scenario | Steps | Expected |
 | --- | --- | --- | --- | --- |
-| B1 | 1 | Personal loan happy path | Complete all five steps with valid data and documents | Each step validates. Overview shows everything entered. |
+| B1 | 1 | Personal loan happy path | Complete all six steps with valid data and documents | Each step validates. Overview shows everything entered. |
 | B2 | 1 | Business loan happy path | As B1 on the business form, with directors | Director fields and business documents are required as per the legal form |
 | B3 | 1 | Email domains accepted | Enter `a@b.com`, `a@b.net`, `a@company.co.zm`, `a@mail.gov.zm` | All accepted |
 | B4 | 1 | Bad emails rejected | Enter `a@b`, `a@b.c`, `a@.com`, `a b@c.com` | "Enter a valid email address, e.g. name@example.com." |

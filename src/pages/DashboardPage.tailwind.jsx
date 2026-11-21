@@ -58,6 +58,8 @@ import {
   isProductSlug,
   isValidStepSlug,
   stepIndex,
+  stepIndexOf,
+  stepSlug,
 } from '@/config/applicationSteps'
 import { WizardStep } from './apply/WizardSteps'
 import { DraftContactConsent } from '@/components/application/DraftContactConsent'
@@ -132,6 +134,12 @@ function DashboardPage() {
     title === 'Loan Terms' && asksForCollateral(product) ? 'Loan & Collateral' : title
   )
   const currentStep = stepIndex(selectedLoanType, stepParam)
+  // The step by name ('loan-type', 'documents', 'loan-terms', …), so nothing depends on its position.
+  const step = stepSlug(selectedLoanType, currentStep)
+  const stepAt = useCallback((slug) => stepIndexOf(selectedLoanType, slug), [selectedLoanType])
+  // The first two steps are the applicant's own details (personal or business form).
+  const onApplicantStep = step === 'personal-information' || step === 'business-information'
+  const onDetailsStep = step === 'residence-employment' || step === 'directors-applicant'
 
   // Mirrors of the derived values, updated eagerly by the setters below so that
   // two setter calls in the same tick (draft hydration sets product *and* step)
@@ -444,14 +452,18 @@ function DashboardPage() {
   // (src/config/productEligibility.js). Asked again when the income they type (only when the
   // documents gave none) or their other repayments change.
   const matchType = choosingProduct ? product.loanType : loanData.matchType || null
+  // A loan chosen on the Loan type step is checked against the documents too: if they rule it
+  // out, the loans of its type they do qualify for are offered instead (WizardSteps, renderDocumentCheck).
+  const checkType = matchType || product.loanType
+  const checkIncome = matchType ? loanData.statedIncome : loanData.income
   const [match, setMatch] = useState({ status: 'idle' })
-  const matchKey = matchType && currentStep === 3 ? JSON.stringify([matchType, draftToken || '', loanData.statedIncome || '', loanData.commitments || '']) : null
+  const matchKey = checkType && step === 'loan-terms' ? JSON.stringify([checkType, draftToken || '', checkIncome || '', loanData.commitments || '']) : null
   useEffect(() => {
     if (!matchKey) return undefined
     let cancelled = false
     setMatch((prev) => ({ ...prev, status: prev.status === 'ready' ? 'refreshing' : 'loading' }))
     const timer = setTimeout(() => {
-      matchLoanProducts(draftToken, { loanType: matchType, data: activeData, income: loanData.statedIncome, commitments: loanData.commitments })
+      matchLoanProducts(draftToken, { loanType: checkType, data: activeData, income: checkIncome, commitments: loanData.commitments })
         .then((result) => !cancelled && setMatch({ status: 'ready', ...result }))
         .catch((error) => !cancelled && setMatch({ status: 'error', message: extractApiError(error) }))
     }, 400)
@@ -474,8 +486,19 @@ function DashboardPage() {
   const chooseMatchedProduct = (id, { acceptDocumentIssues = false } = {}) => {
     const chosen = products.find((entry) => entry.id === id)
     if (!chosen) return
-    setLoanData((prev) => ({ ...prev, matchType, acceptDocumentIssues }))
-    navigateToStep(chosen, 3, { replace: true })
+    // Switching to a loan the documents qualify them for makes it a matched application.
+    // The income they typed stays the stated one until the documents give theirs.
+    setLoanData((prev) => ({ ...prev, matchType: matchType || product.loanType, acceptDocumentIssues, statedIncome: prev.statedIncome || prev.income || '' }))
+    navigateToStep(chosen, stepIndexOf(chosen.form, 'loan-terms'), { replace: true })
+  }
+
+  // The Loan type step: a loan of this form, or the loan type's "we'll match you" application.
+  // Choosing it here is the applicant's own choice, so any earlier match is forgotten.
+  const chooseProduct = (id) => {
+    const chosen = products.find((entry) => entry.id === id)
+    if (!chosen || chosen.id === product.id) return
+    setLoanData((prev) => ({ ...prev, matchType: null, acceptDocumentIssues: false }))
+    navigateToStep(chosen, stepIndexOf(chosen.form, 'loan-type'), { replace: true })
   }
 
   // A matched product may need documents the matching application didn't ask for.
@@ -924,14 +947,14 @@ function DashboardPage() {
     }
 
     // Loan terms: what they earn must qualify them, with an instalment inside their budget.
-    if (currentStep === 3 && choosingProduct) {
+    if (step === 'loan-terms' && choosingProduct) {
       const noneFit = match.status === 'ready' && !match.products.some((result) => result.status === 'eligible')
       const canContinue = match.status === 'ready' && match.products.some((result) => result.canContinue)
       recordError(
         'loanData.product',
         noneFit ? (canContinue ? 'Replace the document listed below, or choose “Continue anyway” on a loan.' : 'None of our loans fit yet. Put right what’s listed below, then choose one.') : 'Choose one of the loans you qualify for.'
       )
-    } else if (currentStep === 3) {
+    } else if (step === 'loan-terms') {
       const unaffordable = (eligibility.status === 'ineligible' && eligibility.reason) || affordabilityError(product, { income: loanData.income, commitments: loanData.commitments }, loanData.amount, loanData.tenure)
       if (unaffordable) recordError('loanData.income', unaffordable)
       if (missingDocuments.length) {
@@ -940,12 +963,12 @@ function DashboardPage() {
     }
 
     // Loan terms: the guarantors the product asks for.
-    if (currentStep === 3 && !choosingProduct) {
+    if (step === 'loan-terms' && !choosingProduct) {
       Object.entries(guarantorErrors(product, activeData)).forEach(([key, message]) => recordError(key, message))
     }
 
     // Loan terms: the collateral the product asks for, and each proof attached.
-    if (currentStep === 3 && collateralAsked) {
+    if (step === 'loan-terms' && collateralAsked) {
       Object.entries(collateralErrors(product, activeData, loanData.amount, collateralCatalog)).forEach(([key, message]) => recordError(key, message))
       collateralRows.forEach((_, index) => {
         collateralProofs(activeData.documents, index).forEach(({ file }) => recordError(`documents.collateral.${index}`, validatePassportFile(file)))
@@ -953,7 +976,7 @@ function DashboardPage() {
     }
 
     if (selectedLoanType === 'personal') {
-      if (currentStep === 0) {
+      if (onApplicantStep) {
         requiredField(personalData.personalInfo.firstName, 'personalInfo.firstName', 'First name is required.')
         requiredField(personalData.personalInfo.surname, 'personalInfo.surname', 'Surname is required.')
         requiredField(personalData.personalInfo.phone, 'personalInfo.phone', 'Phone is required.')
@@ -979,7 +1002,7 @@ function DashboardPage() {
         }
       }
 
-      if (currentStep === 1) {
+      if (onDetailsStep) {
         requiredField(personalData.employmentInfo.residentialAddress, 'employmentInfo.residentialAddress', 'Residential address is required.')
         // Earlier drafts typed it freely; it is now one of the listed choices.
         if (!EMPLOYMENT_OPTIONS.some((option) => option.value === personalData.employmentInfo.occupation)) recordError('employmentInfo.occupation', 'Choose your occupation.')
@@ -998,11 +1021,11 @@ function DashboardPage() {
         }
       }
 
-      if (currentStep === 2) validateProductDocuments()
+      if (step === 'documents') validateProductDocuments()
     }
 
     if (selectedLoanType === 'business') {
-      if (currentStep === 0) {
+      if (onApplicantStep) {
         requiredField(businessData.businessInfo.companyName, 'businessInfo.companyName', 'Company name is required.')
         if (!businessData.businessInfo.tpin?.trim()) recordError('businessInfo.tpin', 'The company TPIN is required.')
         else if (!/^\d{10}$/.test(businessData.businessInfo.tpin.trim())) recordError('businessInfo.tpin', 'A TPIN is 10 digits.')
@@ -1013,7 +1036,7 @@ function DashboardPage() {
         requiredField(businessData.businessInfo.purposeOfLoan, 'businessInfo.purposeOfLoan', 'Purpose of loan is required.')
       }
 
-      if (currentStep === 1) {
+      if (onDetailsStep) {
         const directors = businessData.directorInfo.directors || []
         // Directors, partners or the owner, as the business type has them.
         const people = businessPeople(businessData.businessInfo.businessType)
@@ -1061,7 +1084,7 @@ function DashboardPage() {
         }
       }
 
-      if (currentStep === 2) {
+      if (step === 'documents') {
         validateProductDocuments()
 
         const directorUploads = businessData.documents.directorUploads || []
@@ -1628,10 +1651,10 @@ function DashboardPage() {
             <div className="grid gap-6">
               <ErrorSummary ref={errorSummaryRef} errors={validationErrors} />
 
-              {currentStep === 0 && !assistedBy && customerOptions.helpWithFinishing ? <DraftContactConsent /> : null}
+              {onApplicantStep && !assistedBy && customerOptions.helpWithFinishing ? <DraftContactConsent /> : null}
 
               {/* An agent with a customer: fill the form from the institution's records (Settings → Customer records). */}
-              {currentStep === 0 && assistedBy && kycLookups ? (
+              {onApplicantStep && assistedBy && kycLookups ? (
                 <AgentCustomerLookup
                   form={selectedLoanType}
                   kyc={kycLookups}
@@ -1644,7 +1667,7 @@ function DashboardPage() {
                 />
               ) : null}
 
-              {lastLoan && currentStep === 0 ? (
+              {lastLoan && onApplicantStep ? (
                 <div className="flex flex-col gap-3 rounded-lg border border-primary/25 bg-primary/5 p-4 text-sm sm:flex-row sm:items-center sm:justify-between print:hidden">
                   <p className="text-foreground">
                     We found your last application{lastLoan.from?.reference ? ` (${lastLoan.from.reference}${lastLoan.from.submittedAt ? `, ${new Date(lastLoan.from.submittedAt).toLocaleDateString()}` : ''})` : ''}. Fill this one in from it? You can change anything, and documents are uploaded afresh.
@@ -1660,7 +1683,7 @@ function DashboardPage() {
                 </div>
               ) : null}
 
-              {filledFromRecord && currentStep === 0 ? (
+              {filledFromRecord && onApplicantStep ? (
                 <p className="rounded-lg border border-primary/25 bg-primary/5 p-4 text-sm text-foreground print:hidden">
                   We’ve filled in what we hold on our records. Check every step, and correct anything that’s out of date.
                 </p>
@@ -1686,6 +1709,11 @@ function DashboardPage() {
                 consentCode={consentCode}
                 consentCodeState={consentCodeState}
                 currentStep={currentStep}
+                step={step}
+                stepAt={stepAt}
+                products={products}
+                loanTypes={loanTypes}
+                onSelectProduct={chooseProduct}
                 getUploadStatus={getUploadStatus}
                 goToStep={goToStep}
                 handleDirectorDocumentInputChange={handleDirectorDocumentInputChange}

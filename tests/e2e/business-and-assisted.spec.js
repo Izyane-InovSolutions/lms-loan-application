@@ -32,6 +32,10 @@ const fillBusiness = async (page, { email, company, selfService = false }) => {
   await page.locator(fieldId('directorInfo.applicantPosition')).selectOption('Director')
   await next(page)
 
+  // The loan chosen in the finder is already selected on the Loan type step.
+  await expect(page.getByRole('radio', { checked: true })).toBeVisible()
+  await next(page)
+
   await attachAll(page)
   await next(page)
   // Revenue decides what the business qualifies for; the finder fills it in, an agent types it here.
@@ -119,7 +123,7 @@ test('an agent saves a customer’s application as a draft and continues it late
   await page.waitForURL('**/admin/pipeline')
   const card = page.getByRole('button', { name: /Chipo Mwale/ })
   await expect(card).toBeVisible()
-  await expect(card).toContainText('Step 2 of 5')
+  await expect(card).toContainText('Step 2 of 6')
   await page.screenshot({ path: 'test-results/pipeline-drafts.png', fullPage: true })
 
   await card.click()

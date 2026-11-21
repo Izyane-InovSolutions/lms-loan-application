@@ -77,7 +77,7 @@ describe('drafts in the pipeline', () => {
     await saveDraft(personal('private@example.com'))
     expect(await listed(salesManager)).toContain('private@example.com')
     const [row] = (await salesManager.get('/drafts')).body.drafts.filter((draft) => draft.email === 'private@example.com')
-    expect(row).toMatchObject({ applicantName: 'Mutale Phiri', amount: 8000, currentStep: 1, stepCount: 5, nextStep: 'Residence & Employment', startedByStaff: false })
+    expect(row).toMatchObject({ applicantName: 'Mutale Phiri', amount: 8000, currentStep: 1, stepCount: 6, nextStep: 'Residence & Employment', startedByStaff: false })
     expect(row.contactConsentAt).toBeTruthy()
   })
 
@@ -109,10 +109,10 @@ describe('drafts in the pipeline', () => {
     expect(resumed.status).toBe(200)
     expect(resumed.body.draft.id).toBe(row.id)
     // The token works for the wizard's own saves.
-    const save = await drafts.put('/draft', { ...personal('assisted@example.com', { amount: 9000 }), currentStep: 3 }, { authorization: `Bearer ${resumed.body.draftToken}` })
+    const save = await drafts.put('/draft', { ...personal('assisted@example.com', { amount: 9000 }), currentStep: 4 }, { authorization: `Bearer ${resumed.body.draftToken}` })
     expect(save.status).toBe(200)
     const [updated] = (await dsa.get('/drafts')).body.drafts.filter((draft) => draft.email === 'assisted@example.com')
-    expect(updated).toMatchObject({ amount: 9000, currentStep: 3, nextStep: 'Loan Terms' })
+    expect(updated).toMatchObject({ amount: 9000, currentStep: 4, nextStep: 'Loan Terms' })
 
     // Viewing the whole book is not the same as filling in for customers.
     const noAssist = await admin.patch('/roles/sales_manager', { permissions: ['drafts.view', 'pipeline.view'] })
