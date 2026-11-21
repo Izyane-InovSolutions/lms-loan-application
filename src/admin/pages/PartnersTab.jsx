@@ -1,10 +1,11 @@
 import React, { useRef, useState } from 'react'
-import { Check, FileUp, Loader2, Plus, Search, Trash2, Users } from 'lucide-react'
+import { Check, Download, FileUp, Loader2, Plus, Search, Trash2, Users } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { partnerActive } from '@/config/partners'
+import { downloadStaffTemplate, readStaffFile } from '../staffListFile'
 import { api } from '../api'
 import { EmptyState, Field, FormError, Panel, dateTime } from '../components'
 import { SaveBar, Toggle, useSettingGroup } from './SettingsPage'
@@ -61,7 +62,13 @@ export function PartnersTab({ settings, notify, onSaved }) {
                   </div>
                 </div>
                 {partner.isNew || !partner.id ? (
-                  <p className="mt-3 text-xs text-muted-foreground">Save to upload this partner’s staff list.</p>
+                  <p className="mt-3 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+                    Save to upload this partner’s staff list.
+                    <button type="button" onClick={() => downloadTemplate(partner, notify)} className="inline-flex items-center gap-1 rounded font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                      <Download className="size-3.5" aria-hidden="true" />
+                      Download the template
+                    </button>
+                  </p>
                 ) : (
                   <StaffList partner={partner} notify={notify} onUploaded={onSaved} />
                 )}
@@ -91,7 +98,11 @@ export function PartnersTab({ settings, notify, onSaved }) {
   )
 }
 
-/** A partner's staff list: its state, a CSV upload that replaces it, and a lookup of one NRC. */
+/** Downloads the Excel template, saying so if it can't be made. */
+const downloadTemplate = (partner, notify) =>
+  downloadStaffTemplate(partner).catch(() => notify('The template couldn’t be made. Try again.'))
+
+/** A partner's staff list: its state, an upload (Excel or CSV) that replaces it, and a lookup of one NRC. */
 function StaffList({ partner, notify, onUploaded }) {
   const input = useRef(null)
   const [uploading, setUploading] = useState(false)
@@ -108,7 +119,9 @@ function StaffList({ partner, notify, onUploaded }) {
     setError('')
     setResult(null)
     try {
-      const csv = await file.text()
+      // An Excel sheet is read here into the same CSV text a CSV upload sends.
+      const csv = await readStaffFile(file)
+      if (!csv.trim()) throw new Error('That file has no rows to read.')
       const response = await api(`/admin/partners/${partner.id}/staff`, { method: 'POST', body: { csv } })
       setResult(response)
       notify(`Staff list uploaded: ${response.count.toLocaleString()} people`)
@@ -143,13 +156,21 @@ function StaffList({ partner, notify, onUploaded }) {
               : 'None uploaded. The partner can still confirm applicants without one.'}
           </p>
         </div>
-        <input ref={input} type="file" accept=".csv,text/csv" className="sr-only" onChange={(event) => upload(event.target.files?.[0])} aria-label={`Staff list CSV for ${partner.name}`} />
-        <Button variant="outline" size="sm" onClick={() => input.current?.click()} disabled={uploading}>
-          {uploading ? <Loader2 className="animate-spin" /> : <FileUp />}
-          {list?.count ? 'Replace staff list' : 'Upload staff list'}
-        </Button>
+        <input ref={input} type="file" accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="sr-only" onChange={(event) => upload(event.target.files?.[0])} aria-label={`Staff list (Excel or CSV) for ${partner.name}`} />
+        <div className="flex flex-wrap gap-2">
+          <Button variant="ghost" size="sm" onClick={() => downloadTemplate(partner, notify)}>
+            <Download />
+            Download template
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => input.current?.click()} disabled={uploading}>
+            {uploading ? <Loader2 className="animate-spin" /> : <FileUp />}
+            {list?.count ? 'Replace staff list' : 'Upload staff list'}
+          </Button>
+        </div>
       </div>
-      <p className="text-xs text-muted-foreground">A CSV whose first row names the columns: nrc (required), employee_number and name. Each upload replaces the last.</p>
+      <p className="text-xs text-muted-foreground">
+        Fill in the Excel template, one person per row, and upload it as it is. A CSV with the same columns works too: nrc (required, e.g. 123456/78/9), employee_number and name. Each upload replaces the last.
+      </p>
       {result?.skipped ? (
         <p role="status" className="text-sm text-warning">
           {result.skipped} {result.skipped === 1 ? 'row was' : 'rows were'} skipped for a missing or malformed NRC (line {result.errors.join(', ')}
