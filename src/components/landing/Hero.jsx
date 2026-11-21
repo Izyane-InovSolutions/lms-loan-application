@@ -1,15 +1,12 @@
 import React, { useState } from 'react'
-import { ArrowRight, ScanFace, Search, ShieldCheck, Save } from 'lucide-react'
+import { ArrowRight, ScanFace, ShieldCheck, Save } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Input } from '@/components/ui/input'
 import { DRAFT_RETENTION_DAYS, formatKwacha, priceLoan } from '@/config/loanProducts'
 import { useProduct, useProductCatalog } from '@/hooks/useProducts'
 import { offeredLoanTypes } from '@/components/landing/LoanProducts'
 import heroImage from '@/assets/hero1.png'
-
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 const ASSURANCES = [
   { icon: Save, label: `Progress saved for ${DRAFT_RETENTION_DAYS} days` },
@@ -17,28 +14,20 @@ const ASSURANCES = [
   { icon: ScanFace, label: 'Identity check runs on your device' },
 ]
 
-export function Hero({ onChooseType, onCheckStatus }) {
+export function Hero({ onChooseType, onMyApplication }) {
   const personal = useProduct('personal')
   const business = useProduct('business')
   // Choosing who borrows opens the loan finder on that type (LoanProducts): a button for each of the first two offered.
   const catalog = useProductCatalog()
   const typeButtons = offeredLoanTypes(catalog.loanTypes, catalog.products).slice(0, 2)
-  const example = personal.exampleAmount
-  const examplePrice = priceLoan(example, personal.defaultTenure, personal)
-
-  const [statusEmail, setStatusEmail] = useState('')
-  const [statusError, setStatusError] = useState('')
-
-  const handleCheckStatus = (event) => {
-    event.preventDefault()
-    const normalized = statusEmail.trim().toLowerCase()
-    if (!EMAIL_PATTERN.test(normalized)) {
-      setStatusError('Enter a valid email address.')
-      return
-    }
-    setStatusError('')
-    onCheckStatus(normalized)
-  }
+  // The repayment calculator: the visitor's own amount and loan length, priced as the wizard prices them.
+  const [chosenAmount, setChosenAmount] = useState(null)
+  const [chosenTenure, setChosenTenure] = useState(null)
+  const clamp = (value, min, max) => Math.min(max, Math.max(min, value))
+  const amountStep = personal.maxAmount - personal.minAmount >= 20000 ? 500 : 100
+  const amount = clamp(chosenAmount ?? personal.exampleAmount, personal.minAmount, personal.maxAmount)
+  const tenure = clamp(chosenTenure ?? personal.defaultTenure, personal.minTenure, personal.maxTenure)
+  const price = priceLoan(amount, tenure, personal)
 
   return (
     <section id="top" className="relative overflow-hidden border-b border-border">
@@ -64,40 +53,23 @@ export function Hero({ onChooseType, onCheckStatus }) {
 
           <div className="mt-9 flex flex-col gap-3 sm:flex-row">
             {typeButtons.map((type, index) => (
-              <Button key={type.key} size="lg" variant={index === 0 ? 'default' : 'outline'} className="flex-1" onClick={() => onChooseType(type.key)}>
+              <Button key={type.key} size="lg" variant={index === 0 ? 'default' : 'outline'} className="sm:flex-1" onClick={() => onChooseType(type.key)}>
                 Find {type.label.toLowerCase()}
                 {index === 0 ? <ArrowRight /> : null}
               </Button>
             ))}
           </div>
 
-          <form
-            onSubmit={handleCheckStatus}
-            className="mt-5 flex flex-col gap-2 rounded-full border border-border bg-card p-1.5 shadow-sm sm:flex-row sm:items-center"
-          >
-            <div className="relative flex-1">
-              <Search
-                className="pointer-events-none absolute left-4 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
-                aria-hidden="true"
-              />
-              <Input
-                type="email"
-                value={statusEmail}
-                onChange={(event) => setStatusEmail(event.target.value)}
-                placeholder="Enter the email you applied with"
-                aria-label="Email address"
-                className="border-0 bg-transparent pl-10 shadow-none focus-visible:ring-0"
-              />
-            </div>
-            <Button type="submit" variant="secondary" className="rounded-full sm:shrink-0 left-4">
-              Check application status
-            </Button>
-          </form>
-          {statusError ? (
-            <p role="alert" className="mt-2 text-sm font-medium text-destructive">
-              {statusError}
-            </p>
-          ) : null}
+          <p className="mt-5 text-sm text-muted-foreground">
+            Already applied?{' '}
+            <button
+              type="button"
+              onClick={onMyApplication}
+              className="rounded font-semibold text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              Finish or track your application
+            </button>
+          </p>
 
           <ul className="mt-10 grid gap-3 border-t border-border pt-8 sm:grid-cols-3">
             {ASSURANCES.map(({ icon: Icon, label }) => (
@@ -116,23 +88,61 @@ export function Hero({ onChooseType, onCheckStatus }) {
               alt="An applicant completing a loan application on a laptop"
               className="absolute inset-x-0 bottom-0 mx-auto w-[92%] object-contain"
               loading="eager"
+              decoding="async"
               width={827}
               height={719}
             />
           </div>
 
-          {/* Worked example, computed from the same constants the wizard uses. */}
-          <div className="absolute -bottom-6 left-1/2 w-[min(22rem,90%)] -translate-x-1/2 rounded-lg border bg-card p-5 shadow-lift lg:-left-6 lg:translate-x-0">
-            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Worked example</p>
-            <p className="mt-2 text-sm text-muted-foreground">
-              {formatKwacha(example)} over {personal.defaultTenure} months
-            </p>
-            <p className="mt-3 text-3xl font-bold tracking-tight text-foreground">
-              {formatKwacha(Math.round(examplePrice.monthly))}
+          {/* Repayment calculator, priced with the same constants the wizard uses. */}
+          <div className="relative mx-auto -mt-20 w-[min(23rem,92%)] rounded-lg border bg-card p-5 shadow-lift lg:absolute lg:-bottom-6 lg:-left-6 lg:mx-0 lg:mt-0">
+            <p className="text-xs font-semibold uppercase tracking-[0.12em] text-muted-foreground">Repayment calculator · {personal.name}</p>
+
+            <div className="mt-3 space-y-3">
+              <div>
+                <div className="flex items-baseline justify-between text-sm">
+                  <label htmlFor="calc-amount" className="text-muted-foreground">Borrow</label>
+                  <span className="font-semibold tabular-nums text-foreground">{formatKwacha(amount)}</span>
+                </div>
+                <input
+                  id="calc-amount"
+                  type="range"
+                  min={personal.minAmount}
+                  max={personal.maxAmount}
+                  step={amountStep}
+                  value={amount}
+                  onChange={(event) => setChosenAmount(Number(event.target.value))}
+                  aria-valuetext={formatKwacha(amount)}
+                  className="mt-1.5 w-full accent-[hsl(var(--primary))]"
+                />
+              </div>
+              <div>
+                <div className="flex items-baseline justify-between text-sm">
+                  <label htmlFor="calc-tenure" className="text-muted-foreground">Pay back over</label>
+                  <span className="font-semibold tabular-nums text-foreground">
+                    {tenure} {tenure === 1 ? 'month' : 'months'}
+                  </span>
+                </div>
+                <input
+                  id="calc-tenure"
+                  type="range"
+                  min={personal.minTenure}
+                  max={personal.maxTenure}
+                  step={1}
+                  value={tenure}
+                  onChange={(event) => setChosenTenure(Number(event.target.value))}
+                  aria-valuetext={`${tenure} months`}
+                  className="mt-1.5 w-full accent-[hsl(var(--primary))]"
+                />
+              </div>
+            </div>
+
+            <p className="mt-4 text-3xl font-bold tracking-tight text-foreground" aria-live="polite">
+              {formatKwacha(Math.round(price.monthly))}
               <span className="ml-1.5 text-sm font-medium text-muted-foreground">/ month</span>
             </p>
-            <p className="mt-2 text-xs text-muted-foreground">
-              {formatKwacha(Math.round(examplePrice.total))} total repayable, including the facility fee.
+            <p className="mt-1 text-xs text-muted-foreground">
+              {formatKwacha(Math.round(price.total))} total, including the one-off fee. An estimate — your exact figure is shown before you submit.
             </p>
           </div>
         </div>

@@ -54,7 +54,7 @@ export function CrbTab({ settings, integrations, notify, onSaved }) {
   }
 
   return (
-    <div className="max-w-3xl">
+    <div>
       <Panel title="Credit bureau" description={statusNote(integrations.crb)}>
         <div className="space-y-5">
           <Field id="crb-provider" label="Bureau" hint="Officers can pull a report for any application that allows a credit check (see below).">

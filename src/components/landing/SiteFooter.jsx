@@ -1,6 +1,8 @@
 import React from 'react'
+import { Globe, Mail, MapPin, Phone } from 'lucide-react'
 
 import { Logo } from '@/components/brand/Logo'
+import { useBranding } from '@/components/brand/BrandingProvider'
 import wordmark from '@/assets/izyane.png'
 
 const FOOTER_LINKS = [
@@ -10,7 +12,23 @@ const FOOTER_LINKS = [
   { href: '#faq', label: 'FAQ' },
 ]
 
+const linkClass =
+  'text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
+
+/** "+260 97 1234567" → "tel:+260971234567". */
+const telHref = (phone) => `tel:${phone.replace(/[^\d+]/g, '')}`
+const webHref = (site) => (/^https?:\/\//i.test(site) ? site : `https://${site}`)
+
 export function SiteFooter() {
+  // The contacts from Settings → Branding → Letterhead; the column shows only once one is set.
+  const { contact = {} } = useBranding()
+  const contacts = [
+    contact.phone && { icon: Phone, label: contact.phone, href: telHref(contact.phone) },
+    contact.email && { icon: Mail, label: contact.email, href: `mailto:${contact.email}` },
+    contact.website && { icon: Globe, label: contact.website.replace(/^https?:\/\//i, ''), href: webHref(contact.website), external: true },
+    contact.address && { icon: MapPin, label: contact.address },
+  ].filter(Boolean)
+
   return (
     <footer className="border-t border-border bg-secondary/40">
       <div className="container flex flex-col gap-8 py-12 md:flex-row md:items-start md:justify-between">
@@ -28,12 +46,32 @@ export function SiteFooter() {
             <a
               key={link.href}
               href={link.href}
-              className="text-sm text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className={linkClass}
             >
               {link.label}
             </a>
           ))}
         </nav>
+
+        {contacts.length ? (
+          <div className="flex flex-col gap-3">
+            <h2 className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Get in touch</h2>
+            <ul className="flex flex-col gap-3">
+              {contacts.map(({ icon: Icon, label, href, external }) => (
+                <li key={label} className="flex items-start gap-2">
+                  <Icon className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
+                  {href ? (
+                    <a href={href} className={linkClass} {...(external ? { target: '_blank', rel: 'noopener noreferrer' } : {})}>
+                      {label}
+                    </a>
+                  ) : (
+                    <span className="max-w-[16rem] whitespace-pre-line text-sm text-muted-foreground">{label}</span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
 
         {/* <div className="flex flex-col gap-3">
           <span className="text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">Powered by</span>

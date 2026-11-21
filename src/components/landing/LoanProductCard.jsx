@@ -9,10 +9,18 @@ import { describeFee, describeInterest, formatKwacha, purposeOf } from '@/config
 import { productTags } from '@/config/eligibility'
 import { asksForCollateral, describeRequirement } from '@/config/collateral'
 
-function Fact({ label, value }) {
+function Fact({ label, value, hint }) {
   return (
     <div className="flex items-baseline justify-between gap-4 border-b border-border/70 py-2.5 last:border-0">
-      <dt className="text-sm text-muted-foreground">{label}</dt>
+      <dt className="text-sm text-muted-foreground">
+        {hint ? (
+          <abbr title={hint} className="cursor-help no-underline decoration-dotted underline-offset-4 hover:underline">
+            {label}
+          </abbr>
+        ) : (
+          label
+        )}
+      </dt>
       <dd className="text-sm font-semibold tabular-nums text-foreground">{value}</dd>
     </div>
   )
@@ -21,9 +29,10 @@ function Fact({ label, value }) {
 /**
  * One loan product: what it is for, how it classifies, its pricing and what it asks, and
  * — once the applicant has said what they earn — what it would lend them (`eligibility`,
- * src/config/eligibility.js). Only a product they qualify for can be started.
+ * src/config/eligibility.js). Only a product they qualify for can be started; before they
+ * have said, its button takes them to the income field (`onNeedFigures`).
  */
-export function LoanProductCard({ product, eligibility = { status: 'unknown' }, onApply }) {
+export function LoanProductCard({ product, eligibility = { status: 'unknown' }, onApply, onNeedFigures }) {
   const eligible = eligibility.status === 'eligible'
   return (
     <Card className={cn('flex flex-col', eligible && 'border-primary/30 shadow-lift', eligibility.status === 'ineligible' && 'opacity-75')}>
@@ -51,9 +60,9 @@ export function LoanProductCard({ product, eligibility = { status: 'unknown' }, 
         </p>
 
         <dl className="mt-5">
-          <Fact label="Interest" value={describeInterest(product)} />
-          <Fact label="Facility fee" value={describeFee(product)} />
-          <Fact label="Tenure" value={`${product.minTenure} to ${product.maxTenure} months`} />
+          <Fact label="Interest" value={describeInterest(product)} hint="Charged on the amount you borrow. It does not compound." />
+          <Fact label="One-off fee" value={describeFee(product)} hint="The facility fee: charged once, when the loan is paid out." />
+          <Fact label="Loan length" value={`${product.minTenure} to ${product.maxTenure} months`} hint="How long you can take to pay it back (the tenure)." />
           <Fact label="Documents needed" value={`${product.documents.filter((document) => document.required).length}`} />
           {asksForCollateral(product) ? <Fact label="Collateral" value={describeRequirement(product)} /> : null}
         </dl>
@@ -74,10 +83,16 @@ export function LoanProductCard({ product, eligibility = { status: 'unknown' }, 
       </CardContent>
 
       <CardFooter>
-        <Button className="w-full" variant={eligible ? 'default' : 'outline'} disabled={!eligible} onClick={() => onApply(product.id)}>
-          {eligible ? `Start a ${product.name.toLowerCase()}` : eligibility.status === 'unknown' ? 'Enter your figures to apply' : 'Not available on these figures'}
-          {eligible ? <ArrowRight /> : null}
-        </Button>
+        {eligibility.status === 'unknown' ? (
+          <Button className="w-full" variant="outline" onClick={onNeedFigures}>
+            Check if you qualify
+          </Button>
+        ) : (
+          <Button className="w-full" variant={eligible ? 'default' : 'outline'} disabled={!eligible} onClick={() => onApply(product.id)}>
+            {eligible ? `Start a ${product.name.toLowerCase()}` : 'Not available on these figures'}
+            {eligible ? <ArrowRight /> : null}
+          </Button>
+        )}
       </CardFooter>
     </Card>
   )

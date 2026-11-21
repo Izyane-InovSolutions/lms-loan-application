@@ -38,7 +38,7 @@ export function KycTab({ settings, notify }) {
   const allTargets = { ...FORM_TARGETS[form], ...Object.fromEntries(Object.entries(CONTACT_TARGETS).map(([key, label]) => [key, { label }])) }
 
   return (
-    <div className="max-w-4xl space-y-6">
+    <div className="space-y-6">
       <Panel
         title="Customer records"
         description="Look customers up on your own platform (core banking, a KYC hub or any other) when they start an application, and fill the form from their record. Applicants confirm a code sent to the contact on their record first; agents’ lookups fill the form at once. Documents are always uploaded by hand."

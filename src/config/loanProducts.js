@@ -481,9 +481,14 @@ export const productFor = (application, products = LOAN_PRODUCTS) =>
 /** The four stages an applicant moves through, independent of loan type. */
 export const APPLICATION_JOURNEY = [
   {
+    title: 'Confirm it’s you',
+    description:
+      'Enter your email (or mobile number) and type in the 6-digit code we send. If we already hold your details, enter your NRC first and the form fills itself in.',
+  },
+  {
     title: 'Tell us about you',
     description:
-      'Personal and employment details, or your company and director information. Every field is validated as you type, so nothing bounces back later.',
+      'Personal and employment details, or your company and director information. Every field is checked as you type, so nothing bounces back later.',
   },
   {
     title: 'Upload your documents',
@@ -498,6 +503,6 @@ export const APPLICATION_JOURNEY = [
   {
     title: 'Choose terms and submit',
     description:
-      'Pick your amount and tenure, review the full repayment breakdown, accept the terms, and submit. You get a reference and can follow progress online.',
+      'Pick your amount and loan length, review the full repayment breakdown, agree to the credit bureau check and terms, and submit. You get a reference and can follow progress online.',
   },
 ]

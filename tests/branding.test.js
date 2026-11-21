@@ -33,7 +33,7 @@ describe('branding', () => {
   })
 
   it('starts with the shipped name and logo', async () => {
-    expect((await visitor.get('/branding')).body).toEqual({ name: DEFAULT_BRAND_NAME, logoUrl: null, theme: DEFAULT_THEME })
+    expect((await visitor.get('/branding')).body).toEqual({ name: DEFAULT_BRAND_NAME, logoUrl: null, contact: { address: '', phone: '', email: '', website: '' }, theme: DEFAULT_THEME })
     expect((await visitor.get('/branding/logo')).status).toBe(404)
   })
 

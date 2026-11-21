@@ -3,17 +3,20 @@ import React from 'react'
 import { SectionHeading } from '@/components/landing/SectionHeading'
 import { APPLICATION_JOURNEY } from '@/config/loanProducts'
 
+const COUNT_WORDS = ['', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven']
+const stepCount = (count) => COUNT_WORDS[count] || String(count)
+
 export function HowItWorks() {
   return (
     <section id="how-it-works" className="border-b border-border bg-secondary/40 py-20 lg:py-24">
       <div className="container">
         <SectionHeading
           eyebrow="How it works"
-          title="Four steps, and you can pause at any point"
+          title={`${stepCount(APPLICATION_JOURNEY.length)} short steps, and you can pause at any point`}
           description="The form is broken into short stages. Each one saves on its own, so a lost connection or a flat battery never costs you the work you have already done."
         />
 
-        <ol className="relative mt-14 grid gap-10 md:grid-cols-2 lg:grid-cols-4 lg:gap-6">
+        <ol className="relative mt-14 grid gap-10 md:grid-cols-2 lg:grid-cols-5 lg:gap-6">
           {/* Connector rail, desktop only. */}
           <div
             aria-hidden="true"

@@ -2,14 +2,27 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
+  Archive,
   Check,
   Database,
+  FileText,
+  Gauge,
+  Handshake,
+  IdCard,
+  Landmark,
   Loader2,
+  MessageSquare,
+  Package,
+  Palette,
   PlugZap,
   Rocket,
+  Scale,
+  ScanText,
   Send,
+  ShieldCheck,
   Trash2,
   Undo2,
+  Workflow,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -43,24 +56,54 @@ import { ProductsTab } from "./ProductsTab";
 import { PartnersTab } from "./PartnersTab";
 import { DangerZoneTab } from "./DangerZoneTab";
 
-const TABS = [
-  { id: "workflow", label: "Credit workflow" },
-  { id: "products", label: "Loan products" },
-  { id: "partners", label: "Partners" },
-  { id: "lms", label: "LMS connection" },
-  { id: "zra", label: "ZRA Web Services" },
-  { id: "kyc", label: "Customer records" },
-  { id: "crb", label: "Credit bureau" },
-  { id: "notifications", label: "Notifications and SMS" },
-  { id: "ai", label: "AI document checks" },
-  // Shown only where the server switches the tool on (api/_lib/features.js).
-  { id: "retention", label: "Data retention", feature: "retentionSettings" },
-  { id: "security", label: "Security" },
-  { id: "branding", label: "Branding" },
-  { id: "documents", label: "Offer documents" },
-  { id: "legal", label: "Terms and privacy" },
-  { id: "demo", label: "Sample data", demoOnly: true },
-  { id: "danger", label: "Danger zone", adminOnly: true, feature: "dataWipe" },
+/*
+ * The settings sections, in groups. The groups are laid out as a ribbon that wraps (no
+ * sideways scrolling), and as one grouped dropdown on a phone. `hint` is the line shown
+ * under the section's name, so an admin knows they are in the right place.
+ */
+const TAB_GROUPS = [
+  {
+    label: "Lending",
+    tabs: [
+      { id: "workflow", label: "Credit workflow", icon: Workflow, hint: "Stages, approvals, offers and what applicants are offered." },
+      { id: "products", label: "Loan products", icon: Package, hint: "The loans you offer, their pricing, documents and eligibility." },
+      { id: "partners", label: "Partners", icon: Handshake, hint: "MoU partners and their staff lists." },
+    ],
+  },
+  {
+    label: "Checks",
+    tabs: [
+      { id: "kyc", label: "Customer records", icon: IdCard, hint: "Your KYC platform, to look up applicants and fill in their forms." },
+      { id: "crb", label: "Credit bureau", icon: Gauge, hint: "Which bureau to use, when reports are pulled, and consent." },
+      { id: "ai", label: "AI document checks", icon: ScanText, hint: "Reading and checking each uploaded document." },
+      { id: "zra", label: "ZRA Web Services", icon: Landmark, hint: "Verifying NRCs, TPINs and passports with ZRA." },
+    ],
+  },
+  {
+    label: "Connections",
+    tabs: [
+      { id: "lms", label: "LMS connection", icon: PlugZap, hint: "Handing approved applications to the loan management system." },
+      { id: "notifications", label: "Notifications and SMS", icon: MessageSquare, hint: "Emails and texts to applicants and staff." },
+    ],
+  },
+  {
+    label: "Brand and documents",
+    tabs: [
+      { id: "branding", label: "Branding", icon: Palette, hint: "Name, logo, letterhead contacts and theme." },
+      { id: "documents", label: "Offer documents", icon: FileText, hint: "The templates offer letters and agreements are made from." },
+      { id: "legal", label: "Terms and privacy", icon: Scale, hint: "The terms and privacy notice applicants agree to." },
+    ],
+  },
+  {
+    label: "Workspace",
+    tabs: [
+      { id: "security", label: "Security", icon: ShieldCheck, hint: "Sign-in, sessions and two-factor authentication." },
+      // Shown only where the server switches the tool on (api/_lib/features.js).
+      { id: "retention", label: "Data retention", icon: Archive, hint: "How long applications and documents are kept.", feature: "retentionSettings" },
+      { id: "demo", label: "Sample data", icon: Database, hint: "Load or clear demonstration data.", demoOnly: true },
+      { id: "danger", label: "Danger zone", icon: AlertTriangle, hint: "Actions that can't be undone.", adminOnly: true, feature: "dataWipe", danger: true },
+    ],
+  },
 ];
 
 export function Toggle({ id, label, description, checked, onChange, disabled }) {
@@ -167,12 +210,14 @@ export function SettingsPage() {
     load();
   }, [load]);
 
-  const tabs = TABS.filter(
-    (entry) =>
-      (!entry.demoOnly || demoEnabled) &&
-      (!entry.adminOnly || user?.role === "admin") &&
-      (!entry.feature || features?.[entry.feature]),
-  );
+  const allowed = (entry) =>
+    (!entry.demoOnly || demoEnabled) &&
+    (!entry.adminOnly || user?.role === "admin") &&
+    (!entry.feature || features?.[entry.feature]);
+  const groups = TAB_GROUPS.map((group) => ({ ...group, tabs: group.tabs.filter(allowed) })).filter((group) => group.tabs.length);
+  const current = groups.flatMap((group) => group.tabs).find((entry) => entry.id === tab);
+  const legalNeedsAttention = Boolean(state.legalPlaceholders && (state.legalPlaceholders.terms || state.legalPlaceholders.privacy));
+  const choose = (id) => setParams({ tab: id }, { replace: true });
 
   return (
     <div className="space-y-6">
@@ -180,36 +225,86 @@ export function SettingsPage() {
         title="Settings"
         description="How the workspace runs. Every change is recorded in the audit log."
       />
-      <nav
-        aria-label="Settings sections"
-        className="-mx-1 flex gap-1 overflow-x-auto border-b pb-px"
-      >
-        {tabs.map((entry) => (
-          <button
-            key={entry.id}
-            type="button"
-            onClick={() => setParams({ tab: entry.id }, { replace: true })}
-            aria-current={tab === entry.id ? "page" : undefined}
-            className={cn(
-              "-mb-px shrink-0 border-b-2 px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-              tab === entry.id
-                ? "border-primary text-foreground"
-                : "border-transparent text-muted-foreground hover:text-foreground",
-            )}
-          >
-            {entry.label}
-            {entry.id === "legal" &&
-            state.legalPlaceholders &&
-            (state.legalPlaceholders.terms ||
-              state.legalPlaceholders.privacy) ? (
-              <span
-                className="ml-1.5 inline-block size-1.5 rounded-full bg-warning align-middle"
-                aria-label="needs attention"
-              />
-            ) : null}
-          </button>
-        ))}
+
+      {/* Phones: every section in one grouped dropdown. */}
+      <div className="md:hidden">
+        <label htmlFor="settings-section" className="mb-1.5 block text-sm font-medium text-foreground">
+          Section
+        </label>
+        <Select id="settings-section" value={tab} onChange={(event) => choose(event.target.value)}>
+          {groups.map((group) => (
+            <optgroup key={group.label} label={group.label}>
+              {group.tabs.map((entry) => (
+                <option key={entry.id} value={entry.id}>
+                  {entry.label}
+                  {entry.id === "legal" && legalNeedsAttention ? " (needs attention)" : ""}
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </Select>
+      </div>
+
+      {/* Larger screens: a ribbon of labelled groups that wraps instead of scrolling. */}
+      <nav aria-label="Settings sections" className="hidden rounded-lg border bg-card p-2 shadow-sm md:block">
+        <div className="flex flex-wrap gap-x-5 gap-y-2">
+          {groups.map((group) => (
+            <div
+              key={group.label}
+              role="group"
+              aria-label={group.label}
+              className="flex flex-col px-1 py-1"
+            >
+              <span className="px-2 pb-1 text-[0.68rem] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                {group.label}
+              </span>
+              <div className="flex flex-wrap gap-1">
+                {group.tabs.map((entry) => {
+                  const Icon = entry.icon;
+                  const active = tab === entry.id;
+                  return (
+                    <button
+                      key={entry.id}
+                      type="button"
+                      onClick={() => choose(entry.id)}
+                      aria-current={active ? "page" : undefined}
+                      title={entry.hint}
+                      className={cn(
+                        "inline-flex items-center gap-2 whitespace-nowrap rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                        active
+                          ? entry.danger
+                            ? "bg-destructive/10 text-destructive"
+                            : "bg-primary/10 text-primary"
+                          : entry.danger
+                            ? "text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
+                            : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                      )}
+                    >
+                      <Icon className="size-4 shrink-0" aria-hidden="true" />
+                      {entry.label}
+                      {entry.id === "legal" && legalNeedsAttention ? (
+                        <span className="inline-block size-1.5 rounded-full bg-warning" aria-label="needs attention" />
+                      ) : null}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
       </nav>
+
+      {current ? (
+        <div className="flex items-start gap-3">
+          <span className={cn("grid size-9 shrink-0 place-items-center rounded-md", current.danger ? "bg-destructive/10 text-destructive" : "bg-primary/10 text-primary")}>
+            <current.icon className="size-4" aria-hidden="true" />
+          </span>
+          <div>
+            <h2 className="text-lg font-semibold leading-tight text-foreground">{current.label}</h2>
+            <p className="text-sm text-muted-foreground">{current.hint}</p>
+          </div>
+        </div>
+      ) : null}
 
       {state.status === "loading" ? (
         <p className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -323,7 +418,7 @@ function WorkflowTab({ settings, notify }) {
     notify,
   );
   return (
-    <div className="grid gap-6 lg:grid-cols-2">
+    <div className="space-y-6">
       <Panel title="Credit decisions">
         <div className="space-y-5">
           <WorkflowPointer>
@@ -500,7 +595,7 @@ function LmsTab({ settings, integrations, notify, onSaved }) {
         : "Not connected. The workspace runs on its own: applications are appraised and decided here, and nothing is sent anywhere.";
 
   return (
-    <div className="grid gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+    <div className="space-y-6">
       <Panel title="Connection" description={envNote}>
         <div className="space-y-5">
           <Toggle
@@ -791,7 +886,7 @@ function ZraTab({ settings, integrations, notify, onSaved }) {
   };
 
   return (
-    <div className="max-w-3xl">
+    <div>
       <Panel title="ZRA Web Services" description={sourceNote}>
         <div className="space-y-5">
           <Toggle
@@ -946,7 +1041,7 @@ function NotificationsTab({ settings, integrations, notify }) {
   };
 
   return (
-    <div className="grid gap-6 lg:grid-cols-2">
+    <div className="space-y-6">
       <Panel
         title="Who hears about what"
         description={
