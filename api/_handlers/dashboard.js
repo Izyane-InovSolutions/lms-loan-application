@@ -58,7 +58,7 @@ const dashboard = async (req, res, { query }) => {
     }
   }
 
-  const [current, previous, [pipeline], funnel, trend, mix, outcomes] = await Promise.all([
+  const [current, previous, [pipeline], funnel, trend, mix, outcomes, decisions, openByStatus] = await Promise.all([
     periodStats(start, now),
     periodStats(previousStart, start),
     db
@@ -87,6 +87,26 @@ const dashboard = async (req, res, { query }) => {
       .innerJoin(applications, eq(applications.id, prescreens.applicationId))
       .where(where(scope, gte(applications.submittedAt, start)))
       .groupBy(prescreens.outcome),
+    // Decisions per day, for the key figures' small charts: approved and declined, the value
+    // approved and the average time to decide.
+    db
+      .select({
+        day: sql`to_char(date_trunc('day', ${applications.decidedAt}), 'YYYY-MM-DD')`,
+        approved: sql`count(*) filter (where ${inArray(applications.status, APPROVED)})`,
+        declined: sql`count(*) filter (where ${applications.status} = 'declined')`,
+        approvedValue: sql`coalesce(sum(coalesce(${applications.approvedAmount}, ${applications.amount})) filter (where ${inArray(applications.status, APPROVED)}), 0)`,
+        decisionHours: sql`avg(extract(epoch from (${applications.decidedAt} - ${applications.submittedAt})) / 3600)`,
+      })
+      .from(applications)
+      .where(where(scope, gte(applications.decidedAt, start)))
+      .groupBy(sql`1`)
+      .orderBy(sql`1`),
+    // The open pipeline now, by stage (the same applications as kpis.pipeline).
+    db
+      .select({ status: applications.status, count: sql`count(*)`, value: sql`coalesce(sum(${applications.amount}), 0)` })
+      .from(applications)
+      .where(where(scope, inArray(applications.status, OPEN_STATUSES)))
+      .groupBy(applications.status),
   ])
 
   const result = {
@@ -98,6 +118,14 @@ const dashboard = async (req, res, { query }) => {
     trend: trend.map((row) => ({ day: row.day, channel: row.channel, count: int(row.count) })),
     mix: mix.map((row) => ({ loanType: row.loanType, count: int(row.count), value: Number(row.value) || 0 })),
     prescreenOutcomes: Object.fromEntries(outcomes.map((row) => [row.outcome, int(row.count)])),
+    decisions: decisions.map((row) => ({
+      day: row.day,
+      approved: int(row.approved),
+      declined: int(row.declined),
+      approvedValue: Number(row.approvedValue) || 0,
+      decisionHours: row.decisionHours === null ? null : Number(row.decisionHours),
+    })),
+    openByStatus: openByStatus.map((row) => ({ status: row.status, count: int(row.count), value: Number(row.value) || 0 })),
   }
 
   // Who brings business in: agents and RMs, within the viewer's scope.

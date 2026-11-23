@@ -2,7 +2,7 @@ import { and, eq, inArray, isNull, ne, notInArray, or, sql } from 'drizzle-orm'
 import { getDb, schema } from './db/client.js'
 import { fail, text } from './http.js'
 import { requirePermission } from './rbac.js'
-import { listRoles, roleHas } from './roles.js'
+import { listRoles } from './roles.js'
 import { addEvent } from './applications.js'
 import { getSetting } from './settings.js'
 import { getPublishedWorkflow, getWorkflowVersion } from './workflowVersions.js'
@@ -194,6 +194,47 @@ export const worksOn = (viewer, state) => {
   if (state.roles?.length && !state.roles.includes(viewer.role)) return false
   if (state.type === 'offer') return Boolean(viewer.permissions?.includes('offers.record'))
   return (state.actions || []).some((action) => viewer.permissions?.includes(actionPermission(action)))
+}
+
+/**
+ * Who a case can be assigned to at the stage it is in: active staff whose role works on that
+ * stage (worksOn: the stage's roles, and the permission for one of its actions), whose amount
+ * range takes the case, and, where the stage's decision needs a second person (four eyes),
+ * not the one who brought it in or recommended it. Administrators work on every stage, so
+ * they take a case themselves rather than being offered here. Each comes with how many open
+ * cases they already have, to spread the work.
+ * Returns { state, people: [{ id, name, role, roleLabel, openCases }] }.
+ */
+export const stageAssignees = async (application, { db = null, state: given = null } = {}) => {
+  const conn = db || (await getDb())
+  const state = given || (await locate(application, conn)).state
+  const roles = await listRoles()
+  const fourEyes = (state.actions || []).some((action) => action.options?.fourEyes)
+  const recommendation = fourEyes ? await latestRecommendation(conn, application.id) : null
+  const excluded = new Set(fourEyes ? [application.sourcedBy, recommendation?.officerId].filter(Boolean) : [])
+  const inRange = (person) => application.amount >= (person.approvalMin ?? 0) && (person.approvalMax == null || application.amount <= person.approvalMax)
+  const staff = await conn
+    .select({ id: users.id, name: users.name, role: users.role, approvalMin: users.approvalMin, approvalMax: users.approvalMax })
+    .from(users)
+    .where(and(eq(users.status, 'active'), ne(users.role, 'admin')))
+  const qualified = staff
+    .map((person) => ({ person, role: roles.find((entry) => entry.key === person.role) }))
+    .filter(({ person, role }) => role && !excluded.has(person.id) && inRange(person) && worksOn({ role: person.role, permissions: role.permissions }, state))
+  const ids = qualified.map(({ person }) => person.id)
+  const loads = ids.length
+    ? await conn
+        .select({ id: applications.assignedOfficer, count: sql`count(*)` })
+        .from(applications)
+        .where(and(inArray(applications.assignedOfficer, ids), inArray(applications.status, OPEN_STATUSES)))
+        .groupBy(applications.assignedOfficer)
+    : []
+  const openCases = Object.fromEntries(loads.map((row) => [row.id, Number(row.count) || 0]))
+  return {
+    state,
+    people: qualified
+      .map(({ person, role }) => ({ id: person.id, name: person.name, role: person.role, roleLabel: role.label, openCases: openCases[person.id] || 0 }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
+  }
 }
 
 /**
@@ -563,15 +604,23 @@ const UTILITY = {
     }
   },
 
-  /** Someone takes a case, or hands it to a colleague who reviews cases. */
-  async assign(tx, viewer, application, input) {
-    requireCase(viewer, 'cases.work')
+  /** Someone takes a case, or a manager hands it to a colleague who can act at its stage. */
+  async assign(tx, viewer, application, input, ctx) {
     requireStatus(application, OPEN_STATUSES, 'This case is closed.')
     const officerId = input.officerId || viewer.id
-    if (officerId !== viewer.id) requireCase(viewer, 'cases.assign')
+    // Taking it is anyone's who works cases; handing it to someone else is a manager's (cases.assign).
+    requireCase(viewer, officerId === viewer.id ? 'cases.work' : 'cases.assign')
     const [person] = await tx.select().from(users).where(eq(users.id, officerId)).limit(1)
-    if (!person || person.status !== 'active' || !(await roleHas(person.role, 'cases.work'))) fail(400, 'Choose an active loan officer.', 'invalid_officer')
+    if (!person || person.status !== 'active') fail(400, 'Choose an active member of staff.', 'invalid_officer')
+    // Their amount range first: it says exactly why, where "can't act here" would not.
     requireAssignmentRange(person, application)
+    if (officerId === viewer.id) {
+      // Taking it themselves: they must work on this stage, within their amount range.
+      if (!worksOn(viewer, ctx.state)) fail(403, `Your role doesn’t work on “${stepName(ctx.state)}”.`, 'forbidden')
+    } else if (!(await stageAssignees(application, { db: tx, state: ctx.state })).people.some((entry) => entry.id === person.id)) {
+      // Anyone else: only someone who can act at this stage (stageAssignees says who).
+      fail(400, `${person.name} can’t act on “${stepName(ctx.state)}” for this case. Choose someone who works on this stage.`, 'invalid_officer')
+    }
     return {
       changes: { assignedOfficer: person.id, stateAssignee: person.id },
       event: { type: 'assignment', message: person.id === viewer.id ? `${viewer.name} took the case` : `Assigned to ${person.name}` },
@@ -816,12 +865,18 @@ export const caseWorkflow = locate
 // ---------------------------------------------------------------------------
 
 /** Why `viewer` can't take `action` here, or null when they can (the server checks again on the day). */
+/** True when the viewer's role can never take `action` in `state` (not merely not yet). */
+const roleCannot = (viewer, state, action) => {
+  if (viewer.role === 'admin') return false
+  const roles = state.roles || []
+  return Boolean((roles.length && !roles.includes(viewer.role)) || !viewer.permissions?.includes(actionPermission(action)))
+}
+
 const blockedReason = (viewer, application, state, action, recommendation, roleName, outstanding, holds) => {
   if (application.status === 'info_requested') return 'Waiting on the applicant.'
-  if (viewer.role !== 'admin') {
+  if (roleCannot(viewer, state, action)) {
     const roles = state.roles || []
-    if (roles.length && !roles.includes(viewer.role)) return `Waiting for ${roles.map((role) => roleName(role).toLowerCase()).join(' or ')}.`
-    if (!viewer.permissions?.includes(actionPermission(action))) return 'Your role can’t do this.'
+    return roles.length && !roles.includes(viewer.role) ? `Waiting for ${roles.map((role) => roleName(role).toLowerCase()).join(' or ')}.` : 'Your role can’t do this.'
   }
   if (action.options?.fourEyes && (recommendation?.officerId === viewer.id || application.sourcedBy === viewer.id)) {
     return recommendation?.officerId === viewer.id ? 'You recommended this case, so a colleague makes the decision.' : 'You brought this case in, so a colleague makes the decision.'
@@ -931,9 +986,13 @@ export const workflowView = async (viewer, application, { recommendation = null 
               toLabel: target?.label || action.to,
               singleStep: Boolean(action.options?.singleStep),
               claim: Boolean(action.options?.claim),
+              // A colleague's decision (not the case owner's): the case page offers it to others too.
+              fourEyes: Boolean(action.options?.fourEyes),
               requireNote: Boolean(action.options?.requireNote),
               checks: action.options?.checks || [],
               blocked: blockedReason(viewer, application, state, action, recommendation, roleName, outstanding, appraisal),
+              // Never theirs to take here (the page leaves it out), rather than not yet (greyed out).
+              roleBlocked: roleCannot(viewer, state, action),
             }
           }),
   }

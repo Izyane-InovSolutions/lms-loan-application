@@ -268,6 +268,33 @@ function Tile({ label, children }) {
   )
 }
 
+// The bureau's risk band, as the tone of the score: lower risk reads as good.
+const BAND_TONE = { 'Very low risk': 'text-success', 'Low risk': 'text-success', 'Medium risk': 'text-warning', 'High risk': 'text-destructive' }
+
+/** The credit bureau tile: the score and its band, and when the report was pulled (the Credit bureau panel has the report). */
+function CrbTile({ reports = [], applies = true, hasConsent, score }) {
+  const latest = reports[0]
+  const band = latest?.report?.band
+  const note = latest
+    ? `${latest.report?.sample ? 'Sample report, pulled' : 'Pulled'} ${timeAgo(latest.createdAt)}`
+    : score != null
+      ? 'Score the rules ran on, no report on file'
+      : !applies
+        ? 'Not checked: the applicant gave a passport'
+        : hasConsent
+          ? 'No report pulled yet'
+          : 'No consent to a bureau check'
+  return (
+    <Tile label="CRB score">
+      <p className={cn('text-sm font-medium', score == null ? 'text-muted-foreground' : BAND_TONE[band] || 'text-foreground')}>
+        {score == null ? 'No score' : <span className="tabular-nums">{score}</span>}
+        {score != null && band ? <span className="font-normal">{` · ${band}`}</span> : null}
+      </p>
+      <p className="mt-1 text-xs text-muted-foreground">{note}</p>
+    </Tile>
+  )
+}
+
 function SubHeading({ icon: Icon, children, aside }) {
   return (
     <div className="flex items-baseline justify-between gap-3">
@@ -369,7 +396,7 @@ function UncheckedRules({ results, evidence, actions, onOpenDocument, onOpenDeta
  * @param actions  what an unchecked rule's button does, by the action its reason names
  *                 (enter_figure, ask_applicant, run_crb, rerun, settings); missing: no button
  */
-export function CaseSummary({ application, documents: allDocuments, prescreen, zra, showAi, canRerun, onRerun, onOpenDocument, onOpenDetails, actions = {} }) {
+export function CaseSummary({ application, documents: allDocuments, prescreen, zra, crb, showAi, canRerun, onRerun, onOpenDocument, onOpenDetails, actions = {} }) {
   const [busy, setBusy] = useState(false)
   // The detailed report's open tab, or null while it is folded away.
   const [report, setReport] = useState(null)
@@ -444,6 +471,10 @@ export function CaseSummary({ application, documents: allDocuments, prescreen, z
       .filter(([fact, docType]) => docType === document.docType && prescreen.facts?.[fact] != null && !context.sources[fact]?.startsWith('Entered by'))
       .map(([fact]) => `${FACTS[fact].label}: ${formatFact(fact, prescreen.facts[fact])}`)
 
+  // The credit bureau's score: the latest report's, else the one the rules ran on. No tile where no bureau is set up and nothing was pulled.
+  const showCrb = Boolean(crb && (crb.provider || crb.reports?.length))
+  const crbScore = crb?.reports?.[0]?.score ?? prescreen.facts?.crb_score ?? null
+
   return (
     <section className="rounded-xl border bg-card" aria-labelledby="case-summary-title">
       <div className="flex items-start justify-between gap-3 border-b px-5 py-4">
@@ -465,9 +496,9 @@ export function CaseSummary({ application, documents: allDocuments, prescreen, z
       </div>
 
       <div className="space-y-5 p-5">
-        <div className={cn('grid gap-3', review ? 'sm:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]' : 'sm:grid-cols-2')}>
+        <div className={cn('grid gap-3', review && 'lg:grid-cols-[minmax(0,4fr)_minmax(0,8fr)]')}>
           {review ? <ScoreCard review={review} /> : null}
-          <div className={cn('grid gap-3', review ? 'grid-cols-2' : 'col-span-full sm:grid-cols-2')}>
+          <div className={cn('grid gap-3', showCrb ? 'sm:grid-cols-3' : 'sm:grid-cols-2')}>
             <Tile label="Policy rules">
               <OutcomeMark outcome={prescreen.outcome} className="text-sm" />
               <p className="mt-1 text-xs text-muted-foreground">
@@ -484,6 +515,7 @@ export function CaseSummary({ application, documents: allDocuments, prescreen, z
                 {unchecked.length ? `, ${unchecked.length} not checked` : ''}
               </p>
             </Tile>
+            {showCrb ? <CrbTile {...crb} score={crbScore} /> : null}
           </div>
         </div>
         {review?.summary ? <p className="text-sm leading-relaxed text-foreground">{review.summary}</p> : null}

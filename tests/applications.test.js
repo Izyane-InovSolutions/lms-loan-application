@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { PDF, createMemoryKv, client, draftPreparer, emailCode } from './helpers.js'
+import { BUILT_IN_ROLES } from '../src/config/roles.js'
 
 const kv = createMemoryKv()
 vi.mock('../api/_lib/kv.js', () => ({ default: kv }))
@@ -130,6 +131,47 @@ describe('application lifecycle', () => {
     expect(assigned.body.application.assignedOfficer).toBe(secondUser.id)
   })
 
+  it('offers, and allows, assigning a case only to people who can act at its stage', async () => {
+    const { token, body } = await prepareDraft('stage-assignees@example.com')
+    body.data.personalInfo.email = 'stage-assignees@example.com'
+    const { body: submitted } = await applicant.post('/applications', body, { authorization: `Bearer ${token}` })
+    const { body: listed } = await admin.get(`/applications/${submitted.id}/assignees`)
+    const ids = listed.people.map((person) => person.id)
+    // Loan officers work on a newly submitted case; an administrator takes it themselves, an agent can't act here.
+    expect(listed.stage).toBeTruthy()
+    expect(ids).toEqual(expect.arrayContaining([officerId, secondOfficerId]))
+    expect(ids).not.toContain(adminId)
+    const agentId = (await dsa.get('/auth/me')).body.user.id
+    expect(ids).not.toContain(agentId)
+    expect(listed.people.find((person) => person.id === officerId)).toMatchObject({ roleLabel: expect.any(String), openCases: expect.any(Number) })
+    // Only those who may assign see the list.
+    expect((await dsa.get(`/applications/${submitted.id}/assignees`)).status).toBe(403)
+
+    const version = (await admin.get(`/applications/${submitted.id}`)).body.application.version
+    const toAgent = await admin.post(`/applications/${submitted.id}/actions`, { action: 'assign', officerId: agentId, version })
+    expect(toAgent.status).toBe(400)
+    expect(toAgent.body.code).toBe('invalid_officer')
+    const toOfficer = await admin.post(`/applications/${submitted.id}/actions`, { action: 'assign', officerId, version })
+    expect(toOfficer.status).toBe(200)
+  })
+
+  it('leaves handing cases out to managers: an officer takes a case, but cannot assign it', async () => {
+    const holders = Object.entries(BUILT_IN_ROLES).filter(([, role]) => role.permissions.includes('cases.assign')).map(([key]) => key)
+    expect(holders.sort()).toEqual(['admin', 'rm', 'sales_manager'])
+
+    const { token, body } = await prepareDraft('managers-assign@example.com')
+    body.data.personalInfo.email = 'managers-assign@example.com'
+    const { body: submitted } = await applicant.post('/applications', body, { authorization: `Bearer ${token}` })
+    let version = (await officer.get(`/applications/${submitted.id}`)).body.application.version
+    const handedOn = await officer.post(`/applications/${submitted.id}/actions`, { action: 'assign', officerId: secondOfficerId, version })
+    expect(handedOn.status).toBe(403)
+    const taken = await officer.post(`/applications/${submitted.id}/actions`, { action: 'assign', officerId, version })
+    expect(taken.status).toBe(200)
+    version = taken.body.application.version
+    // Nor may an officer see who else could have it.
+    expect((await officer.get(`/applications/${submitted.id}/assignees`)).status).toBe(403)
+  })
+
   it('serves documents to staff who may see the case and hides the case from others', async () => {
     const { body } = await officer.get(`/applications/${applicationId}`)
     const document = body.documents[0]
@@ -177,6 +219,8 @@ describe('application lifecycle', () => {
     }
     expect((await act(officer, 'recommend', { verdict: 'approve', rationale: 'Affordable', amount: 4500 })).status).toBe(200)
     expect(case_.status).toBe('pending_approval')
+    // Nor be handed the decision: the approval stage's people leave out who recommended it.
+    expect((await admin.get(`/applications/${applicationId}/assignees`)).body.people.map((person) => person.id)).not.toContain(officerId)
 
     // The recommender cannot also decide.
     expect((await act(officer, 'decide', { verdict: 'approve', rationale: 'Me again' })).body.code).toBe('four_eyes')
@@ -324,6 +368,11 @@ describe('application lifecycle', () => {
     const forAdmin = await admin.get('/dashboard?days=30')
     expect(forAdmin.body.kpis.current.submitted).toBeGreaterThanOrEqual(4)
     expect(forAdmin.body.queue).toBeDefined()
+    // The small charts' series agree with the figures they sit under.
+    const { decisions, openByStatus, kpis } = forAdmin.body
+    expect(decisions.reduce((sum, day) => sum + day.approved, 0)).toBe(kpis.current.approved)
+    expect(decisions.reduce((sum, day) => sum + day.declined, 0)).toBe(kpis.current.declined)
+    expect(openByStatus.reduce((sum, row) => sum + row.count, 0)).toBe(kpis.pipeline.count)
     const forAgent = await dsa.get('/dashboard')
     expect(forAgent.body.kpis.current.submitted).toBe(1)
     expect(forAgent.body.recent).toHaveLength(1)

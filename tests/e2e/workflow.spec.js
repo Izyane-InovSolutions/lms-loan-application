@@ -123,7 +123,7 @@ test('in the list view, an admin drags a step into the path and turns another of
   const order = await steps.locator('li h3').allTextContents()
   expect(order.indexOf('Compliance')).toBe(order.indexOf('Credit check') - 1)
   await expect(row('Underwriting')).toContainText(/Recommend\s*Compliance/)
-  await expect(row('Compliance')).toContainText('Send to Credit check')
+  await expect(row('Compliance')).toContainText(/Recommend\s*Credit check/)
   await expect(page.getByText(/things? needs? fixing/)).toBeHidden()
 
   // Credit check off: cases pass straight through, and it keeps its setup.

@@ -1,12 +1,13 @@
 import React, { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
-import { ArrowDownRight, ArrowUpRight, Minus } from 'lucide-react'
+import { AlarmClock, ArrowDownRight, ArrowUpRight, Banknote, Briefcase, CheckCircle2, Clock, FileText, Gavel, Hourglass, Inbox, Minus, PieChart as PieIcon, UserCheck, UserX } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { CHANNELS, LOAN_TYPE_LABELS, statusLabel } from '@/config/applications'
 import { roleLabel } from '@/config/roles'
 import { money } from '../components'
+import { Donut, ShareMeter, Sparkline, periodDays } from './dashboardVisuals'
 
 // Series follow the channel, never its rank: a filter that hides one never repaints the others.
 export const CHANNEL_SERIES = [
@@ -49,39 +50,101 @@ function Delta({ current, previous, higherIsBetter = true, format = (value) => v
   )
 }
 
-/**
- * The period's headline numbers as one strip: a single surface divided into figures,
- * rather than a row of identical cards.
- */
-export function KpiStrip({ kpis, days }) {
-  const { current, previous, pipeline } = kpis
-  const items = [
-    { label: `Submitted, last ${days} days`, value: current.submitted.toLocaleString(), delta: <Delta current={current.submitted} previous={previous.submitted} /> },
-    {
-      label: 'Approval rate',
-      value: percent(current.approvalRate),
-      delta: <Delta current={current.approvalRate} previous={previous.approvalRate} format={(diff) => `${Math.round(diff * 100)} pts`} />,
-      hint: `${current.approved} approved, ${current.declined} declined`,
-    },
-    { label: 'Value approved', value: money(current.approvedValue), delta: <Delta current={current.approvedValue} previous={previous.approvedValue} format={money} /> },
-    {
-      label: 'Time to decision',
-      value: hours(current.decisionHours),
-      delta: <Delta current={current.decisionHours} previous={previous.decisionHours} higherIsBetter={false} format={hours} />,
-      hint: 'Average, submit to decision',
-    },
-    { label: 'Open pipeline', value: money(pipeline.value), hint: `${pipeline.count} open applications` },
-  ]
+// The open pipeline in three parts (three colours, the most a ring can carry safely).
+const PIPELINE_GROUPS = [
+  { key: 'new', label: 'New', statuses: ['submitted'], color: 'var(--viz-1)' },
+  { key: 'assessing', label: 'Assessing', statuses: ['in_review', 'pending_approval'], color: 'var(--viz-3)' },
+  { key: 'waiting', label: 'With applicant', statuses: ['info_requested'], color: 'var(--viz-2)' },
+]
+
+const compactMoney = (value) => {
+  if (!value) return 'K0'
+  if (value >= 1e6) return `K${(value / 1e6).toFixed(value >= 1e7 ? 0 : 1)}m`
+  if (value >= 1e3) return `K${Math.round(value / 1e3)}k`
+  return money(value)
+}
+
+function KpiCell({ icon: Icon, label, value, delta, hint, chart, className }) {
   return (
-    <section aria-label="Key figures" className="grid overflow-hidden rounded-xl border bg-card sm:grid-cols-2 lg:grid-cols-5">
-      {items.map((item) => (
-        <div key={item.label} className="border-b p-5 last:border-b-0 sm:[&:nth-child(odd)]:border-r lg:border-b-0 lg:border-r lg:last:border-r-0 lg:[&:nth-child(odd)]:border-r">
-          <p className="text-xs text-muted-foreground">{item.label}</p>
-          <p className="mt-1.5 text-[1.65rem] font-semibold leading-none tabular-nums tracking-tight text-foreground">{item.value}</p>
-          <div className="mt-2 min-h-[1rem]">{item.delta || (item.hint ? <span className="text-xs text-muted-foreground">{item.hint}</span> : null)}</div>
-          {item.delta && item.hint ? <p className="text-xs text-muted-foreground">{item.hint}</p> : null}
-        </div>
-      ))}
+    // Two columns (the fifth across both) until there is room for all five in a row.
+    <div className={cn('flex flex-col border-b p-5 last:border-b-0 sm:[&:nth-child(odd)]:border-r sm:last:col-span-2 sm:last:border-r-0 xl:last:col-span-1 xl:border-b-0 xl:border-r xl:last:border-r-0', className)}>
+      <p className="flex items-center gap-2 text-xs text-muted-foreground">
+        <span className="grid size-6 place-items-center rounded-md bg-primary/10 text-primary">
+          <Icon className="size-3.5" aria-hidden="true" />
+        </span>
+        {label}
+      </p>
+      <p className="mt-2.5 text-[1.65rem] font-semibold leading-none tabular-nums tracking-tight text-foreground">{value}</p>
+      <div className="mt-2 min-h-[1rem]">{delta || (hint ? <span className="text-xs text-muted-foreground">{hint}</span> : null)}</div>
+      {delta && hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
+      {chart ? <div className="mt-auto pt-4">{chart}</div> : null}
+    </div>
+  )
+}
+
+/**
+ * The period's headline numbers as one strip, each with its own small chart: the days of
+ * the period for a count or a value, a ring for a split of a whole.
+ */
+export function KpiStrip({ kpis, days, trend = [], decisions = [], openByStatus = [] }) {
+  const { current, previous, pipeline } = kpis
+  const calendar = periodDays(days)
+  const submittedByDay = new Map()
+  trend.forEach((row) => submittedByDay.set(row.day, (submittedByDay.get(row.day) || 0) + row.count))
+  const decided = new Map(decisions.map((row) => [row.day, row]))
+  const series = (pick) => calendar.map((day) => ({ day, value: pick(day) }))
+  const open = PIPELINE_GROUPS.map((group) => ({
+    ...group,
+    value: openByStatus.filter((row) => group.statuses.includes(row.status)).reduce((sum, row) => sum + row.count, 0),
+  }))
+
+  return (
+    <section aria-label="Key figures" className="grid overflow-hidden rounded-xl border bg-card sm:grid-cols-2 xl:grid-cols-5">
+      <KpiCell
+        icon={FileText}
+        label={`Submitted, last ${days} days`}
+        value={current.submitted.toLocaleString()}
+        delta={<Delta current={current.submitted} previous={previous.submitted} />}
+        chart={<Sparkline data={series((day) => submittedByDay.get(day) || 0)} format={(value) => `${value} submitted`} label={`Applications submitted per day, last ${days} days`} />}
+      />
+      <KpiCell
+        icon={CheckCircle2}
+        label="Approval rate"
+        value={percent(current.approvalRate)}
+        delta={<Delta current={current.approvalRate} previous={previous.approvalRate} format={(diff) => `${Math.round(diff * 100)} pts`} />}
+        chart={
+          <Donut
+            size={48}
+            compact
+            slices={[
+              { key: 'approved', label: 'Approved', value: current.approved, color: 'hsl(var(--success))' },
+              { key: 'declined', label: 'Declined', value: current.declined, color: 'hsl(var(--muted-foreground) / 0.55)' },
+            ]}
+          />
+        }
+      />
+      <KpiCell
+        icon={Banknote}
+        label="Value approved"
+        value={money(current.approvedValue)}
+        delta={<Delta current={current.approvedValue} previous={previous.approvedValue} format={money} />}
+        chart={<Sparkline kind="bars" data={series((day) => decided.get(day)?.approvedValue || 0)} format={money} label={`Value approved per day, last ${days} days`} />}
+      />
+      <KpiCell
+        icon={Clock}
+        label="Time to decision"
+        value={hours(current.decisionHours)}
+        delta={<Delta current={current.decisionHours} previous={previous.decisionHours} higherIsBetter={false} format={hours} />}
+        hint="Average, submit to decision"
+        chart={<Sparkline kind="line" data={series((day) => decided.get(day)?.decisionHours ?? null)} format={(value) => `${hours(value)} on average`} label={`Average time to decision per day, last ${days} days`} />}
+      />
+      <KpiCell
+        icon={PieIcon}
+        label="Open pipeline"
+        value={money(pipeline.value)}
+        hint={`${pipeline.count} open applications`}
+        chart={<Donut size={48} compact slices={open} />}
+      />
     </section>
   )
 }
@@ -245,58 +308,57 @@ export function StageBreakdown({ funnel }) {
   )
 }
 
+// Prescreening verdicts are states, so they wear the status colours, each named beside the ring.
 const OUTCOMES = [
-  { key: 'pass', label: 'Passed', color: 'bg-success' },
-  { key: 'refer', label: 'Referred', color: 'bg-warning' },
-  { key: 'decline', label: 'Decline advised', color: 'bg-destructive' },
+  { key: 'pass', label: 'Passed', color: 'hsl(var(--success))' },
+  { key: 'refer', label: 'Referred', color: 'hsl(var(--warning))' },
+  { key: 'decline', label: 'Decline advised', color: 'hsl(var(--destructive))' },
 ]
 
-/** The credit rules' verdicts, one bar split three ways, labelled in words. */
+/** The credit rules' verdicts as a ring, with each count and share named beside it. */
 export function RuleOutcomes({ outcomes }) {
   const total = OUTCOMES.reduce((sum, entry) => sum + (outcomes[entry.key] || 0), 0)
   if (!total) return <p className="text-sm text-muted-foreground">No applications prescreened in this period.</p>
   return (
-    <div>
-      <div className="flex h-3 gap-0.5 overflow-hidden rounded-full" role="img" aria-label={OUTCOMES.map((entry) => `${entry.label}: ${outcomes[entry.key] || 0}`).join(', ')}>
-        {OUTCOMES.filter((entry) => outcomes[entry.key]).map((entry) => (
-          <span key={entry.key} className={cn('h-full first:rounded-l-full last:rounded-r-full', entry.color)} style={{ width: `${(outcomes[entry.key] / total) * 100}%` }} />
-        ))}
-      </div>
-      <dl className="mt-4 grid grid-cols-3 gap-3">
-        {OUTCOMES.map((entry) => (
-          <div key={entry.key}>
-            <dt className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <span className={cn('size-2 rounded-full', entry.color)} aria-hidden="true" />
-              {entry.label}
-            </dt>
-            <dd className="mt-0.5 text-lg font-semibold tabular-nums text-foreground">
-              {outcomes[entry.key] || 0}
-              <span className="ml-1 text-xs font-normal text-muted-foreground">{Math.round(((outcomes[entry.key] || 0) / total) * 100)}%</span>
-            </dd>
-          </div>
-        ))}
-      </dl>
-    </div>
+    <Donut
+      size={104}
+      center={
+        <span>
+          <span className="block text-lg leading-none">{total}</span>
+          <span className="text-[0.65rem] font-normal text-muted-foreground">checked</span>
+        </span>
+      }
+      slices={OUTCOMES.map((entry) => ({ ...entry, value: outcomes[entry.key] || 0 }))}
+      format={(value) => `${value} · ${Math.round((value / total) * 100)}%`}
+    />
   )
 }
 
+/** Personal against business lending this period, by value, with counts beside. */
 export function ProductMix({ mix }) {
-  const totalValue = mix.reduce((sum, row) => sum + row.value, 0)
+  const rows = ['personal', 'business'].map((type, index) => {
+    const row = mix.find((entry) => entry.loanType === type) || { count: 0, value: 0 }
+    return { key: type, label: LOAN_TYPE_LABELS[type], value: row.value, count: row.count, color: index === 0 ? 'var(--viz-1)' : 'var(--viz-2)' }
+  })
+  const total = rows.reduce((sum, row) => sum + row.value, 0)
   return (
-    <dl className="grid grid-cols-2 gap-4">
-      {['personal', 'business'].map((type) => {
-        const row = mix.find((entry) => entry.loanType === type) || { count: 0, value: 0 }
-        return (
-          <div key={type}>
-            <dt className="text-xs text-muted-foreground">{LOAN_TYPE_LABELS[type]}</dt>
-            <dd className="mt-0.5 text-lg font-semibold tabular-nums text-foreground">{money(row.value)}</dd>
-            <dd className="text-xs text-muted-foreground">
-              {row.count} applications{totalValue ? `, ${Math.round((row.value / totalValue) * 100)}% of value` : ''}
-            </dd>
-          </div>
-        )
-      })}
-    </dl>
+    <div className="space-y-3">
+      <Donut
+        size={104}
+        center={
+          <span>
+            <span className="block text-sm leading-none">{compactMoney(total)}</span>
+            <span className="text-[0.65rem] font-normal text-muted-foreground">applied for</span>
+          </span>
+        }
+        slices={rows}
+        format={money}
+      />
+      <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Briefcase className="size-3.5" aria-hidden="true" />
+        {rows.map((row) => `${row.count} ${row.label.toLowerCase()}`).join(' · ')}
+      </p>
+    </div>
   )
 }
 
@@ -343,32 +405,41 @@ export function Leaderboard({ rows }) {
   )
 }
 
-/** The officer's work, each figure a way into the filtered list. */
-export function QueueTiles({ queue }) {
+/** The officer's work, each figure a way into the filtered list, with its share of all open cases. */
+export function QueueTiles({ queue, openCount = 0 }) {
   const tiles = [
-    { label: 'In your queue', value: queue.inMyQueue ?? 0, to: '/admin/applications?assigned=queue', hint: 'Cases at the stages you work on' },
-    { label: 'Unassigned', value: queue.unassigned, to: '/admin/applications?assigned=unassigned', hint: 'Waiting for an officer' },
-    { label: 'Assigned to you', value: queue.mine, to: '/admin/applications?assigned=me', hint: 'Open cases you own' },
-    { label: 'Awaiting a decision', value: queue.awaitingDecision, to: '/admin/applications?status=pending_approval', hint: 'Recommended, need a second approver' },
-    { label: 'Waiting on applicants', value: queue.waitingOnApplicant, to: '/admin/applications?status=info_requested', hint: 'Information requested' },
-    { label: `Open over ${queue.slaDays} days`, value: queue.overdue, to: '/admin/applications?sort=oldest', hint: 'Past the target', alert: queue.overdue > 0 },
+    { icon: Inbox, label: 'In your queue', value: queue.inMyQueue ?? 0, to: '/admin/applications?assigned=queue', hint: 'Cases at the stages you work on' },
+    { icon: UserX, label: 'Unassigned', value: queue.unassigned, to: '/admin/applications?assigned=unassigned', hint: 'Waiting for an officer' },
+    { icon: UserCheck, label: 'Assigned to you', value: queue.mine, to: '/admin/applications?assigned=me', hint: 'Open cases you own' },
+    { icon: Gavel, label: 'Awaiting a decision', value: queue.awaitingDecision, to: '/admin/applications?status=pending_approval', hint: 'Recommended, need a second approver' },
+    { icon: Hourglass, label: 'Waiting on applicants', value: queue.waitingOnApplicant, to: '/admin/applications?status=info_requested', hint: 'Information requested' },
+    { icon: AlarmClock, label: `Open over ${queue.slaDays} days`, value: queue.overdue, to: '/admin/applications?sort=oldest', hint: 'Past the target', alert: queue.overdue > 0 },
   ]
   return (
     <section aria-label="Your queue" className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
-      {tiles.map((tile) => (
-        <Link
-          key={tile.label}
-          to={tile.to}
-          className={cn(
-            'rounded-xl border bg-card p-4 transition-colors hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-            tile.alert && 'border-brand/40 bg-brand/5'
-          )}
-        >
-          <p className="text-xs text-muted-foreground">{tile.label}</p>
-          <p className={cn('mt-1 text-3xl font-semibold tabular-nums tracking-tight', tile.alert ? 'text-brand' : 'text-foreground')}>{tile.value}</p>
-          <p className="mt-1 text-xs text-muted-foreground">{tile.hint}</p>
-        </Link>
-      ))}
+      {tiles.map((tile) => {
+        const Icon = tile.icon
+        return (
+          <Link
+            key={tile.label}
+            to={tile.to}
+            className={cn(
+              'group rounded-xl border bg-card p-4 transition-colors hover:border-primary/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+              tile.alert && 'border-brand/40 bg-brand/5'
+            )}
+          >
+            <div className="flex items-start justify-between gap-2">
+              <p className="text-xs text-muted-foreground">{tile.label}</p>
+              <span className={cn('grid size-8 shrink-0 place-items-center rounded-lg', tile.alert ? 'bg-brand/10 text-brand' : 'bg-primary/10 text-primary')}>
+                <Icon className="size-4" aria-hidden="true" />
+              </span>
+            </div>
+            <p className={cn('mt-1 text-3xl font-semibold tabular-nums tracking-tight', tile.alert ? 'text-brand' : 'text-foreground')}>{tile.value}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{tile.hint}</p>
+            <ShareMeter value={tile.value} total={openCount} tone={tile.alert ? 'alert' : 'primary'} label={`${tile.value} of ${openCount} open cases`} />
+          </Link>
+        )
+      })}
     </section>
   )
 }
