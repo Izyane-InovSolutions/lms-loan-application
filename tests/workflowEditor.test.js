@@ -102,3 +102,26 @@ describe('the Workflow editor', () => {
     expect(stayed).toMatchObject({ version: 1, state: { id: 'submitted' } })
   })
 })
+
+describe('restoring an earlier workflow version', () => {
+  it('puts the version into the draft, leaving the published one in force', async () => {
+    expect((await officer.post('/admin/workflow/restore', { version: 1 })).status).toBe(403)
+    expect((await admin.post('/admin/workflow/restore', { version: 999 })).status).toBe(404)
+    expect((await admin.post('/admin/workflow/restore', { version: 'x' })).status).toBe(400)
+
+    const before = (await admin.get('/admin/workflow')).body
+    expect(before.history.length).toBeGreaterThan(1)
+    const old = (await admin.get('/admin/workflow')).body.history.at(-1).version
+    const { status, body } = await admin.post('/admin/workflow/restore', { version: old })
+    expect(status).toBe(200)
+    expect(body.draft.note).toBe(`Restored from version ${old}`)
+
+    const after = (await admin.get('/admin/workflow')).body
+    expect(after.published.version).toBe(before.published.version)
+    expect(after.draft.definition.states.map((state) => state.id)).toEqual(body.draft.definition.states.map((state) => state.id))
+    // Publishing it makes a new version: history is never rewritten.
+    expect(body.validation.errors).toEqual([])
+    expect((await admin.post('/admin/workflow/publish', {})).status).toBe(200)
+    expect((await admin.get('/admin/workflow')).body.published.version).toBe(before.published.version + 1)
+  })
+})

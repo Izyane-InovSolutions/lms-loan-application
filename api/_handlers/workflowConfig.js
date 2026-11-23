@@ -210,6 +210,28 @@ const publish = async (req, res) => {
 }
 
 /**
+ * Puts an earlier version into the draft, to look over and publish again: the way back
+ * from a change that went wrong. A draft already there is replaced. Nothing changes for
+ * cases until it is published.
+ */
+const restoreVersion = async (req) => {
+  const actor = await requireUser(req, { permission: 'settings.manage' })
+  const version = Number(req.body?.version)
+  if (!Number.isInteger(version) || version < 1) fail(400, 'Choose a version to restore.', 'invalid_version')
+  const db = await getDb()
+  const [row] = await db
+    .select({ definition: schema.workflowVersions.definition })
+    .from(schema.workflowVersions)
+    .where(and(eq(schema.workflowVersions.version, version), ne(schema.workflowVersions.status, 'draft')))
+    .limit(1)
+  if (!row) fail(404, 'That version does not exist.', 'not_found')
+  const definition = sanitizeWorkflow(row.definition)
+  const draft = await saveDraftWorkflow(definition, `Restored from version ${version}`, actor)
+  await recordAudit({ req, actor, action: 'workflow.version_restored', entityType: 'workflow', entityId: null, detail: { fromVersion: version } })
+  return { draft: { definition: draft.definition, note: draft.note, updatedAt: draft.updatedAt }, validation: await validate(definition) }
+}
+
+/**
  * Moves open cases on older versions onto the published one, where the state they are in
  * still exists there (by id) and is on. The others stay where they are, to finish on their version.
  */
@@ -244,4 +266,5 @@ export const workflowConfigRoutes = [
   ['DELETE', '/admin/workflow/draft', discardDraft],
   ['POST', '/admin/workflow/publish', publish],
   ['POST', '/admin/workflow/move-cases', moveCases],
+  ['POST', '/admin/workflow/restore', restoreVersion],
 ]
