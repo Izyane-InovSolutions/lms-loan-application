@@ -349,22 +349,27 @@ export const fillUploadedPdf = async (bytes, { values, summary, footer }) => {
 }
 
 /**
- * A signed copy: the signature drawn wherever the document has a place for it, and a
- * signature record page at the end saying who signed, when, how it was confirmed, and the
- * SHA-256 of the document they saw.
+ * A signed copy: the signature drawn wherever the document has a place for it. Who signed,
+ * when, how it was confirmed and the SHA-256 of what they saw are kept in the sealed
+ * signature record, not printed. Only a document with no place for a signature (an
+ * uploaded PDF without a signature box) gets a page at the end, so the signature shows.
  */
 export const signPdf = async (bytes, { signature, record, signatureSpots = [], signedOn = '' }) => {
   const doc = await PDFDocument.load(bytes, { updateMetadata: false })
   const png = await doc.embedPng(signature)
   const dateFont = await doc.embedFont(StandardFonts.Helvetica)
+  let drawn = 0
   for (const spot of signatureSpots) {
     const page = doc.getPages()[spot.pageIndex]
     if (!page) continue
+    drawn += 1
     const scale = Math.min(spot.width / png.width, spot.height / png.height)
     page.drawImage(png, { x: spot.x, y: spot.y, width: png.width * scale, height: png.height * scale })
     // Signature blocks the workspace drew have a date line beside the box.
     if (spot.date && signedOn) page.drawText(safeFor(dateFont)(signedOn), { x: spot.date.x, y: spot.date.y, size: 10, font: dateFont, color: INK })
   }
+
+  if (drawn) return doc.save()
 
   const writer = await createWriter(doc)
   writer.newPage()

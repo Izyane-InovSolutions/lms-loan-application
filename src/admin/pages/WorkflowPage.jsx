@@ -1,6 +1,6 @@
 /* eslint-disable react/prop-types */
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, GitBranch, LayoutGrid, List, ListChecks, Loader2, Plus, Rocket, Trash2, Undo2, X } from 'lucide-react'
+import { AlertTriangle, GitBranch, History as HistoryIcon, LayoutGrid, List, ListChecks, Loader2, Plus, Rocket, Trash2, Undo2, X } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -95,7 +95,7 @@ function ChecklistDialog({ open, onOpenChange, checklist, onSave }) {
   )
 }
 
-function History({ history, publishedVersion, onMove, moving }) {
+function History({ history, publishedVersion, onMove, moving, onRestore, restoring }) {
   const older = history.filter((entry) => entry.version !== publishedVersion && entry.openCases > 0)
   return (
     <Panel title="Versions" description="New applications follow the published version. Open cases finish on the one they started with.">
@@ -107,9 +107,18 @@ function History({ history, publishedVersion, onMove, moving }) {
               {entry.version === publishedVersion ? <span className="ml-2 rounded bg-success/15 px-1.5 py-0.5 text-xs font-medium text-success">Published</span> : null}
               {entry.legacy ? <span className="ml-2 text-xs font-normal text-muted-foreground">from the settings</span> : null}
             </span>
-            <span className="text-muted-foreground">
-              {entry.openCases ? `${entry.openCases} open ${entry.openCases === 1 ? 'case' : 'cases'} · ` : ''}
-              {entry.publishedAt ? dateTime(entry.publishedAt) : ''}
+            <span className="flex flex-wrap items-center gap-3 text-muted-foreground">
+              <span>
+                {entry.openCases ? `${entry.openCases} open ${entry.openCases === 1 ? 'case' : 'cases'} · ` : ''}
+                {entry.publishedAt ? dateTime(entry.publishedAt) : ''}
+              </span>
+              {/* Any version but the one in force can be brought back, as a draft to publish. */}
+              {entry.version !== publishedVersion ? (
+                <Button type="button" variant="outline" size="sm" onClick={() => onRestore(entry.version)} disabled={Boolean(restoring)}>
+                  {restoring === entry.version ? <Loader2 className="animate-spin" /> : <HistoryIcon />}
+                  Restore as draft
+                </Button>
+              ) : null}
             </span>
           </li>
         ))}
@@ -135,6 +144,8 @@ export function WorkflowPage() {
   const [saved, setSaved] = useState(null)
   const [view, setViewState] = useState(readView)
   const [editing, setEditing] = useState(null)
+  // The version waiting on "Restore version N?", or null.
+  const [restoreAsk, setRestoreAsk] = useState(null)
   const [checklistOpen, setChecklistOpen] = useState(false)
   const [hintDismissed, setHintDismissed] = useState(readHintDismissed)
   const [busy, setBusy] = useState(null)
@@ -216,6 +227,21 @@ export function WorkflowPage() {
       await load()
       notify('Draft discarded')
     })
+
+  // Brings an earlier version back as the draft; asks first when it would replace a draft or unsaved edits.
+  const restore = (version) =>
+    run(`restore-${version}`, async () => {
+      setRestoreAsk(null)
+      const result = await api('/admin/workflow/restore', { method: 'POST', body: { version } })
+      const next = forEditing(result.draft.definition)
+      setDefinition(next)
+      setSaved(JSON.stringify(next))
+      setLoaded((prev) => ({ ...prev, draft: result.draft }))
+      setEditing(null)
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+      notify(`Version ${version} restored as a draft. Save the workflow to put it in force.`)
+    })
+  const askRestore = (version) => (hasDraft ? setRestoreAsk(version) : restore(version))
 
   const moveCases = () =>
     run('move', async () => {
@@ -381,7 +407,28 @@ export function WorkflowPage() {
         <TreePreview definition={definition} />
       )}
 
-      <History history={loaded.history} publishedVersion={loaded.published.version} onMove={moveCases} moving={busy === 'move'} />
+      <History
+        history={loaded.history}
+        publishedVersion={loaded.published.version}
+        onMove={moveCases}
+        moving={busy === 'move'}
+        onRestore={askRestore}
+        restoring={busy?.startsWith?.('restore-') ? Number(busy.slice(8)) : null}
+      />
+      <Dialog open={restoreAsk !== null} onOpenChange={(open) => (open ? null : setRestoreAsk(null))}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Restore version {restoreAsk}?</DialogTitle>
+            <DialogDescription>It replaces your current draft and unsaved changes. The published workflow stays in force until you save.</DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRestoreAsk(null)}>
+              Cancel
+            </Button>
+            <Button onClick={() => restore(restoreAsk)}>Restore as draft</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <StateDrawer
         definition={definition}

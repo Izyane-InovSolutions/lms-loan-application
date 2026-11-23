@@ -120,8 +120,9 @@ export const SCOPES = {
   },
 }
 
-const RM_PERMISSIONS = ['applications.assist', 'team.lead', 'drafts.view', 'applications.note', 'offers.record', 'pipeline.view', 'reports.team', 'users.view']
-const OFFICER_PERMISSIONS = ['applications.note', 'offers.record', 'cases.work', 'cases.assign', 'cases.recommend', 'cases.decide', 'cases.disburse', 'offers.issue', 'rules.view']
+// Handing cases to officers is a manager's job: relationship and sales managers assign, officers take their own.
+const RM_PERMISSIONS = ['applications.assist', 'team.lead', 'drafts.view', 'applications.note', 'offers.record', 'pipeline.view', 'reports.team', 'users.view', 'cases.assign']
+const OFFICER_PERMISSIONS = ['applications.note', 'offers.record', 'cases.work', 'cases.recommend', 'cases.decide', 'cases.disburse', 'offers.issue', 'rules.view']
 
 /** The roles every workspace has. Their label, scope and permissions can be changed; admin's cannot. */
 export const BUILT_IN_ROLES = {

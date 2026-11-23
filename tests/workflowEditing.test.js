@@ -20,7 +20,7 @@ describe('the list view’s moves', () => {
     expect(steps(moved)).toEqual(['submitted', 'appraisal', 'in_review', 'credit_check', 'pending_approval', 'approved', 'accepted'])
     expect(links(moved, 'in_review')).toEqual(['recommend→credit_check'])
     expect(links(moved, 'credit_check')).toEqual(['move→pending_approval'])
-    expect(moved.states.find((state) => state.id === 'credit_check').actions[0].label).toBe('Send to Underwriting: approval')
+    expect(moved.states.find((state) => state.id === 'credit_check').actions[0].label).toBe('Recommend')
     expect(errors(moved)).toEqual([])
   })
 
@@ -33,8 +33,8 @@ describe('the list view’s moves', () => {
     expect(links(moved, 'appraisal')).toEqual(['move→credit_check'])
     expect(links(moved, 'credit_check')).toEqual(['move→in_review'])
     expect(links(moved, 'in_review')).toEqual(['recommend→pending_approval'])
-    // Its default name follows its new target.
-    expect(moved.states.find((state) => state.id === 'credit_check').actions[0].label).toBe('Send to Underwriting')
+    // It keeps the usual name wherever it leads.
+    expect(moved.states.find((state) => state.id === 'credit_check').actions[0].label).toBe('Recommend')
     expect(errors(moved)).toEqual([])
   })
 

@@ -42,9 +42,9 @@ const withStates = (definition, states) => ({ ...definition, states })
 
 const updateState = (definition, id, change) => withStates(definition, definition.states.map((state) => (state.id === id ? { ...state, ...change(state) } : state)))
 
-/** The usual name for an action of `kind` leading to `target`. */
-export const defaultActionLabel = (kind, target) =>
-  ({ move: `Send to ${target?.label || '…'}`, return: 'Return', recommend: 'Recommend', approve: 'Approve', reject: 'Reject', pay_out: 'Mark as paid out' })[kind] || 'Continue'
+/** The usual name for an action of `kind` (the arrow beside it says where it leads). */
+export const defaultActionLabel = (kind) =>
+  ({ move: 'Recommend', return: 'Return', recommend: 'Recommend', approve: 'Approve', reject: 'Reject', pay_out: 'Mark as paid out' })[kind] || 'Continue'
 
 /** A new in-progress state, placed before the built-in ends (or after `afterId`). */
 export const addState = (definition, { label = 'New state', type = 'work', afterId = null } = {}) => {
@@ -94,7 +94,7 @@ export const addAction = (definition, stateId, { kind = 'move', to = '', label }
   const state = stateById(definition, stateId)
   const target = ACTION_KINDS[kind]?.to || to
   const id = uniqueId(label || kind, new Set((state.actions || []).map((action) => action.id)), 'action')
-  const action = { id, label: label || defaultActionLabel(kind, stateById(definition, target)), kind, to: target, options: { checks: [] } }
+  const action = { id, label: label || defaultActionLabel(kind), kind, to: target, options: { checks: [] } }
   return { definition: updateState(definition, stateId, (current) => ({ actions: [...(current.actions || []), action] })), actionId: id }
 }
 
@@ -162,11 +162,10 @@ const FOLLOWS_ORDER = new Set(['move', 'recommend', 'approve'])
 
 /**
  * `state` with the actions (and offer acceptance) that led to `from` leading to `to`
- * instead. An action named after its old target is renamed after the new one; one that
+ * instead. An action still carrying the usual name keeps it (an old "Send to …" one takes it); one that
  * would duplicate an action already going there is dropped.
  */
 const retarget = (definition, state, from, to) => {
-  const toState = stateById(definition, to)
   const actions = []
   for (const action of state.actions || []) {
     if (action.to !== from || !FOLLOWS_ORDER.has(action.kind)) {
@@ -175,8 +174,9 @@ const retarget = (definition, state, from, to) => {
     }
     if (!to) continue
     if ((state.actions || []).some((other) => other !== action && other.to === to && other.kind === action.kind)) continue
-    const named = action.label === defaultActionLabel(action.kind, stateById(definition, from))
-    actions.push({ ...action, to, ...(named ? { label: defaultActionLabel(action.kind, toState) } : {}) })
+    // Still the usual name (or the old "Send to …" one): it follows the action to its new place.
+    const named = action.label === defaultActionLabel(action.kind) || /^send to\b/i.test(action.label || '')
+    actions.push({ ...action, to, ...(named ? { label: defaultActionLabel(action.kind) } : {}) })
   }
   const offer = state.type === 'offer' && state.offer?.onAccept === from ? { offer: { ...state.offer, onAccept: to || '' } } : {}
   return { ...state, actions, ...offer }
@@ -221,9 +221,8 @@ export const moveStep = (definition, id, beforeId = null) => {
     if (newBelow && !leadsTo(moved, newBelow)) {
       if (moved.type === 'offer') moved = { ...moved, offer: { ...moved.offer, onAccept: newBelow } }
       else {
-        const target = stateById(current, newBelow)
         const actionId = uniqueId('next', new Set((moved.actions || []).map((action) => action.id)), 'next')
-        moved = { ...moved, actions: [...(moved.actions || []), { id: actionId, label: defaultActionLabel('move', target), kind: 'move', to: newBelow, options: { checks: [] } }] }
+        moved = { ...moved, actions: [...(moved.actions || []), { id: actionId, label: defaultActionLabel('move'), kind: 'move', to: newBelow, options: { checks: [] } }] }
       }
     }
     return moved

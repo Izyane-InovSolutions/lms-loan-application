@@ -10,10 +10,11 @@ import { LOAN_TYPE_LABELS, LMS_SYNC_LABELS, statusLabel } from '@/config/applica
 import { setAssistedFlag } from '@/lib/assisted'
 import { api } from '../api'
 import { useAuth } from '../auth'
-import { EmptyState, FormError, Initials, PageHeader, Panel, roleTone, StatusBadge, StatusText, money, timeAgo } from '../components'
+import { EmptyState, FormError, Initials, Panel, roleTone, StatusBadge, StatusText, money, timeAgo } from '../components'
 import { AssistedApplicationTypeDialog } from '../AssistedApplicationTypeDialog'
 import { describeAction } from './AuditPage'
 import { KpiStrip, Leaderboard, ProductMix, QueueTiles, RuleOutcomes, StageBreakdown, SubmissionsTrend } from './dashboardCharts'
+import { DashboardIllustration } from './dashboardVisuals'
 
 const greeting = () => {
   const hour = new Date().getHours()
@@ -50,11 +51,12 @@ export function HomePage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader
-        title={`${greeting()}, ${user.name.split(' ')[0]}`}
-        description={roleDescription(user.role)}
-        actions={
-          <div className="flex rounded-lg border bg-card p-0.5" role="radiogroup" aria-label="Period">
+      <WelcomeBanner
+        name={user.name.split(' ')[0]}
+        role={roleDescription(user.role)}
+        summary={ready ? summaryLine(data.dashboard) : null}
+        period={
+          <div className="inline-flex rounded-lg bg-primary-foreground/10 p-0.5 ring-1 ring-primary-foreground/20" role="radiogroup" aria-label="Period">
             {PERIODS.map((period) => (
               <button
                 key={period}
@@ -63,8 +65,8 @@ export function HomePage() {
                 aria-checked={days === period}
                 onClick={() => setDays(period)}
                 className={cn(
-                  'rounded-md px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                  days === period ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'
+                  'rounded-md px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-foreground',
+                  days === period ? 'bg-primary-foreground text-primary' : 'text-primary-foreground/80 hover:text-primary-foreground'
                 )}
               >
                 {period} days
@@ -86,6 +88,42 @@ export function HomePage() {
         </div>
       )}
     </div>
+  )
+}
+
+/** One line on what needs attention: the queue for credit staff, else the period's flow. */
+const summaryLine = (dashboard) => {
+  const parts = []
+  if (dashboard.queue) {
+    parts.push(`${dashboard.queue.inMyQueue ?? 0} ${dashboard.queue.inMyQueue === 1 ? 'case' : 'cases'} in your queue`)
+    if (dashboard.queue.awaitingDecision) parts.push(`${dashboard.queue.awaitingDecision} awaiting a decision`)
+    if (dashboard.queue.overdue) parts.push(`${dashboard.queue.overdue} past the ${dashboard.queue.slaDays}-day target`)
+  } else {
+    parts.push(`${dashboard.kpis.current.submitted} submitted in the last ${dashboard.days} days`)
+    parts.push(`${dashboard.kpis.pipeline.count} open`)
+  }
+  if (dashboard.drafts?.count) parts.push(`${dashboard.drafts.count} ${dashboard.drafts.count === 1 ? 'draft' : 'drafts'} to follow up`)
+  return parts.join(' · ')
+}
+
+/** The greeting, in the brand's colour, with what needs attention and the period picker. */
+function WelcomeBanner({ name, role, summary, period }) {
+  return (
+    <header className="relative overflow-hidden rounded-2xl bg-primary px-6 py-6 text-primary-foreground shadow-soft sm:px-8">
+      <div aria-hidden="true" className="pointer-events-none absolute -right-16 -top-24 size-72 rounded-full bg-primary-foreground/10 blur-2xl" />
+      <div className="relative flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
+        <div className="min-w-0 max-w-2xl">
+          <p className="text-xs font-semibold uppercase tracking-[0.14em] text-primary-foreground/70">{new Date().toLocaleDateString('en-ZM', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
+          <h1 className="mt-1.5 text-[1.75rem] font-semibold leading-tight tracking-tight">
+            {greeting()}, {name}
+          </h1>
+          <p className="mt-1 text-sm text-primary-foreground/80">{role}</p>
+          {summary ? <p className="mt-3 inline-flex rounded-full bg-primary-foreground/15 px-3 py-1 text-sm font-medium">{summary}</p> : null}
+          <div className="mt-4">{period}</div>
+        </div>
+        <DashboardIllustration className="hidden h-32 w-auto shrink-0 text-primary-foreground md:block lg:h-36" />
+      </div>
+    </header>
   )
 }
 
@@ -112,9 +150,9 @@ function RoleDashboard({ user, dashboard, overview }) {
   if (may('cases.work') && !may('reports.team')) {
     return (
       <>
-        <QueueTiles queue={dashboard.queue} />
-        <KpiStrip kpis={dashboard.kpis} days={dashboard.days} />
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+        <QueueTiles queue={dashboard.queue} openCount={dashboard.kpis.pipeline.count} />
+        <KpiStrip kpis={dashboard.kpis} days={dashboard.days} trend={dashboard.trend} decisions={dashboard.decisions} openByStatus={dashboard.openByStatus} />
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
           {trend}
           <div className="space-y-6">
             {rules}
@@ -133,8 +171,8 @@ function RoleDashboard({ user, dashboard, overview }) {
   if (may('applications.assist') && user.scope !== 'all') {
     return (
       <>
-        <KpiStrip kpis={dashboard.kpis} days={dashboard.days} />
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+        <KpiStrip kpis={dashboard.kpis} days={dashboard.days} trend={dashboard.trend} decisions={dashboard.decisions} openByStatus={dashboard.openByStatus} />
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
           <RecentApplications rows={dashboard.recent} choosesLoanType={may('team.lead')} />
           <div className="space-y-6">
             {dashboard.drafts ? <DraftsPanel drafts={dashboard.drafts} /> : null}
@@ -143,7 +181,7 @@ function RoleDashboard({ user, dashboard, overview }) {
           </div>
         </div>
         {may('team.lead') ? (
-          <div className="grid gap-6 xl:grid-cols-2">
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
             <Panel title="Your agents’ results">
               <Leaderboard rows={dashboard.leaderboard} />
             </Panel>
@@ -158,9 +196,9 @@ function RoleDashboard({ user, dashboard, overview }) {
   // Admin and sales manager: the whole book, plus whatever else their role covers.
   return (
     <>
-      {dashboard.queue ? <QueueTiles queue={dashboard.queue} /> : null}
-      <KpiStrip kpis={dashboard.kpis} days={dashboard.days} />
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
+      {dashboard.queue ? <QueueTiles queue={dashboard.queue} openCount={dashboard.kpis.pipeline.count} /> : null}
+      <KpiStrip kpis={dashboard.kpis} days={dashboard.days} trend={dashboard.trend} decisions={dashboard.decisions} openByStatus={dashboard.openByStatus} />
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
         {trend}
         <div className="space-y-6">
           {dashboard.drafts ? <DraftsPanel drafts={dashboard.drafts} /> : null}
@@ -170,7 +208,7 @@ function RoleDashboard({ user, dashboard, overview }) {
           </Panel>
         </div>
       </div>
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
         {stages}
         {dashboard.leaderboard ? (
           <Panel title="Agents and relationship managers" description="Ranked by applications brought in">
@@ -179,7 +217,7 @@ function RoleDashboard({ user, dashboard, overview }) {
         ) : null}
       </div>
       {may('applications.assist') ? (
-        <div className="grid gap-6 xl:grid-cols-2">
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
           <RecentApplications rows={dashboard.recent} choosesLoanType={may('team.lead')} />
           <div className="space-y-6">
             {user.referralCode ? <ReferralPanel code={user.referralCode} /> : null}
@@ -303,7 +341,7 @@ function AdminExtras({ overview, lmsHealth }) {
   const lmsEntries = Object.entries(lmsHealth || {})
 
   return (
-    <div className="grid gap-6 xl:grid-cols-3">
+    <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
       <Panel
         title="Your team"
         action={

@@ -8,13 +8,6 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { cn } from '@/lib/utils'
 import { Field, FormError } from '../components'
 
-// A choice button in each tone: always, then [not picked, picked].
-const CHOICE_BUTTONS = {
-  neutral: ['border-input bg-background text-foreground', 'opacity-60 hover:opacity-90', 'ring-2 ring-ring ring-offset-2 ring-offset-background'],
-  primary: ['border-primary bg-primary text-primary-foreground', 'opacity-50 hover:opacity-80', 'ring-2 ring-primary ring-offset-2 ring-offset-background'],
-  destructive: ['border-destructive bg-destructive text-destructive-foreground', 'opacity-50 hover:opacity-80', 'ring-2 ring-destructive ring-offset-2 ring-offset-background'],
-}
-
 const textareaClass =
   'w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
 
@@ -22,13 +15,15 @@ const textareaClass =
  * A dialog for one workflow action, built from a field list:
  *   { name, label, type: 'textarea' | 'number' | 'select' | 'choice' | 'checkboxes', options?, hint?, showIf?(values) }
  * `checkboxes` keeps the picked options' values as an array.
- * `choice` renders large radio cards; with `buttons: true`, plain buttons instead (approve /
- * decline / send back), filled in each option's `tone` ('primary' or 'destructive').
+ * `choice` renders large radio cards.
+ * `outcomes` ({ name, options: [{ value, label, tone }] }) ends the dialog in one button per
+ * option instead of one submit (Decline / Approve): each submits with `name` set to its value,
+ * and is greyed out, saying why on hover, while `blocked` holds it back.
  * `before(values)` renders beside the fields, in a wider dialog (above them on a phone);
  * `blocked(values)` returns why it can't be submitted yet (shown, and the button
  * disabled), or null.
  */
-export function ActionDialog({ open, onOpenChange, title, description, fields, initial = {}, submitLabel, tone = 'default', onSubmit, before, blocked }) {
+export function ActionDialog({ open, onOpenChange, title, description, fields, initial = {}, submitLabel, tone = 'default', onSubmit, before, blocked, outcomes }) {
   const [values, setValues] = useState(initial)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
@@ -43,17 +38,23 @@ export function ActionDialog({ open, onOpenChange, title, description, fields, i
 
   const set = (name, value) => setValues((prev) => ({ ...prev, [name]: value }))
 
-  const handleSubmit = async (event) => {
-    event.preventDefault()
-    setBusy(true)
+  // `extra` is the outcome picked, when the dialog ends in outcome buttons.
+  const submit = async (extra = {}) => {
+    setBusy(extra[outcomes?.name] || true)
     setError('')
     try {
-      await onSubmit(values)
+      await onSubmit({ ...values, ...extra })
       onOpenChange(false)
     } catch (submitError) {
       setError(submitError.message)
       setBusy(false)
     }
+  }
+
+  const handleSubmit = (event) => {
+    event.preventDefault()
+    // With outcome buttons, only a button decides; Enter in a field doesn't pick one.
+    if (!outcomes) submit()
   }
 
   const label = typeof submitLabel === 'function' ? submitLabel(values) : submitLabel
@@ -83,15 +84,13 @@ export function ActionDialog({ open, onOpenChange, title, description, fields, i
                         <div className={cn('grid gap-2', field.options.length === 3 ? 'sm:grid-cols-3' : 'sm:grid-cols-2')}>
                           {field.options.map((option) => {
                             const picked = values[field.name] === option.value
-                            const [base, idle, chosen] = CHOICE_BUTTONS[option.tone] || CHOICE_BUTTONS.neutral
                             return (
                               <label
                                 key={option.value}
                                 className={cn(
-                                  'cursor-pointer rounded-lg border text-sm transition focus-within:ring-2 focus-within:ring-ring',
-                                  field.buttons
-                                    ? cn('flex h-10 items-center justify-center px-4 font-medium shadow-soft', base, picked ? chosen : idle)
-                                    : cn('flex flex-col p-3', picked ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'hover:bg-muted/40')
+                                  // The ring only for the keyboard: a click shouldn't outline the picked option.
+                                  'flex cursor-pointer flex-col rounded-lg border p-3 text-sm transition has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring',
+                                  picked ? 'border-primary bg-primary/5 ring-1 ring-primary' : 'hover:bg-muted/40'
                                 )}
                               >
                                 <input
@@ -102,14 +101,8 @@ export function ActionDialog({ open, onOpenChange, title, description, fields, i
                                   onChange={() => set(field.name, option.value)}
                                   className="sr-only"
                                 />
-                                {field.buttons ? (
-                                  option.label
-                                ) : (
-                                  <>
-                                    <span className="font-medium text-foreground">{option.label}</span>
-                                    {option.hint ? <span className="mt-0.5 text-xs text-muted-foreground">{option.hint}</span> : null}
-                                  </>
-                                )}
+                                <span className="font-medium text-foreground">{option.label}</span>
+                                {option.hint ? <span className="mt-0.5 text-xs text-muted-foreground">{option.hint}</span> : null}
                               </label>
                             )
                           })}
@@ -166,15 +159,42 @@ export function ActionDialog({ open, onOpenChange, title, description, fields, i
             </div>
           </div>
           <FormError message={error} />
-          {reason ? <p className="text-sm text-muted-foreground">{reason}</p> : null}
+          {reason && !outcomes ? <p className="text-sm text-muted-foreground">{reason}</p> : null}
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
               Cancel
             </Button>
-            <Button type="submit" variant={buttonTone === 'destructive' ? 'destructive' : 'default'} disabled={busy || Boolean(reason)}>
-              {busy ? <Loader2 className="animate-spin" /> : null}
-              {label}
-            </Button>
+            {outcomes ? (
+              outcomes.options.map((option) => {
+                const held = blocked ? blocked({ ...values, [outcomes.name]: option.value }) : null
+                const button = (
+                  <Button
+                    type="button"
+                    // The approving outcome is the filled one; the others are outlined, a decline in red.
+                    variant={option.tone === 'primary' ? 'default' : 'outline'}
+                    className={cn(option.tone === 'destructive' && 'text-destructive hover:text-destructive')}
+                    disabled={Boolean(busy) || Boolean(held)}
+                    onClick={() => submit({ [outcomes.name]: option.value })}
+                  >
+                    {busy === option.value ? <Loader2 className="animate-spin" /> : null}
+                    {option.label}
+                  </Button>
+                )
+                return held ? (
+                  <span key={option.value} title={held} className="inline-flex cursor-not-allowed">
+                    {button}
+                    <span className="sr-only">{held}</span>
+                  </span>
+                ) : (
+                  <React.Fragment key={option.value}>{button}</React.Fragment>
+                )
+              })
+            ) : (
+              <Button type="submit" variant={buttonTone === 'destructive' ? 'destructive' : 'default'} disabled={Boolean(busy) || Boolean(reason)}>
+                {busy ? <Loader2 className="animate-spin" /> : null}
+                {label}
+              </Button>
+            )}
           </DialogFooter>
         </form>
       </DialogContent>

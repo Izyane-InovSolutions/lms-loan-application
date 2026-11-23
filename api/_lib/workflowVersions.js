@@ -121,7 +121,7 @@ export const withCurrentStageNames = (definition) => {
     for (const [former, next] of renames) {
       if (label === former) return next
       if (label.startsWith(`${former}: `)) return `${next}${label.slice(former.length)}`
-      if (label === `Send to ${former}`) return `Send to ${next}`
+      if (label === `Recommend ${former}`) return `Recommend ${next}`
     }
     return ['Start review', 'Start appraisal'].includes(label) ? 'Start the review' : label
   }

@@ -207,19 +207,18 @@ function ScoreCard({ review }) {
       <div className="min-w-0">
         <p className="text-xs text-muted-foreground">AI score</p>
         <p className={cn('text-sm font-semibold', band?.tone || 'text-muted-foreground')}>{band ? band.label : 'Not scored yet'}</p>
-        <p className={cn('mt-1 flex items-center gap-1.5 text-xs font-medium', recommendation?.tone || 'text-foreground')}>
+        <p className={cn('mt-1 flex flex-wrap items-center gap-x-1.5 text-xs font-medium', recommendation?.tone || 'text-foreground')}>
           <Sparkles className="size-3" aria-hidden="true" />
           {recommendation?.label || 'No recommendation'}
-          <span className="font-normal capitalize text-muted-foreground">, {review.riskLevel} risk</span>
+          {review.riskLevel ? <span className="whitespace-nowrap font-normal text-muted-foreground">· {review.riskLevel[0].toUpperCase() + review.riskLevel.slice(1)} risk</span> : null}
         </p>
-        {!scored ? <p className="mt-1 text-[11px] text-muted-foreground">Run the review again to score this case.</p> : null}
       </div>
     </div>
   )
 }
 
 const OVERVIEW_TONES = { high: 'text-destructive', medium: 'text-warning', low: 'text-muted-foreground', unknown: 'text-warning' }
-const OVERVIEW_LIMIT = 3
+const OVERVIEW_LIMIT = 2
 
 /** The few most serious points from one source, one line each, and a way into the detail. */
 function Overview({ icon, title, items, empty, extra, onMore }) {
@@ -227,7 +226,7 @@ function Overview({ icon, title, items, empty, extra, onMore }) {
   const hidden = items.length - shown.length
   return (
     <div className="flex flex-col rounded-lg border p-4">
-      <SubHeading icon={icon} aside={items.length ? `${items.length} ${items.length === 1 ? 'point' : 'points'}` : null}>
+      <SubHeading icon={icon}>
         {title}
       </SubHeading>
       {shown.length ? (
@@ -237,8 +236,8 @@ function Overview({ icon, title, items, empty, extra, onMore }) {
             return (
               <li key={item.key} className="flex gap-2 text-sm">
                 <Icon className={cn('mt-0.5 size-4 shrink-0', OVERVIEW_TONES[item.tone])} aria-hidden="true" />
-                <span className="min-w-0">
-                  <span className="line-clamp-2 text-foreground">{item.text}</span>
+                <span className="min-w-0" title={item.text}>
+                  <span className="line-clamp-2 text-foreground sm:line-clamp-1">{item.text}</span>
                   {item.detail ? <span className="mt-0.5 line-clamp-1 block text-xs text-muted-foreground">{item.detail}</span> : null}
                 </span>
               </li>
@@ -251,20 +250,157 @@ function Overview({ icon, title, items, empty, extra, onMore }) {
           {empty}
         </p>
       )}
-      {hidden > 0 || extra ? <p className="mt-2 text-xs text-muted-foreground">{[hidden > 0 ? `${hidden} more` : null, extra].filter(Boolean).join(' · ')}</p> : null}
-      <button type="button" onClick={onMore} className="mt-3 self-start text-xs font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-        View details
-      </button>
+      <p className="mt-3 flex flex-wrap items-baseline gap-x-2 text-xs">
+        <button type="button" onClick={onMore} className="font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          {hidden > 0 ? `View all ${items.length}` : 'View details'}
+        </button>
+        {extra ? <span className="text-muted-foreground">· {extra}</span> : null}
+      </p>
     </div>
   )
 }
 
-function Tile({ label, children }) {
+/** The AI's summary, two lines until opened. */
+function AiSummary({ text }) {
+  const [open, setOpen] = useState(false)
+  const [clipped, setClipped] = useState(false)
+  const ref = useRef(null)
+  // "Read more" only when two lines don't hold it, at this width.
+  useEffect(() => {
+    const node = ref.current
+    if (!node || open) return undefined
+    const measure = () => setClipped(node.scrollHeight > node.clientHeight + 1)
+    measure()
+    const observer = new ResizeObserver(measure)
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [text, open])
   return (
-    <div className="rounded-lg border bg-background/60 px-4 py-3">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <div className="mt-1">{children}</div>
+    <div className="text-sm leading-relaxed text-foreground">
+      <p ref={ref} className={cn(!open && 'line-clamp-2')}>{text}</p>
+      {clipped || open ? (
+        <button type="button" onClick={() => setOpen(!open)} className="mt-1 text-xs font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          {open ? 'Show less' : 'Read more'}
+        </button>
+      ) : null}
     </div>
+  )
+}
+
+/** A card's figure with a small picture of it on the left (`graphic`). */
+function Tile({ label, graphic, children }) {
+  return (
+    <div className="flex items-center gap-3 rounded-lg border bg-background/60 px-4 py-3">
+      {graphic ? <div className="shrink-0">{graphic}</div> : null}
+      <div className="min-w-0">
+        <p className="text-xs text-muted-foreground">{label}</p>
+        <div className="mt-1">{children}</div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * A whole split into parts, as a ring like the AI score's: `parts` is [{ value, tone }]
+ * (a text colour class), drawn clockwise from the top with a small gap between them.
+ * `label` names the split for screen readers; `children` sits in the hole.
+ */
+function Ring({ parts, label, children, size = 52 }) {
+  const radius = 21
+  const circumference = 2 * Math.PI * radius
+  const total = parts.reduce((sum, part) => sum + part.value, 0)
+  const shown = parts.filter((part) => part.value > 0)
+  const gap = shown.length > 1 ? 3 : 0
+  let offset = 0
+  return (
+    <div className="relative" style={{ width: size, height: size }} role="img" aria-label={label}>
+      <svg viewBox="0 0 52 52" className="size-full -rotate-90" aria-hidden="true">
+        <circle cx="26" cy="26" r={radius} fill="none" strokeWidth="6" className="stroke-muted" />
+        {total
+          ? shown.map((part, index) => {
+              const length = (part.value / total) * circumference
+              const segment = (
+                <circle
+                  key={index}
+                  cx="26"
+                  cy="26"
+                  r={radius}
+                  fill="none"
+                  strokeWidth="6"
+                  stroke="currentColor"
+                  className={part.tone}
+                  strokeDasharray={`${Math.max(length - gap, 1)} ${circumference}`}
+                  strokeDashoffset={-offset}
+                />
+              )
+              offset += length
+              return segment
+            })
+          : null}
+      </svg>
+      {children ? <span className="absolute inset-0 grid place-items-center text-xs font-semibold tabular-nums text-foreground">{children}</span> : null}
+    </div>
+  )
+}
+
+// The bureau's score range, for the gauge.
+const CRB_MIN = 300
+const CRB_MAX = 850
+
+/** The CRB score on a half-dial from high risk (left) to very low risk (right), coloured by its band. */
+function CrbGauge({ score, tone }) {
+  const radius = 21
+  const half = Math.PI * radius
+  const share = score == null ? 0 : Math.min(1, Math.max(0, (score - CRB_MIN) / (CRB_MAX - CRB_MIN)))
+  // The needle's tip, on the arc.
+  const angle = Math.PI * (1 - share)
+  const tipX = 26 + radius * Math.cos(angle)
+  const tipY = 30 - radius * Math.sin(angle)
+  return (
+    <svg viewBox="0 0 52 36" width="52" height="36" role="img" aria-label={score == null ? 'No score' : `Score ${score} on a range of ${CRB_MIN} to ${CRB_MAX}`}>
+      <path d={`M5 30 A${radius} ${radius} 0 0 1 47 30`} fill="none" strokeWidth="6" strokeLinecap="round" className="stroke-muted" />
+      {score != null ? (
+        <>
+          <path
+            d={`M5 30 A${radius} ${radius} 0 0 1 47 30`}
+            fill="none"
+            strokeWidth="6"
+            strokeLinecap="round"
+            stroke="currentColor"
+            className={tone || 'text-foreground'}
+            strokeDasharray={`${share * half} ${half}`}
+          />
+          <circle cx={tipX} cy={tipY} r="4" fill="hsl(var(--card))" stroke="currentColor" strokeWidth="2" className={tone || 'text-foreground'} />
+        </>
+      ) : null}
+    </svg>
+  )
+}
+
+// The bureau's risk band, as the tone of the score: lower risk reads as good.
+const BAND_TONE = { 'Very low risk': 'text-success', 'Low risk': 'text-success', 'Medium risk': 'text-warning', 'High risk': 'text-destructive' }
+
+/** The credit bureau tile: the score and its band, and when the report was pulled (the Credit bureau panel has the report). */
+function CrbTile({ reports = [], applies = true, hasConsent, score }) {
+  const latest = reports[0]
+  const band = latest?.report?.band
+  const note = latest
+    ? `${latest.report?.sample ? 'Sample · ' : ''}${timeAgo(latest.createdAt)}`
+    : score != null
+      ? 'No report on file'
+      : !applies
+        ? 'Passport holder'
+        : hasConsent
+          ? 'Not pulled yet'
+          : 'No consent'
+  return (
+    <Tile label="CRB score" graphic={<CrbGauge score={score} tone={BAND_TONE[band]} />}>
+      <p className={cn('text-sm font-medium', score == null ? 'text-muted-foreground' : BAND_TONE[band] || 'text-foreground')}>
+        {score == null ? 'No score' : <span className="tabular-nums">{score}</span>}
+        {score != null && band ? <span className="font-normal">{` · ${band}`}</span> : null}
+      </p>
+      <p className="mt-1 text-xs text-muted-foreground">{note}</p>
+    </Tile>
   )
 }
 
@@ -369,7 +505,7 @@ function UncheckedRules({ results, evidence, actions, onOpenDocument, onOpenDeta
  * @param actions  what an unchecked rule's button does, by the action its reason names
  *                 (enter_figure, ask_applicant, run_crb, rerun, settings); missing: no button
  */
-export function CaseSummary({ application, documents: allDocuments, prescreen, zra, showAi, canRerun, onRerun, onOpenDocument, onOpenDetails, actions = {} }) {
+export function CaseSummary({ application, documents: allDocuments, prescreen, zra, crb, showAi, canRerun, onRerun, onOpenDocument, onOpenDetails, actions = {} }) {
   const [busy, setBusy] = useState(false)
   // The detailed report's open tab, or null while it is folded away.
   const [report, setReport] = useState(null)
@@ -444,6 +580,10 @@ export function CaseSummary({ application, documents: allDocuments, prescreen, z
       .filter(([fact, docType]) => docType === document.docType && prescreen.facts?.[fact] != null && !context.sources[fact]?.startsWith('Entered by'))
       .map(([fact]) => `${FACTS[fact].label}: ${formatFact(fact, prescreen.facts[fact])}`)
 
+  // The credit bureau's score: the latest report's, else the one the rules ran on. No tile where no bureau is set up and nothing was pulled.
+  const showCrb = Boolean(crb && (crb.provider || crb.reports?.length))
+  const crbScore = crb?.reports?.[0]?.score ?? prescreen.facts?.crb_score ?? null
+
   return (
     <section className="rounded-xl border bg-card" aria-labelledby="case-summary-title">
       <div className="flex items-start justify-between gap-3 border-b px-5 py-4">
@@ -451,9 +591,9 @@ export function CaseSummary({ application, documents: allDocuments, prescreen, z
           <h2 id="case-summary-title" className="text-sm font-semibold text-foreground">
             Assessment summary
           </h2>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Policy rules version {prescreen.rulesetVersion}, run {timeAgo(prescreen.updatedAt)}
-            {review ? `. AI review${review.sample ? ' (sample data)' : ''} is advisory: the rules and your judgement decide.` : '.'}
+          <p className="mt-0.5 text-xs text-muted-foreground" title={review ? 'The AI review is advisory: the rules and your judgement decide.' : undefined}>
+            Rules v{prescreen.rulesetVersion} · run {timeAgo(prescreen.updatedAt)}
+            {review ? ` · AI is advisory${review.sample ? ' (sample data)' : ''}` : ''}
           </p>
         </div>
         {canRerun ? (
@@ -465,29 +605,57 @@ export function CaseSummary({ application, documents: allDocuments, prescreen, z
       </div>
 
       <div className="space-y-5 p-5">
-        <div className={cn('grid gap-3', review ? 'sm:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]' : 'sm:grid-cols-2')}>
+        <div className={cn('grid gap-3', review && 'lg:grid-cols-[minmax(0,4fr)_minmax(0,8fr)]')}>
           {review ? <ScoreCard review={review} /> : null}
-          <div className={cn('grid gap-3', review ? 'grid-cols-2' : 'col-span-full sm:grid-cols-2')}>
-            <Tile label="Policy rules">
+          <div className={cn('grid gap-3', showCrb ? 'sm:grid-cols-3' : 'sm:grid-cols-2')}>
+            <Tile
+              label="Policy rules"
+              graphic={
+                <Ring
+                  label={`${fired.length} concerns, ${passed.length} passed, ${unknown.length} unchecked`}
+                  parts={[
+                    { value: fired.length, tone: prescreen.outcome === 'decline' ? 'text-destructive' : 'text-warning' },
+                    { value: passed.length, tone: 'text-success' },
+                    { value: unknown.length, tone: 'text-muted-foreground/40' },
+                  ]}
+                >
+                  <ClipboardList className="size-4 text-muted-foreground" aria-hidden="true" />
+                </Ring>
+              }
+            >
               <OutcomeMark outcome={prescreen.outcome} className="text-sm" />
               <p className="mt-1 text-xs text-muted-foreground">
-                {fired.length} {fired.length === 1 ? 'concern' : 'concerns'}, {passed.length} passed
-                {unknown.length ? `, ${unknown.length} couldn’t be checked` : ''}
+                {fired.length} {fired.length === 1 ? 'concern' : 'concerns'} · {passed.length} passed
+                {unknown.length ? ` · ${unknown.length} unchecked` : ''}
               </p>
             </Tile>
-            <Tile label="Documents">
+            <Tile
+              label="Documents"
+              graphic={
+                <Ring
+                  label={`${withFindings.length} of ${documents.length} with findings, ${unchecked.length} not checked`}
+                  parts={[
+                    { value: withFindings.length, tone: 'text-warning' },
+                    { value: Math.max(0, documents.length - withFindings.length - unchecked.length), tone: 'text-success' },
+                    { value: unchecked.length, tone: 'text-muted-foreground/40' },
+                  ]}
+                >
+                  <FileText className="size-4 text-muted-foreground" aria-hidden="true" />
+                </Ring>
+              }
+            >
               <p className={cn('text-sm font-medium', withFindings.length ? 'text-warning' : 'text-success')}>
                 {withFindings.length ? `${withFindings.length} of ${documents.length} with findings` : documents.length ? 'No findings' : 'None uploaded'}
               </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {documents.length - unchecked.length} checked automatically
-                {unchecked.length ? `, ${unchecked.length} not checked` : ''}
-              </p>
+              {documents.length ? (
+                <p className="mt-1 text-xs text-muted-foreground">{unchecked.length ? `${unchecked.length} not checked` : 'All checked'}</p>
+              ) : null}
             </Tile>
+            {showCrb ? <CrbTile {...crb} score={crbScore} /> : null}
           </div>
         </div>
-        {review?.summary ? <p className="text-sm leading-relaxed text-foreground">{review.summary}</p> : null}
-        {showAi && !review && prescreen.aiError ? <p className="text-sm text-muted-foreground">The AI review couldn’t run for this application. The policy rules still apply.</p> : null}
+        {review?.summary ? <AiSummary text={review.summary} /> : null}
+        {showAi && !review && prescreen.aiError ? <p className="text-sm text-muted-foreground">The AI review couldn’t run.</p> : null}
 
         <div className={cn('grid gap-4', review && 'lg:grid-cols-2')}>
           <Overview
@@ -519,7 +687,7 @@ export function CaseSummary({ application, documents: allDocuments, prescreen, z
                 text: flag.detail,
                 tone: flag.severity,
               }))}
-              extra={review.missingInformation?.length ? `${review.missingInformation.length} ${review.missingInformation.length === 1 ? 'piece' : 'pieces'} of information missing` : null}
+              extra={review.missingInformation?.length ? `${review.missingInformation.length} missing` : null}
               onMore={() => openReport('ai')}
             />
           ) : null}
@@ -535,7 +703,6 @@ export function CaseSummary({ application, documents: allDocuments, prescreen, z
             <span className="flex items-center gap-2">
               <FileSearch className="size-4 text-muted-foreground" aria-hidden="true" />
               Detailed report
-              <span className="text-xs font-normal text-muted-foreground">every rule, flag and document check, with its evidence</span>
             </span>
             <ChevronDown className={cn('size-4 shrink-0 text-muted-foreground transition-transform', report && 'rotate-180')} aria-hidden="true" />
           </button>

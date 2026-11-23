@@ -9,7 +9,7 @@ import { readSingleUpload } from '../_lib/upload.js'
 import { afterResponse } from '../_lib/after.js'
 import { sendApplicationUpdateEmail } from '../_lib/email.js'
 import { addEvent, findVisibleApplication } from '../_lib/applications.js'
-import { applyAction, caseWorkflow, systemTransition } from '../_lib/workflow.js'
+import { applyAction, caseWorkflow, stageAssignees, systemTransition } from '../_lib/workflow.js'
 import { rolesWith } from '../_lib/roles.js'
 import { queueLmsSync, syncApplicationToLms } from '../_lib/lms/sync.js'
 import { runPrescreen, loadFactInputs } from '../_lib/prescreen/run.js'
@@ -376,6 +376,14 @@ const uploadValuationReport = async (req, res, { params }) => {
 }
 
 /** Everyone who reviews cases, for the "assign to" picker. */
+/** Who this case can be assigned to at the stage it is in (stageAssignees), for the Assign dialog. */
+const listAssignees = async (req, res, { params }) => {
+  const viewer = await requireUser(req, { permission: 'cases.assign' })
+  const application = await findVisibleApplication(viewer, params.id)
+  const { state, people } = await stageAssignees(application)
+  return { stage: state.stageLabel || state.label, people }
+}
+
 const listOfficers = async (req) => {
   await requireUser(req, { staff: true })
   const db = await getDb()
@@ -879,6 +887,7 @@ export const workflowRoutes = [
   ['POST', '/applications/:id/visits', logVisit],
   ['POST', '/applications/:id/crb', runCreditCheck],
   ['GET', '/officers', listOfficers],
+  ['GET', '/applications/:id/assignees', listAssignees],
   ['POST', '/me/applications/:id/documents', addCustomerDocument],
   ['POST', '/me/applications/:id/respond', respondToRequest],
   ['POST', '/me/applications/:id/accept', acceptOffer],

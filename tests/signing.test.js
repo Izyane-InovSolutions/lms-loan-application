@@ -95,8 +95,8 @@ describe('the customer signs their offer', () => {
       const file = await officer.get(`/applications/${id}/documents/${signedCopy.id}`)
       expect(sha256(file.body)).toBe(entry.signedSha256)
       const originalFile = await officer.get(`/applications/${id}/documents/${original.id}`)
-      // The signed copy is the original plus a signature record page.
-      expect((await PDFDocument.load(file.body)).getPageCount()).toBe((await PDFDocument.load(originalFile.body)).getPageCount() + 1)
+      // The signed copy is the original, signed in place: no signature record page.
+      expect((await PDFDocument.load(file.body)).getPageCount()).toBe((await PDFDocument.load(originalFile.body)).getPageCount())
     }
     expect(body.consents.find((consent) => consent.type === 'offer')).toMatchObject({ method: 'signature_and_code' })
     expect(body.events.some((event) => event.message === 'Offer accepted and signed by Ada T. Banda')).toBe(true)
