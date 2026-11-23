@@ -84,14 +84,21 @@ describe('uploaded PDFs', () => {
 })
 
 describe('signing', () => {
-  it('adds a signature record page and changes the fingerprint', async () => {
+  it('signs in the signature box, with no extra page, and changes the fingerprint', async () => {
     const { bytes, signatureSpots } = await fillUploadedPdf(await lenderPdf(['customer_signature']), { values: SAMPLE_VALUES })
     const signed = await signPdf(bytes, {
       signature: signaturePng(),
       signatureSpots,
       record: { signerName: 'Ada Banda', statement: 'Signed electronically.', rows: [['Fingerprint before signing', sha256(bytes)]] },
     })
-    expect(await pages(signed)).toBe(2)
+    expect(await pages(signed)).toBe(1)
     expect(sha256(signed)).not.toBe(sha256(bytes))
+  })
+
+  it('adds a signature record page only to a document with no signature box', async () => {
+    const { bytes, signatureSpots } = await fillUploadedPdf(await lenderPdf(['{{customer_name}}']), { values: SAMPLE_VALUES })
+    expect(signatureSpots).toHaveLength(0)
+    const signed = await signPdf(bytes, { signature: signaturePng(), signatureSpots, record: { signerName: 'Ada Banda', statement: 'Signed electronically.', rows: [] } })
+    expect(await pages(signed)).toBe(2)
   })
 })
