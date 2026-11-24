@@ -50,6 +50,7 @@ import {
 } from '@/components/application/ApplicationSummary'
 import { PrescreenGuidance } from '@/components/application/PrescreenGuidance'
 import { SubmitConsents } from '@/components/application/SubmitConsents'
+import { MouBadge, isMouProduct } from '@/components/MouBadge'
 
 import {
   BUSINESS_TYPE_OPTIONS,
@@ -124,6 +125,8 @@ export function WizardStep(props) {
     products = [],
     loanTypes = [],
     onSelectProduct,
+    confirmChosenProduct = false,
+    onExploreProducts,
     getUploadStatus,
     goToStep,
     handleDirectorDocumentInputChange,
@@ -910,6 +913,8 @@ export function WizardStep(props) {
    * you" application. The next step asks for the documents of the loan chosen here.
    */
   const renderLoanType = () => {
+    // Picked on the landing page: that loan to confirm, and the rest only if they ask.
+    if (confirmChosenProduct && products.some((entry) => entry.id === product.id)) return renderChosenProduct()
     const types = loanTypes.filter((type) => type.form === selectedLoanType && products.some((entry) => !entry.matching && entry.loanType === type.key))
     const card = (option, body) => {
       const chosen = option.id === product.id
@@ -948,6 +953,7 @@ export function WizardStep(props) {
                         {option.id === product.id ? <CheckCircle2 className="size-5 shrink-0 text-primary" aria-hidden="true" /> : null}
                       </span>
                       <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{subcategoryOf(option, loanTypes)?.label}</span>
+                      {isMouProduct(option) ? <MouBadge partnerName={option.preApproval.partnerName} className="self-start" /> : null}
                       {option.description ? <span className="text-sm text-muted-foreground">{option.description}</span> : null}
                       <span className="mt-2 text-sm text-foreground">
                         {formatKwacha(option.minAmount)} – {formatKwacha(option.maxAmount)} · {option.minTenure} to {option.maxTenure} months
@@ -980,6 +986,39 @@ export function WizardStep(props) {
           )
         })}
       </div>
+    )
+  }
+
+  /** The loan picked on the landing page, to confirm before the documents it needs; "See other loans" lists them all. */
+  const renderChosenProduct = () => {
+    const required = (product.documents || []).filter((document) => document.required).length
+    return (
+      <FieldGroup title="Your loan" description="You chose this loan on our website. The next step asks for the documents it needs." icon={Wallet} columns={2}>
+        <div className="flex flex-col gap-4 rounded-lg border border-primary bg-card p-5 ring-1 ring-primary md:col-span-2 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0 space-y-1.5">
+            <p className="flex flex-wrap items-center gap-2">
+              <CheckCircle2 className="size-5 shrink-0 text-primary" aria-hidden="true" />
+              <span className="text-lg font-semibold text-foreground">{product.matching ? 'We’ll match you to a loan' : product.name}</span>
+              {isMouProduct(product) ? <MouBadge partnerName={product.preApproval.partnerName} /> : null}
+            </p>
+            {!product.matching ? <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{subcategoryOf(product, loanTypes)?.label}</p> : null}
+            {product.description ? <p className="text-sm text-muted-foreground">{product.description}</p> : null}
+            {!product.matching ? (
+              <>
+                <p className="pt-1 text-sm text-foreground">
+                  {formatKwacha(product.minAmount)} – {formatKwacha(product.maxAmount)} · {product.minTenure} to {product.maxTenure} months
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Interest {describeInterest(product)} · {required} {required === 1 ? 'document' : 'documents'} to upload
+                </p>
+              </>
+            ) : null}
+          </div>
+          <Button type="button" variant="outline" size="sm" className="shrink-0 self-start" onClick={onExploreProducts}>
+            See other loans
+          </Button>
+        </div>
+      </FieldGroup>
     )
   }
 

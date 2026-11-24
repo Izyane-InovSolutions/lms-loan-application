@@ -241,3 +241,22 @@ describe('filling the form from their last loan', () => {
     await admin.put('/settings/customerOptions', options)
   })
 })
+
+describe('a staff member’s email', () => {
+  const staffEmail = 'demo.loan-officer@demo.los.local'
+  it('can’t be used to start an application', async () => {
+    const response = await visitor.post('/verification/start', { channel: 'email', email: staffEmail.toUpperCase() })
+    expect(response.status).toBe(403)
+    expect(response.body.code).toBe('staff_account')
+    expect(sentCodes.some((entry) => entry.email === staffEmail)).toBe(false)
+  })
+
+  it('can’t be the applicant’s email on a submitted application', async () => {
+    // A draft under that email, as one from before this check would be.
+    const { token, body } = await prepareDraft(staffEmail)
+    body.data.personalInfo.email = staffEmail
+    const response = await applicant.post('/applications', body, { authorization: `Bearer ${token}` })
+    expect(response.status).toBe(403)
+    expect(response.body.code).toBe('staff_account')
+  })
+})

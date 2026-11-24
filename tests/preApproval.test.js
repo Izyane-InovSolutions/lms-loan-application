@@ -98,6 +98,52 @@ describe('partners and pre-approved products', () => {
     const partners = (await admin.get('/settings')).body.settings.partners.list
     expect(partners[0].staffList).toMatchObject({ version: 2, count: 1, uploadedByName: expect.any(String) })
   })
+
+  it('shows admins the current staff list a page at a time, searchable, and audits each look', async () => {
+    const csv = ['nrc,employee_number,name', ...Array.from({ length: 30 }, (_, i) => `${String(200000 + i)}/11/1,E-${i},Person ${i}`), '123456/78/9,E-100,Ada Banda'].join('\n')
+    await admin.post('/admin/partners/zesco-limited/staff', { csv })
+    expect((await officer.get('/admin/partners/zesco-limited/staff/people')).status).toBe(403)
+    expect((await admin.get('/admin/partners/no-such/staff/people')).status).toBe(404)
+    const first = (await admin.get('/admin/partners/zesco-limited/staff/people?pageSize=25')).body
+    expect(first).toMatchObject({ total: 31, page: 1, pageSize: 25 })
+    expect(first.people).toHaveLength(25)
+    expect(Object.keys(first.people[0]).sort()).toEqual(['employeeNumber', 'id', 'name', 'nrc'])
+    expect((await admin.get('/admin/partners/zesco-limited/staff/people?pageSize=25&page=2')).body.people).toHaveLength(6)
+    // By name, employee number or NRC.
+    expect((await admin.get('/admin/partners/zesco-limited/staff/people?q=ada')).body.people).toMatchObject([{ nrc: '123456/78/9', employeeNumber: 'E-100', name: 'Ada Banda' }])
+    expect((await admin.get('/admin/partners/zesco-limited/staff/people?q=E-100')).body.total).toBe(1)
+    expect((await admin.get('/admin/partners/zesco-limited/staff/people?q=123456/78')).body.total).toBe(1)
+    const audit = (await admin.get('/audit?action=partner.staff_list_viewed')).body
+    expect(JSON.stringify(audit)).not.toContain('123456/78/9')
+    // Back to the one-person list the next tests expect.
+    await admin.post('/admin/partners/zesco-limited/staff', { csv: 'nrc,employee_number\n123456/78/9,E-100' })
+  })
+
+  it('lets admins add, edit and remove one person by hand, keeping the count', async () => {
+    const people = '/admin/partners/zesco-limited/staff/people'
+    const count = async () => (await admin.get('/settings')).body.settings.partners.list.find((partner) => partner.id === 'zesco-limited').staffList.count
+    expect((await officer.post(people, { nrc: '333333/33/3' })).status).toBe(403)
+    expect((await admin.post(people, { nrc: 'not-an-nrc' })).body.code).toBe('invalid_nrc')
+    expect((await admin.post(people, { nrc: '123456/78/9' })).body.code).toBe('already_listed')
+
+    const added = await admin.post(people, { nrc: ' 333333/33/3 ', employeeNumber: 'E-333', name: 'Chanda Mwale' })
+    expect(added.status, JSON.stringify(added.body)).toBe(200)
+    expect(added.body.person).toMatchObject({ id: expect.any(String), nrc: '333333/33/3', employeeNumber: 'E-333', name: 'Chanda Mwale' })
+    expect(await count()).toBe(2)
+    // The applicant check sees them straight away.
+    expect((await admin.get('/admin/partners/zesco-limited/staff?nrc=333333/33/3')).body).toMatchObject({ found: true, employeeNumber: 'E-333' })
+
+    const { id } = added.body.person
+    expect((await admin.patch(`${people}/${id}`, { nrc: '123456/78/9' })).body.code).toBe('already_listed')
+    const edited = await admin.patch(`${people}/${id}`, { nrc: '333333/33/4', employeeNumber: '', name: 'Chanda M. Mwale' })
+    expect(edited.body.person).toMatchObject({ nrc: '333333/33/4', employeeNumber: null, name: 'Chanda M. Mwale' })
+    expect((await admin.get('/admin/partners/zesco-limited/staff?nrc=333333/33/3')).body.found).toBe(false)
+
+    expect((await admin.del(`${people}/${id}`)).status).toBe(200)
+    expect((await admin.del(`${people}/${id}`)).status).toBe(404)
+    expect(await count()).toBe(1)
+    expect((await admin.get(`${people}`)).body.people.map((person) => person.nrc)).toEqual(['123456/78/9'])
+  })
 })
 
 describe('the pre-approval route', () => {
@@ -110,9 +156,21 @@ describe('the pre-approval route', () => {
     expect(application.preApproval).toMatchObject({ partnerId: 'zesco-limited', partnerName: 'Zesco Limited', stage: 'partner', staffMatch: { onList: true, employeeNumber: 'E-100' } })
   })
 
-  it('keeps amounts above the limit to the usual review', async () => {
-    const over = await row(await submit({ amount: 25000 }))
-    expect(over.preApproval).toMatchObject({ stage: 'review', reason: expect.stringMatching(/above the pre-approved limit of K20,000/) })
+  it('sends amounts above the limit to the partner too, then to the usual review once confirmed', async () => {
+    const overId = await submit({ amount: 25000 })
+    const over = await row(overId)
+    expect(over.preApproval).toMatchObject({ stage: 'partner', overLimit: expect.stringMatching(/above the pre-approved limit of K20,000/) })
+    expect((await partnerUser.get('/partner/requests')).body.requests.map((request) => request.id)).toContain(overId)
+    // Held for the partner like any other.
+    const early = await manager.post(`/applications/${overId}/actions`, { action: 'issue_offer', version: over.version })
+    expect(early.status).toBe(409)
+
+    const confirmed = await partnerUser.post(`/partner/requests/${overId}`, { decision: 'confirm', version: over.version })
+    expect(confirmed.status, JSON.stringify(confirmed.body)).toBe(200)
+    const after = await row(overId)
+    // Confirmed, but never fast-tracked to an offer: it goes through the usual review.
+    expect(after.preApproval).toMatchObject({ stage: 'review', partnerDecision: { confirmed: true }, reason: expect.stringMatching(/above the pre-approved limit/) })
+    expect((await partnerUser.get('/partner/requests?view=recent')).body.requests.map((request) => request.id)).toContain(overId)
   })
 
   it('shows the partner’s staff only their own partner’s applicants, and no case pages', async () => {

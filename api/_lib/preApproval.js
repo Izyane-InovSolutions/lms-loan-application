@@ -8,7 +8,7 @@ import { caseWorkflow } from './workflow.js'
 import { notifyUsers, creditStaffIds } from './notify.js'
 import { rolesWith } from './roles.js'
 import { collateralItems } from '../../src/config/collateral.js'
-import { PARTNER_DOCUMENT_SLOTS, heldForPartner, heldReason, mayActOnHeldCase, normaliseNrc, partnerInactiveReason } from '../../src/config/partners.js'
+import { PARTNER_DOCUMENT_SLOTS, heldForPartner, heldReason, isNrc, mayActOnHeldCase, normaliseNrc, partnerInactiveReason } from '../../src/config/partners.js'
 import { currentDocuments } from '../../src/config/applications.js'
 import { isZambian } from '../../src/config/applicantRules.js'
 
@@ -42,6 +42,103 @@ export const staffMatch = async (partner, nrc) => {
     .where(and(eq(partnerStaff.partnerId, partner.id), eq(partnerStaff.listVersion, version), eq(partnerStaff.nrc, normaliseNrc(nrc))))
     .limit(1)
   return row ? { onList: true, employeeNumber: row.employeeNumber, name: row.name, listVersion: version } : blank
+}
+
+/**
+ * A page of the partner's current staff list, by name then NRC, for Settings → Partners:
+ * `q` finds a name, employee number or NRC (any part of it).
+ */
+export const staffListPage = async (partner, { q = '', page = 1, pageSize = 25 } = {}) => {
+  const version = partner?.staffList?.version || 0
+  if (!version) return { people: [], total: 0, page: 1, pageSize }
+  const db = await getDb()
+  const pattern = `%${q.replace(/[\\%_]/g, (char) => `\\${char}`)}%`
+  const where = and(
+    eq(partnerStaff.partnerId, partner.id),
+    eq(partnerStaff.listVersion, version),
+    q ? sql`(${partnerStaff.name} ilike ${pattern} or ${partnerStaff.employeeNumber} ilike ${pattern} or ${partnerStaff.nrc} ilike ${pattern})` : undefined
+  )
+  const [rows, [{ total }]] = await Promise.all([
+    db
+      .select({ id: partnerStaff.id, nrc: partnerStaff.nrc, employeeNumber: partnerStaff.employeeNumber, name: partnerStaff.name })
+      .from(partnerStaff)
+      .where(where)
+      .orderBy(sql`${partnerStaff.name} asc nulls last`, partnerStaff.nrc)
+      .limit(pageSize)
+      .offset((page - 1) * pageSize),
+    db.select({ total: sql`count(*)::int` }).from(partnerStaff).where(where),
+  ])
+  return { people: rows, total, page, pageSize }
+}
+
+// ---------------------------------------------------------------------------
+// One person on the staff list, by hand (Settings → Partners)
+// ---------------------------------------------------------------------------
+
+/** The person's fields from a form: a valid NRC, and the optional employee number and name. */
+const staffFields = (input) => {
+  const nrc = normaliseNrc(input?.nrc)
+  if (!isNrc(nrc)) fail(400, 'Enter the NRC as 123456/78/9.', 'invalid_nrc')
+  return { nrc, employeeNumber: text(input?.employeeNumber, 40) || null, name: text(input?.name, 120) || null }
+}
+
+/** The partner's list details after a change by hand: the same version, its new count, and who changed it. */
+const recountStaffList = async (db, partnerId, version, actor) => {
+  const [{ count }] = await db.select({ count: sql`count(*)::int` }).from(partnerStaff).where(and(eq(partnerStaff.partnerId, partnerId), eq(partnerStaff.listVersion, version)))
+  const setting = await getSetting('partners')
+  const previous = (setting.list || []).find((entry) => entry.id === partnerId)?.staffList || {}
+  const staffList = { ...previous, version, count, editedAt: new Date().toISOString(), editedByName: actor?.name || null, uploadedAt: previous.uploadedAt || new Date().toISOString() }
+  await setSetting('partners', { ...setting, list: setting.list.map((entry) => (entry.id === partnerId ? { ...entry, staffList } : entry)) }, actor)
+  return staffList
+}
+
+const refuseDuplicate = async (db, partnerId, version, nrc, exceptId = null) => {
+  const [taken] = await db
+    .select({ id: partnerStaff.id })
+    .from(partnerStaff)
+    .where(and(eq(partnerStaff.partnerId, partnerId), eq(partnerStaff.listVersion, version), eq(partnerStaff.nrc, nrc), exceptId ? ne(partnerStaff.id, exceptId) : undefined))
+    .limit(1)
+  if (taken) fail(409, 'Someone with this NRC is already on the list.', 'already_listed')
+}
+
+const toPerson = (row) => ({ id: row.id, nrc: row.nrc, employeeNumber: row.employeeNumber, name: row.name })
+
+/** Adds one person to the partner's current list (starting a list if it has none). */
+export const addStaffMember = async (partner, input, actor) => {
+  const fields = staffFields(input)
+  const db = await getDb()
+  const version = partner.staffList?.version || 1
+  await refuseDuplicate(db, partner.id, version, fields.nrc)
+  const [row] = await db.insert(partnerStaff).values({ partnerId: partner.id, listVersion: version, ...fields }).returning()
+  return { person: toPerson(row), staffList: await recountStaffList(db, partner.id, version, actor) }
+}
+
+/** The person `id` on the partner's current list; 404 otherwise. */
+const currentStaffRow = async (db, partner, id) => {
+  if (!/^[0-9a-f-]{36}$/i.test(String(id))) fail(404, 'That person isn’t on the list.', 'not_found')
+  const [row] = await db
+    .select()
+    .from(partnerStaff)
+    .where(and(eq(partnerStaff.id, id), eq(partnerStaff.partnerId, partner.id), eq(partnerStaff.listVersion, partner.staffList?.version || 0)))
+    .limit(1)
+  if (!row) fail(404, 'That person isn’t on the list.', 'not_found')
+  return row
+}
+
+export const updateStaffMember = async (partner, id, input, actor) => {
+  const db = await getDb()
+  const row = await currentStaffRow(db, partner, id)
+  const fields = staffFields({ nrc: row.nrc, employeeNumber: row.employeeNumber, name: row.name, ...input })
+  await refuseDuplicate(db, partner.id, row.listVersion, fields.nrc, row.id)
+  const [updated] = await db.update(partnerStaff).set(fields).where(eq(partnerStaff.id, row.id)).returning()
+  return { person: toPerson(updated), staffList: await recountStaffList(db, partner.id, row.listVersion, actor) }
+}
+
+export const removeStaffMember = async (partner, id, actor) => {
+  const db = await getDb()
+  const row = await currentStaffRow(db, partner, id)
+  await db.delete(partnerStaff).where(eq(partnerStaff.id, row.id))
+  return { staffList: await recountStaffList(db, partner.id, row.listVersion, actor) }
 }
 
 /**
@@ -116,12 +213,12 @@ export const enterPreApproval = async (applicationId, { origin } = {}) => {
 
   const partner = await partnerById(product.preApproval.partnerId)
   const about = { partnerId: product.preApproval.partnerId, partnerName: partner?.name || null, mouReference: partner?.mouReference || null }
-  const reason =
-    partnerInactiveReason(partner) ||
-    (collateralItems(application.data).length ? 'Collateral was pledged, so it needs valuing.' : null) ||
-    (product.preApproval.maxAmount && application.amount > product.preApproval.maxAmount
+  const reason = partnerInactiveReason(partner) || (collateralItems(application.data).length ? 'Collateral was pledged, so it needs valuing.' : null)
+  // Above the limit: the partner still confirms employment, then it goes through the usual review (decideRequest).
+  const overLimit =
+    product.preApproval.maxAmount && application.amount > product.preApproval.maxAmount
       ? `K${application.amount.toLocaleString()} was asked for, above the pre-approved limit of K${product.preApproval.maxAmount.toLocaleString()}.`
-      : null)
+      : null
 
   if (reason) {
     const updated = await savePreApproval(db, application, { ...about, stage: 'review', reason, at: new Date().toISOString() })
@@ -130,13 +227,13 @@ export const enterPreApproval = async (applicationId, { origin } = {}) => {
   }
 
   const match = await staffMatch(partner, applicantNrc(application))
-  const updated = await savePreApproval(db, application, { ...about, stage: 'partner', staffMatch: match, enteredAt: new Date().toISOString() })
+  const updated = await savePreApproval(db, application, { ...about, stage: 'partner', staffMatch: match, ...(overLimit ? { overLimit } : {}), enteredAt: new Date().toISOString() })
   if (!updated) return null
   await addEvent(db, {
     applicationId,
     actor: null,
     type: 'status',
-    message: `Pre-approved product: sent to ${partner.name} to confirm employment (${match.onList ? `on their staff list${match.employeeNumber ? `, employee no. ${match.employeeNumber}` : ''}` : 'not on their staff list'}).`,
+    message: `Pre-approved product: sent to ${partner.name} to confirm employment (${match.onList ? `on their staff list${match.employeeNumber ? `, employee no. ${match.employeeNumber}` : ''}` : 'not on their staff list'}).${overLimit ? ` ${overLimit} Once confirmed, it goes through the usual review.` : ''}`,
   })
   await notifyUsers(
     await partnerStaffIds(partner.id),
@@ -274,7 +371,9 @@ export const partnerRequestDocument = async (viewer, applicationId, documentId) 
 
 /**
  * The partner's answer: `confirm` (the applicant works there) moves the case to offer
- * issuance; `refuse` (with a reason) takes it off the route to the usual review.
+ * issuance, or, for an amount above the pre-approved limit (`overLimit`), to the usual
+ * review with the confirmation on record; `refuse` (with a reason) takes it off the route
+ * to the usual review.
  */
 export const decideRequest = async (viewer, applicationId, input, { origin } = {}) => {
   const db = await getDb()
@@ -294,9 +393,12 @@ export const decideRequest = async (viewer, applicationId, input, { origin } = {
   const employeeNumber = text(input.employeeNumber, 40) || application.preApproval.staffMatch?.employeeNumber || null
   const partnerDecision = { confirmed, note: note || null, employeeNumber: confirmed ? employeeNumber : null, byName: viewer.name, by: viewer.id, at: new Date().toISOString() }
   const partnerName = application.preApproval.partnerName
-  const next = confirmed
-    ? { ...application.preApproval, stage: 'issue', partnerDecision }
-    : { ...application.preApproval, stage: 'review', partnerDecision, reason: `${partnerName} did not confirm employment: ${note}` }
+  const overLimit = application.preApproval.overLimit
+  const next = !confirmed
+    ? { ...application.preApproval, stage: 'review', partnerDecision, reason: `${partnerName} did not confirm employment: ${note}` }
+    : overLimit
+      ? { ...application.preApproval, stage: 'review', partnerDecision, reason: overLimit }
+      : { ...application.preApproval, stage: 'issue', partnerDecision }
   const updated = await savePreApproval(db, application, next)
   if (!updated) fail(409, 'This request has changed. Refresh and try again.', 'stale')
   await addEvent(db, {
@@ -304,10 +406,10 @@ export const decideRequest = async (viewer, applicationId, input, { origin } = {
     actor: viewer,
     type: 'status',
     message: confirmed
-      ? `${partnerName} confirmed employment${employeeNumber ? ` (employee no. ${employeeNumber})` : ''}${note ? `: ${note}` : ''}. Ready to issue the offer.`
+      ? `${partnerName} confirmed employment${employeeNumber ? ` (employee no. ${employeeNumber})` : ''}${note ? `: ${note}` : ''}. ${overLimit ? `It goes through the usual review: ${overLimit}` : 'Ready to issue the offer.'}`
       : `${partnerName} did not confirm employment: ${note}. It goes through the usual review.`,
   })
-  if (confirmed) {
+  if (confirmed && !overLimit) {
     await notifyUsers(
       await creditStaffIds({ permission: 'offers.issue' }),
       { type: 'pre_approval_ready', title: `Issue the offer: ${application.reference}`, body: `${application.applicantName}, confirmed by ${partnerName}`, applicationId },

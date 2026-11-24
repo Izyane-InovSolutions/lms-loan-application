@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowDownToLine, ChevronLeft, ChevronRight, FilePen, FilePlus2, FileStack, Loader2, Search, X } from 'lucide-react'
+import { MouBadge } from '@/components/MouBadge'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -42,6 +43,77 @@ const rowStage = (workflow, row) => {
   return row.status === 'info_requested' ? `${stage} · waiting on applicant` : stage
 }
 
+const PAGE_SIZES = [10, 25, 50, 100]
+const DEFAULT_PAGE_SIZE = 25
+
+/** The page numbers to offer: the first, the last, and two either side of this one, with gaps as null. */
+export const pageNumbers = (page, pages) => {
+  const wanted = new Set([1, pages, page - 2, page - 1, page, page + 1, page + 2].filter((n) => n >= 1 && n <= pages))
+  const sorted = [...wanted].sort((a, b) => a - b)
+  return sorted.flatMap((n, index) => (index && n - sorted[index - 1] > 1 ? [null, n] : [n]))
+}
+
+/** Below the list: which rows these are, the pages to go to, and how many rows a page shows. */
+function Pager({ page, pages, pageSize, total, onPage, onPageSize }) {
+  const from = (page - 1) * pageSize + 1
+  const to = Math.min(total, page * pageSize)
+  return (
+    <nav aria-label="Pages" className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm text-muted-foreground">
+        <span>
+          Showing <span className="font-medium tabular-nums text-foreground">{from.toLocaleString()}–{to.toLocaleString()}</span> of{' '}
+          <span className="font-medium tabular-nums text-foreground">{total.toLocaleString()}</span>
+        </span>
+        <label className="flex items-center gap-2">
+          Rows per page
+          <select
+            value={pageSize}
+            onChange={(event) => onPageSize(Number(event.target.value))}
+            className="h-8 rounded-md border border-input bg-background px-2 text-sm text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            {PAGE_SIZES.map((size) => (
+              <option key={size} value={size}>
+                {size}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      {pages > 1 ? (
+        <div className="flex flex-wrap items-center gap-1">
+          <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => onPage(page - 1)} aria-label="Previous page">
+            <ChevronLeft />
+            <span className="hidden sm:inline">Previous</span>
+          </Button>
+          {pageNumbers(page, pages).map((n, index) =>
+            n === null ? (
+              <span key={`gap-${index}`} className="px-1.5 text-sm text-muted-foreground" aria-hidden="true">
+                …
+              </span>
+            ) : (
+              <Button
+                key={n}
+                variant={n === page ? 'default' : 'outline'}
+                size="sm"
+                className="min-w-9 tabular-nums"
+                aria-label={`Page ${n}`}
+                aria-current={n === page ? 'page' : undefined}
+                onClick={() => n !== page && onPage(n)}
+              >
+                {n}
+              </Button>
+            )
+          )}
+          <Button variant="outline" size="sm" disabled={page >= pages} onClick={() => onPage(page + 1)} aria-label="Next page">
+            <span className="hidden sm:inline">Next</span>
+            <ChevronRight />
+          </Button>
+        </div>
+      ) : null}
+    </nav>
+  )
+}
+
 export function ApplicationsPage() {
   const { user, workflow } = useAuth()
   const navigate = useNavigate()
@@ -66,6 +138,7 @@ export function ApplicationsPage() {
     sort: params.get('sort') || 'newest',
     q: params.get('q') || '',
     page: Number(params.get('page')) || 1,
+    pageSize: PAGE_SIZES.includes(Number(params.get('pageSize'))) ? Number(params.get('pageSize')) : DEFAULT_PAGE_SIZE,
     // One agent's applications, from the Agents page.
     sourcedBy: params.get('sourcedBy') || '',
   }
@@ -82,7 +155,7 @@ export function ApplicationsPage() {
   const setFilter = useCallback(
     (key, value) => {
       const next = new URLSearchParams(params)
-      if (!value || value === 'all' || (key === 'status' && value === 'open')) next.delete(key)
+      if (!value || value === 'all' || (key === 'status' && value === 'open') || (key === 'pageSize' && Number(value) === DEFAULT_PAGE_SIZE)) next.delete(key)
       else next.set(key, value)
       if (key !== 'page') next.delete('page')
       setParams(next, { replace: true })
@@ -114,7 +187,7 @@ export function ApplicationsPage() {
     const { stage, ...rest } = filters
     return toQuery({ ...rest, status: stage || filters.status === 'all' ? '' : filters.status, state: stage, ...extra })
   }
-  const query = listParams({ page: filters.page > 1 ? filters.page : '' })
+  const query = listParams({ page: filters.page > 1 ? filters.page : '', pageSize: filters.pageSize !== DEFAULT_PAGE_SIZE ? filters.pageSize : '' })
 
   // Drafts are loaded for the tab's count too, and again when a draft window closes.
   useEffect(() => {
@@ -210,7 +283,7 @@ export function ApplicationsPage() {
     }
   }
 
-  const pages = Math.max(1, Math.ceil(result.total / (result.pageSize || 25)))
+  const pages = Math.max(1, Math.ceil(result.total / (result.pageSize || filters.pageSize)))
   const hasFilters = filters.loanType !== 'all' || filters.product !== 'all' || filters.channel !== 'all' || filters.assigned !== 'all' || filters.q
 
   return (
@@ -398,7 +471,10 @@ export function ApplicationsPage() {
                   <Link to={`/admin/applications/${row.id}`} className="block px-4 py-3.5 hover:bg-muted/30">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="truncate font-medium text-foreground">{row.companyName || row.applicantName}</p>
+                        <p className="flex min-w-0 items-center gap-1.5">
+                          <span className="truncate font-medium text-foreground">{row.companyName || row.applicantName}</span>
+                          {row.preApproval ? <MouBadge /> : null}
+                        </p>
                         <p className="text-xs text-muted-foreground">
                           {row.reference}, {money(row.amount)} {(row.productName || LOAN_TYPE_LABELS[row.loanType]).toLowerCase()}
                         </p>
@@ -435,7 +511,10 @@ export function ApplicationsPage() {
                       <tr key={row.id} className="group cursor-pointer transition-colors hover:bg-muted/30" onClick={() => navigate(`/admin/applications/${row.id}`)}>
                         <td className="px-5 py-3">
                           <Link to={`/admin/applications/${row.id}`} className="block rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={(event) => event.stopPropagation()}>
-                            <span className="block font-medium text-foreground group-hover:text-primary">{row.companyName || row.applicantName}</span>
+                            <span className="flex items-center gap-1.5">
+                              <span className="font-medium text-foreground group-hover:text-primary">{row.companyName || row.applicantName}</span>
+                              {row.preApproval ? <MouBadge /> : null}
+                            </span>
                             <span className="block text-xs text-muted-foreground">
                               {row.reference}
                               {row.companyName ? `, ${row.applicantName}` : ''}, {(row.productName || LOAN_TYPE_LABELS[row.loanType]).toLowerCase()}
@@ -469,22 +548,18 @@ export function ApplicationsPage() {
       </div>
       )}
 
-      {!draftTab && pages > 1 ? (
-        <div className="flex items-center justify-between">
-          <p className="text-sm text-muted-foreground">
-            Page {filters.page} of {pages}
-          </p>
-          <div className="flex gap-2">
-            <Button variant="outline" size="sm" disabled={filters.page <= 1} onClick={() => setFilter('page', String(filters.page - 1))}>
-              <ChevronLeft />
-              Previous
-            </Button>
-            <Button variant="outline" size="sm" disabled={filters.page >= pages} onClick={() => setFilter('page', String(filters.page + 1))}>
-              Next
-              <ChevronRight />
-            </Button>
-          </div>
-        </div>
+      {!draftTab && result.total > 0 ? (
+        <Pager
+          page={Math.min(filters.page, pages)}
+          pages={pages}
+          pageSize={filters.pageSize}
+          total={result.total}
+          onPage={(page) => {
+            setFilter('page', page > 1 ? String(page) : '')
+            window.scrollTo({ top: 0, behavior: 'smooth' })
+          }}
+          onPageSize={(size) => setFilter('pageSize', String(size))}
+        />
       ) : null}
       {showDrafts ? <DraftDialog draftId={openDraft} onOpenChange={(open) => !open && setOpenDraft(null)} onChanged={() => setOpenDraft(null)} /> : null}
       {choosesLoanType ? (

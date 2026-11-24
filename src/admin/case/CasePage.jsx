@@ -52,6 +52,7 @@ import { KycPanel } from './KycPanel'
 import { PrescreenStats } from './PrescreenStats'
 import { allowsCreditCheck } from '@/config/consent'
 import { crbApplies } from '@/config/applicantRules'
+import { MouBadge } from '@/components/MouBadge'
 import { heldForPartner, heldReason, mayActOnHeldCase } from '@/config/partners'
 
 const withinAssignmentRange = (person, amount) =>
@@ -242,9 +243,8 @@ export function CasePage() {
             <h1 className="text-[1.75rem] font-semibold leading-tight tracking-tight text-foreground">{application.companyName || application.applicantName}</h1>
             <StatusBadge status={application.status} label={statusLabel(application.status)} />
             {workflow && workflow.state.label !== statusLabel(application.status) ? <span className="text-sm font-medium text-muted-foreground">{workflow.state.label}</span> : null}
-            {application.preApproval && application.preApproval.stage !== 'review' ? (
-              <span className="rounded-full bg-primary/10 px-2.5 py-0.5 text-xs font-medium text-primary">Pre-approved · {application.preApproval.partnerName}</span>
-            ) : null}
+            {/* An MoU loan stays marked as one, on the route or moved to the full review. */}
+            {application.preApproval ? <MouBadge partnerName={application.preApproval.partnerName} /> : null}
           </div>
           <p className="mt-1.5 text-sm text-muted-foreground">
             {application.reference}, {(product?.name || LOAN_TYPE_LABELS[application.loanType]).toLowerCase()}

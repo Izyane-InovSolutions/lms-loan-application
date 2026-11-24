@@ -41,6 +41,7 @@ export function PreApprovalPanel({ application, preApproval, canIssue, heldMessa
               Waiting for {partnerName} to confirm the applicant works there.
             </p>
           ) : null}
+          {stage === 'partner' && preApproval.overLimit ? <p className="text-muted-foreground">{preApproval.overLimit} Once confirmed, it goes through the usual review.</p> : null}
           {partnerDecision ? (
             <p className={cn('flex items-center gap-1.5', partnerDecision.confirmed ? 'text-success' : 'text-destructive')}>
               {partnerDecision.confirmed ? <CheckCircle2 className="size-4" aria-hidden="true" /> : <CircleSlash className="size-4" aria-hidden="true" />}

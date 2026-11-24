@@ -1,4 +1,5 @@
 import React from 'react'
+import { MouBadge, isMouProduct } from '@/components/MouBadge'
 
 import { Button } from '@/components/ui/button'
 import { useProducts } from '@/hooks/useProducts'
@@ -26,8 +27,9 @@ export function AssistedApplicationTypeDialog({ open, onOpenChange, onChoose }) 
         </DialogHeader>
         <div className="grid gap-2 sm:grid-cols-2">
           {products.map((product) => (
-            <Button key={product.id} variant="outline" onClick={() => choose(product.id)}>
+            <Button key={product.id} variant="outline" className="h-auto min-h-10 flex-wrap gap-1.5 whitespace-normal py-2" onClick={() => choose(product.id)}>
               {product.name}
+              {isMouProduct(product) ? <MouBadge /> : null}
             </Button>
           ))}
         </div>

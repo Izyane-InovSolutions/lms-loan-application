@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, ArrowDown, ArrowUp, CheckCircle2, CircleDot, FileText, Loader2, Plus, Save, Shield, Trash2, Undo2 } from 'lucide-react'
+import { MouBadge, isMouProduct } from '@/components/MouBadge'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -146,7 +147,10 @@ function Products({ products, takenIds, loanTypes, types, partners = [], onSaved
                           )}
                         >
                           <span className="min-w-0 flex-1">
-                            <span className="block truncate font-medium text-foreground">{product.name}</span>
+                            <span className="flex min-w-0 items-center gap-1.5">
+                              <span className="truncate font-medium text-foreground">{product.name}</span>
+                              {isMouProduct(product) ? <MouBadge /> : null}
+                            </span>
                             <span className="block text-xs text-muted-foreground">
                               {purposeOf(product)?.label || 'General purpose'} · {product.documents.length} documents
                               {product.collateral.requirement !== 'none' ? ` · collateral ${describeRequirement(product).toLowerCase()}` : ''}

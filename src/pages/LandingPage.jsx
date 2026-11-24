@@ -88,7 +88,8 @@ function LandingPage() {
     (productId) => {
       const product = productFor(productId) || products[0]
       // The figures they qualified on go with them: the wizard caps the amount by them, and submits them.
-      navigate(applyPath(product.id, 0, product.form), { state: { eligibility: figures[product.loanType] || null } })
+      // productChosen: the Loan type step confirms this loan rather than listing them all again.
+      navigate(applyPath(product.id, 0, product.form), { state: { eligibility: figures[product.loanType] || null, productChosen: true } })
     },
     [productFor, products, figures, navigate]
   )
