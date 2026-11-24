@@ -101,6 +101,9 @@ const initialLoanState = {
 
 function DashboardPage() {
   const location = useLocation()
+  // A loan picked on the landing page: the Loan type step shows it to confirm, with the
+  // others a click away. Kept from the first visit, since moving between steps drops router state.
+  const [confirmChosenProduct, setConfirmChosenProduct] = useState(() => Boolean(location.state?.productChosen))
   const navigate = useNavigate()
   const { type: typeParam, step: stepParam } = useParams()
 
@@ -1734,6 +1737,8 @@ function DashboardPage() {
                 products={products}
                 loanTypes={loanTypes}
                 onSelectProduct={chooseProduct}
+                confirmChosenProduct={confirmChosenProduct}
+                onExploreProducts={() => setConfirmChosenProduct(false)}
                 getUploadStatus={getUploadStatus}
                 goToStep={goToStep}
                 handleDirectorDocumentInputChange={handleDirectorDocumentInputChange}

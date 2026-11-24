@@ -8,7 +8,7 @@ import { caseWorkflow } from './workflow.js'
 import { notifyUsers, creditStaffIds } from './notify.js'
 import { rolesWith } from './roles.js'
 import { collateralItems } from '../../src/config/collateral.js'
-import { PARTNER_DOCUMENT_SLOTS, heldForPartner, heldReason, mayActOnHeldCase, normaliseNrc, partnerInactiveReason } from '../../src/config/partners.js'
+import { PARTNER_DOCUMENT_SLOTS, heldForPartner, heldReason, isNrc, mayActOnHeldCase, normaliseNrc, partnerInactiveReason } from '../../src/config/partners.js'
 import { currentDocuments } from '../../src/config/applications.js'
 import { isZambian } from '../../src/config/applicantRules.js'
 
@@ -42,6 +42,103 @@ export const staffMatch = async (partner, nrc) => {
     .where(and(eq(partnerStaff.partnerId, partner.id), eq(partnerStaff.listVersion, version), eq(partnerStaff.nrc, normaliseNrc(nrc))))
     .limit(1)
   return row ? { onList: true, employeeNumber: row.employeeNumber, name: row.name, listVersion: version } : blank
+}
+
+/**
+ * A page of the partner's current staff list, by name then NRC, for Settings → Partners:
+ * `q` finds a name, employee number or NRC (any part of it).
+ */
+export const staffListPage = async (partner, { q = '', page = 1, pageSize = 25 } = {}) => {
+  const version = partner?.staffList?.version || 0
+  if (!version) return { people: [], total: 0, page: 1, pageSize }
+  const db = await getDb()
+  const pattern = `%${q.replace(/[\\%_]/g, (char) => `\\${char}`)}%`
+  const where = and(
+    eq(partnerStaff.partnerId, partner.id),
+    eq(partnerStaff.listVersion, version),
+    q ? sql`(${partnerStaff.name} ilike ${pattern} or ${partnerStaff.employeeNumber} ilike ${pattern} or ${partnerStaff.nrc} ilike ${pattern})` : undefined
+  )
+  const [rows, [{ total }]] = await Promise.all([
+    db
+      .select({ id: partnerStaff.id, nrc: partnerStaff.nrc, employeeNumber: partnerStaff.employeeNumber, name: partnerStaff.name })
+      .from(partnerStaff)
+      .where(where)
+      .orderBy(sql`${partnerStaff.name} asc nulls last`, partnerStaff.nrc)
+      .limit(pageSize)
+      .offset((page - 1) * pageSize),
+    db.select({ total: sql`count(*)::int` }).from(partnerStaff).where(where),
+  ])
+  return { people: rows, total, page, pageSize }
+}
+
+// ---------------------------------------------------------------------------
+// One person on the staff list, by hand (Settings → Partners)
+// ---------------------------------------------------------------------------
+
+/** The person's fields from a form: a valid NRC, and the optional employee number and name. */
+const staffFields = (input) => {
+  const nrc = normaliseNrc(input?.nrc)
+  if (!isNrc(nrc)) fail(400, 'Enter the NRC as 123456/78/9.', 'invalid_nrc')
+  return { nrc, employeeNumber: text(input?.employeeNumber, 40) || null, name: text(input?.name, 120) || null }
+}
+
+/** The partner's list details after a change by hand: the same version, its new count, and who changed it. */
+const recountStaffList = async (db, partnerId, version, actor) => {
+  const [{ count }] = await db.select({ count: sql`count(*)::int` }).from(partnerStaff).where(and(eq(partnerStaff.partnerId, partnerId), eq(partnerStaff.listVersion, version)))
+  const setting = await getSetting('partners')
+  const previous = (setting.list || []).find((entry) => entry.id === partnerId)?.staffList || {}
+  const staffList = { ...previous, version, count, editedAt: new Date().toISOString(), editedByName: actor?.name || null, uploadedAt: previous.uploadedAt || new Date().toISOString() }
+  await setSetting('partners', { ...setting, list: setting.list.map((entry) => (entry.id === partnerId ? { ...entry, staffList } : entry)) }, actor)
+  return staffList
+}
+
+const refuseDuplicate = async (db, partnerId, version, nrc, exceptId = null) => {
+  const [taken] = await db
+    .select({ id: partnerStaff.id })
+    .from(partnerStaff)
+    .where(and(eq(partnerStaff.partnerId, partnerId), eq(partnerStaff.listVersion, version), eq(partnerStaff.nrc, nrc), exceptId ? ne(partnerStaff.id, exceptId) : undefined))
+    .limit(1)
+  if (taken) fail(409, 'Someone with this NRC is already on the list.', 'already_listed')
+}
+
+const toPerson = (row) => ({ id: row.id, nrc: row.nrc, employeeNumber: row.employeeNumber, name: row.name })
+
+/** Adds one person to the partner's current list (starting a list if it has none). */
+export const addStaffMember = async (partner, input, actor) => {
+  const fields = staffFields(input)
+  const db = await getDb()
+  const version = partner.staffList?.version || 1
+  await refuseDuplicate(db, partner.id, version, fields.nrc)
+  const [row] = await db.insert(partnerStaff).values({ partnerId: partner.id, listVersion: version, ...fields }).returning()
+  return { person: toPerson(row), staffList: await recountStaffList(db, partner.id, version, actor) }
+}
+
+/** The person `id` on the partner's current list; 404 otherwise. */
+const currentStaffRow = async (db, partner, id) => {
+  if (!/^[0-9a-f-]{36}$/i.test(String(id))) fail(404, 'That person isn’t on the list.', 'not_found')
+  const [row] = await db
+    .select()
+    .from(partnerStaff)
+    .where(and(eq(partnerStaff.id, id), eq(partnerStaff.partnerId, partner.id), eq(partnerStaff.listVersion, partner.staffList?.version || 0)))
+    .limit(1)
+  if (!row) fail(404, 'That person isn’t on the list.', 'not_found')
+  return row
+}
+
+export const updateStaffMember = async (partner, id, input, actor) => {
+  const db = await getDb()
+  const row = await currentStaffRow(db, partner, id)
+  const fields = staffFields({ nrc: row.nrc, employeeNumber: row.employeeNumber, name: row.name, ...input })
+  await refuseDuplicate(db, partner.id, row.listVersion, fields.nrc, row.id)
+  const [updated] = await db.update(partnerStaff).set(fields).where(eq(partnerStaff.id, row.id)).returning()
+  return { person: toPerson(updated), staffList: await recountStaffList(db, partner.id, row.listVersion, actor) }
+}
+
+export const removeStaffMember = async (partner, id, actor) => {
+  const db = await getDb()
+  const row = await currentStaffRow(db, partner, id)
+  await db.delete(partnerStaff).where(eq(partnerStaff.id, row.id))
+  return { staffList: await recountStaffList(db, partner.id, row.listVersion, actor) }
 }
 
 /**

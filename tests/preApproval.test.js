@@ -98,6 +98,52 @@ describe('partners and pre-approved products', () => {
     const partners = (await admin.get('/settings')).body.settings.partners.list
     expect(partners[0].staffList).toMatchObject({ version: 2, count: 1, uploadedByName: expect.any(String) })
   })
+
+  it('shows admins the current staff list a page at a time, searchable, and audits each look', async () => {
+    const csv = ['nrc,employee_number,name', ...Array.from({ length: 30 }, (_, i) => `${String(200000 + i)}/11/1,E-${i},Person ${i}`), '123456/78/9,E-100,Ada Banda'].join('\n')
+    await admin.post('/admin/partners/zesco-limited/staff', { csv })
+    expect((await officer.get('/admin/partners/zesco-limited/staff/people')).status).toBe(403)
+    expect((await admin.get('/admin/partners/no-such/staff/people')).status).toBe(404)
+    const first = (await admin.get('/admin/partners/zesco-limited/staff/people?pageSize=25')).body
+    expect(first).toMatchObject({ total: 31, page: 1, pageSize: 25 })
+    expect(first.people).toHaveLength(25)
+    expect(Object.keys(first.people[0]).sort()).toEqual(['employeeNumber', 'id', 'name', 'nrc'])
+    expect((await admin.get('/admin/partners/zesco-limited/staff/people?pageSize=25&page=2')).body.people).toHaveLength(6)
+    // By name, employee number or NRC.
+    expect((await admin.get('/admin/partners/zesco-limited/staff/people?q=ada')).body.people).toMatchObject([{ nrc: '123456/78/9', employeeNumber: 'E-100', name: 'Ada Banda' }])
+    expect((await admin.get('/admin/partners/zesco-limited/staff/people?q=E-100')).body.total).toBe(1)
+    expect((await admin.get('/admin/partners/zesco-limited/staff/people?q=123456/78')).body.total).toBe(1)
+    const audit = (await admin.get('/audit?action=partner.staff_list_viewed')).body
+    expect(JSON.stringify(audit)).not.toContain('123456/78/9')
+    // Back to the one-person list the next tests expect.
+    await admin.post('/admin/partners/zesco-limited/staff', { csv: 'nrc,employee_number\n123456/78/9,E-100' })
+  })
+
+  it('lets admins add, edit and remove one person by hand, keeping the count', async () => {
+    const people = '/admin/partners/zesco-limited/staff/people'
+    const count = async () => (await admin.get('/settings')).body.settings.partners.list.find((partner) => partner.id === 'zesco-limited').staffList.count
+    expect((await officer.post(people, { nrc: '333333/33/3' })).status).toBe(403)
+    expect((await admin.post(people, { nrc: 'not-an-nrc' })).body.code).toBe('invalid_nrc')
+    expect((await admin.post(people, { nrc: '123456/78/9' })).body.code).toBe('already_listed')
+
+    const added = await admin.post(people, { nrc: ' 333333/33/3 ', employeeNumber: 'E-333', name: 'Chanda Mwale' })
+    expect(added.status, JSON.stringify(added.body)).toBe(200)
+    expect(added.body.person).toMatchObject({ id: expect.any(String), nrc: '333333/33/3', employeeNumber: 'E-333', name: 'Chanda Mwale' })
+    expect(await count()).toBe(2)
+    // The applicant check sees them straight away.
+    expect((await admin.get('/admin/partners/zesco-limited/staff?nrc=333333/33/3')).body).toMatchObject({ found: true, employeeNumber: 'E-333' })
+
+    const { id } = added.body.person
+    expect((await admin.patch(`${people}/${id}`, { nrc: '123456/78/9' })).body.code).toBe('already_listed')
+    const edited = await admin.patch(`${people}/${id}`, { nrc: '333333/33/4', employeeNumber: '', name: 'Chanda M. Mwale' })
+    expect(edited.body.person).toMatchObject({ nrc: '333333/33/4', employeeNumber: null, name: 'Chanda M. Mwale' })
+    expect((await admin.get('/admin/partners/zesco-limited/staff?nrc=333333/33/3')).body.found).toBe(false)
+
+    expect((await admin.del(`${people}/${id}`)).status).toBe(200)
+    expect((await admin.del(`${people}/${id}`)).status).toBe(404)
+    expect(await count()).toBe(1)
+    expect((await admin.get(`${people}`)).body.people.map((person) => person.nrc)).toEqual(['123456/78/9'])
+  })
 })
 
 describe('the pre-approval route', () => {

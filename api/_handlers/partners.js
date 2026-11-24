@@ -1,7 +1,7 @@
 import { requireUser } from '../_lib/rbac.js'
 import { appOrigin, fail, text } from '../_lib/http.js'
 import { recordAudit } from '../_lib/audit.js'
-import { decideRequest, listPartners, partnerById, partnerRequestDetail, partnerRequestDocument, partnerRequests, replaceStaffList, staffMatch } from '../_lib/preApproval.js'
+import { addStaffMember, decideRequest, listPartners, partnerById, partnerRequestDetail, partnerRequestDocument, partnerRequests, removeStaffMember, replaceStaffList, staffListPage, staffMatch, updateStaffMember } from '../_lib/preApproval.js'
 import { readBlob } from '../_lib/blob.js'
 import { sendFile } from './applications.js'
 import { STAFF_LIST_MAX_ROWS, isNrc, parseStaffCsv } from '../../src/config/partners.js'
@@ -9,8 +9,9 @@ import { STAFF_LIST_MAX_ROWS, isNrc, parseStaffCsv } from '../../src/config/part
 /*
  * Pre-approved partner loans (src/config/partners.js, api/_lib/preApproval.js):
  *
- *   Settings → Partners (settings.manage): upload a partner's staff list, look up one NRC.
- *     The list is never handed back whole, and the audit log keeps counts, never NRCs.
+ *   Settings → Partners (settings.manage): upload a partner's staff list, look up one NRC,
+ *     and page through the list (never handed back whole). The audit log keeps each look,
+ *     with counts and the search, never NRCs.
  *   Partner requests (partner.confirm): the partner's staff confirm or refuse applicants. While
  *     a request waits for them they can open it: the applicant's identity and job details, and
  *     their ID copy, photo and payslips (PARTNER_DOCUMENT_SLOTS). Each opening is audited.
@@ -39,6 +40,50 @@ const lookUpStaff = async (req, res, { params, query }) => {
   const match = await staffMatch(partner, nrc)
   await recordAudit({ req, actor, action: 'partner.staff_looked_up', entityType: 'partner', entityId: params.id, detail: { found: match.onList } })
   return { found: match.onList, employeeNumber: match.employeeNumber, name: match.name }
+}
+
+/** A page of the partner's staff list, searchable (?q=, ?page=, ?pageSize= up to 100). */
+const listStaff = async (req, res, { params, query }) => {
+  const actor = await requireUser(req, { permission: 'settings.manage' })
+  const partner = await partnerById(params.id)
+  if (!partner) fail(404, 'Partner not found.', 'not_found')
+  const q = text(query.get('q'), 60)
+  const page = Math.max(1, Number(query.get('page')) || 1)
+  const pageSize = Math.min(100, Math.max(1, Number(query.get('pageSize')) || 25))
+  const result = await staffListPage(partner, { q, page, pageSize })
+  // A search that looks like an NRC isn't kept: only that one was made.
+  await recordAudit({ req, actor, action: 'partner.staff_list_viewed', entityType: 'partner', entityId: params.id, detail: { page, shown: result.people.length, total: result.total, searched: Boolean(q) } })
+  return result
+}
+
+/** The partner named in the path, for the staff-list changes by hand (settings.manage). */
+const partnerToEdit = async (req, params) => {
+  const actor = await requireUser(req, { permission: 'settings.manage' })
+  const partner = await partnerById(params.id)
+  if (!partner) fail(404, 'Partner not found.', 'not_found')
+  return { actor, partner }
+}
+
+// Each change by hand is audited with the new count, never the NRC.
+const addStaff = async (req, res, { params }) => {
+  const { actor, partner } = await partnerToEdit(req, params)
+  const result = await addStaffMember(partner, req.body || {}, actor)
+  await recordAudit({ req, actor, action: 'partner.staff_added', entityType: 'partner', entityId: partner.id, detail: { count: result.staffList.count } })
+  return result
+}
+
+const editStaff = async (req, res, { params }) => {
+  const { actor, partner } = await partnerToEdit(req, params)
+  const result = await updateStaffMember(partner, params.personId, req.body || {}, actor)
+  await recordAudit({ req, actor, action: 'partner.staff_edited', entityType: 'partner', entityId: partner.id, detail: { count: result.staffList.count } })
+  return result
+}
+
+const removeStaff = async (req, res, { params }) => {
+  const { actor, partner } = await partnerToEdit(req, params)
+  const result = await removeStaffMember(partner, params.personId, actor)
+  await recordAudit({ req, actor, action: 'partner.staff_removed', entityType: 'partner', entityId: partner.id, detail: { count: result.staffList.count } })
+  return result
 }
 
 /** The partners by name, for choosing which one a partner's staff member belongs to (Team). */
@@ -78,6 +123,10 @@ const getRequestDocument = async (req, res, { params }) => {
 export const partnerRoutes = [
   ['POST', '/admin/partners/:id/staff', uploadStaffList],
   ['GET', '/admin/partners/:id/staff', lookUpStaff],
+  ['GET', '/admin/partners/:id/staff/people', listStaff],
+  ['POST', '/admin/partners/:id/staff/people', addStaff],
+  ['PATCH', '/admin/partners/:id/staff/people/:personId', editStaff],
+  ['DELETE', '/admin/partners/:id/staff/people/:personId', removeStaff],
   ['GET', '/partners', listPartnerNames],
   ['GET', '/partner/requests', listRequests],
   ['GET', '/partner/requests/:id', getRequest],
