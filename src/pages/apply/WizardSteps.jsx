@@ -50,6 +50,7 @@ import {
 } from '@/components/application/ApplicationSummary'
 import { PrescreenGuidance } from '@/components/application/PrescreenGuidance'
 import { SubmitConsents } from '@/components/application/SubmitConsents'
+import { MouBadge, isMouProduct } from '@/components/MouBadge'
 
 import {
   BUSINESS_TYPE_OPTIONS,
@@ -948,6 +949,7 @@ export function WizardStep(props) {
                         {option.id === product.id ? <CheckCircle2 className="size-5 shrink-0 text-primary" aria-hidden="true" /> : null}
                       </span>
                       <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{subcategoryOf(option, loanTypes)?.label}</span>
+                      {isMouProduct(option) ? <MouBadge partnerName={option.preApproval.partnerName} className="self-start" /> : null}
                       {option.description ? <span className="text-sm text-muted-foreground">{option.description}</span> : null}
                       <span className="mt-2 text-sm text-foreground">
                         {formatKwacha(option.minAmount)} – {formatKwacha(option.maxAmount)} · {option.minTenure} to {option.maxTenure} months

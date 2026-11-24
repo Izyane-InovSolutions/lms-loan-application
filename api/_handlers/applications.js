@@ -17,6 +17,7 @@ import { copyBlob, deleteBlobsForDraft, readBlob } from '../_lib/blob.js'
 import { afterResponse } from '../_lib/after.js'
 import { addEvent, applicantFromData, findVisibleApplication, nextReference, scopeApplications } from '../_lib/applications.js'
 import { getLms } from '../_lib/lms/index.js'
+import { refuseStaffEmail } from '../_lib/staffEmail.js'
 import { queueLmsSync, syncApplicationToLms } from '../_lib/lms/sync.js'
 import { getPublishedWorkflow } from '../_lib/workflowVersions.js'
 import { queueCondition, workflowView } from '../_lib/workflow.js'
@@ -165,6 +166,7 @@ const submitApplication = async (req) => {
 
   const applicant = applicantFromData(loanType, data)
   if (applicant.name.length < 2 || !parseEmail(applicant.email)) fail(400, 'The applicant’s name and email are required.', 'invalid_input')
+  await refuseStaffEmail(applicant.email)
 
   // The files are in the draft kept under the applicant's email — built by the applicant,
   // or by the agent on their behalf.

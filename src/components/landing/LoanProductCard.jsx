@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils'
 import { describeFee, describeInterest, formatKwacha, purposeOf } from '@/config/loanProducts'
 import { productTags } from '@/config/eligibility'
 import { asksForCollateral, describeRequirement } from '@/config/collateral'
+import { MouBadge, isMouProduct } from '@/components/MouBadge'
 
 function Fact({ label, value, hint }) {
   return (
@@ -44,6 +45,7 @@ export function LoanProductCard({ product, eligibility = { status: 'unknown' }, 
         </div>
         <CardDescription className="mt-2">{product.description}</CardDescription>
         <div className="mt-3 flex flex-wrap gap-1.5">
+          {isMouProduct(product) ? <MouBadge partnerName={product.preApproval.partnerName} /> : null}
           {productTags(product).map((tag) => (
             <span key={tag} className="rounded-full bg-muted px-2 py-0.5 text-xs font-medium text-muted-foreground">
               {tag}

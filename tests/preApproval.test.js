@@ -110,9 +110,21 @@ describe('the pre-approval route', () => {
     expect(application.preApproval).toMatchObject({ partnerId: 'zesco-limited', partnerName: 'Zesco Limited', stage: 'partner', staffMatch: { onList: true, employeeNumber: 'E-100' } })
   })
 
-  it('keeps amounts above the limit to the usual review', async () => {
-    const over = await row(await submit({ amount: 25000 }))
-    expect(over.preApproval).toMatchObject({ stage: 'review', reason: expect.stringMatching(/above the pre-approved limit of K20,000/) })
+  it('sends amounts above the limit to the partner too, then to the usual review once confirmed', async () => {
+    const overId = await submit({ amount: 25000 })
+    const over = await row(overId)
+    expect(over.preApproval).toMatchObject({ stage: 'partner', overLimit: expect.stringMatching(/above the pre-approved limit of K20,000/) })
+    expect((await partnerUser.get('/partner/requests')).body.requests.map((request) => request.id)).toContain(overId)
+    // Held for the partner like any other.
+    const early = await manager.post(`/applications/${overId}/actions`, { action: 'issue_offer', version: over.version })
+    expect(early.status).toBe(409)
+
+    const confirmed = await partnerUser.post(`/partner/requests/${overId}`, { decision: 'confirm', version: over.version })
+    expect(confirmed.status, JSON.stringify(confirmed.body)).toBe(200)
+    const after = await row(overId)
+    // Confirmed, but never fast-tracked to an offer: it goes through the usual review.
+    expect(after.preApproval).toMatchObject({ stage: 'review', partnerDecision: { confirmed: true }, reason: expect.stringMatching(/above the pre-approved limit/) })
+    expect((await partnerUser.get('/partner/requests?view=recent')).body.requests.map((request) => request.id)).toContain(overId)
   })
 
   it('shows the partner’s staff only their own partner’s applicants, and no case pages', async () => {

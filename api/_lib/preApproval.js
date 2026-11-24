@@ -116,12 +116,12 @@ export const enterPreApproval = async (applicationId, { origin } = {}) => {
 
   const partner = await partnerById(product.preApproval.partnerId)
   const about = { partnerId: product.preApproval.partnerId, partnerName: partner?.name || null, mouReference: partner?.mouReference || null }
-  const reason =
-    partnerInactiveReason(partner) ||
-    (collateralItems(application.data).length ? 'Collateral was pledged, so it needs valuing.' : null) ||
-    (product.preApproval.maxAmount && application.amount > product.preApproval.maxAmount
+  const reason = partnerInactiveReason(partner) || (collateralItems(application.data).length ? 'Collateral was pledged, so it needs valuing.' : null)
+  // Above the limit: the partner still confirms employment, then it goes through the usual review (decideRequest).
+  const overLimit =
+    product.preApproval.maxAmount && application.amount > product.preApproval.maxAmount
       ? `K${application.amount.toLocaleString()} was asked for, above the pre-approved limit of K${product.preApproval.maxAmount.toLocaleString()}.`
-      : null)
+      : null
 
   if (reason) {
     const updated = await savePreApproval(db, application, { ...about, stage: 'review', reason, at: new Date().toISOString() })
@@ -130,13 +130,13 @@ export const enterPreApproval = async (applicationId, { origin } = {}) => {
   }
 
   const match = await staffMatch(partner, applicantNrc(application))
-  const updated = await savePreApproval(db, application, { ...about, stage: 'partner', staffMatch: match, enteredAt: new Date().toISOString() })
+  const updated = await savePreApproval(db, application, { ...about, stage: 'partner', staffMatch: match, ...(overLimit ? { overLimit } : {}), enteredAt: new Date().toISOString() })
   if (!updated) return null
   await addEvent(db, {
     applicationId,
     actor: null,
     type: 'status',
-    message: `Pre-approved product: sent to ${partner.name} to confirm employment (${match.onList ? `on their staff list${match.employeeNumber ? `, employee no. ${match.employeeNumber}` : ''}` : 'not on their staff list'}).`,
+    message: `Pre-approved product: sent to ${partner.name} to confirm employment (${match.onList ? `on their staff list${match.employeeNumber ? `, employee no. ${match.employeeNumber}` : ''}` : 'not on their staff list'}).${overLimit ? ` ${overLimit} Once confirmed, it goes through the usual review.` : ''}`,
   })
   await notifyUsers(
     await partnerStaffIds(partner.id),
@@ -274,7 +274,9 @@ export const partnerRequestDocument = async (viewer, applicationId, documentId) 
 
 /**
  * The partner's answer: `confirm` (the applicant works there) moves the case to offer
- * issuance; `refuse` (with a reason) takes it off the route to the usual review.
+ * issuance, or, for an amount above the pre-approved limit (`overLimit`), to the usual
+ * review with the confirmation on record; `refuse` (with a reason) takes it off the route
+ * to the usual review.
  */
 export const decideRequest = async (viewer, applicationId, input, { origin } = {}) => {
   const db = await getDb()
@@ -294,9 +296,12 @@ export const decideRequest = async (viewer, applicationId, input, { origin } = {
   const employeeNumber = text(input.employeeNumber, 40) || application.preApproval.staffMatch?.employeeNumber || null
   const partnerDecision = { confirmed, note: note || null, employeeNumber: confirmed ? employeeNumber : null, byName: viewer.name, by: viewer.id, at: new Date().toISOString() }
   const partnerName = application.preApproval.partnerName
-  const next = confirmed
-    ? { ...application.preApproval, stage: 'issue', partnerDecision }
-    : { ...application.preApproval, stage: 'review', partnerDecision, reason: `${partnerName} did not confirm employment: ${note}` }
+  const overLimit = application.preApproval.overLimit
+  const next = !confirmed
+    ? { ...application.preApproval, stage: 'review', partnerDecision, reason: `${partnerName} did not confirm employment: ${note}` }
+    : overLimit
+      ? { ...application.preApproval, stage: 'review', partnerDecision, reason: overLimit }
+      : { ...application.preApproval, stage: 'issue', partnerDecision }
   const updated = await savePreApproval(db, application, next)
   if (!updated) fail(409, 'This request has changed. Refresh and try again.', 'stale')
   await addEvent(db, {
@@ -304,10 +309,10 @@ export const decideRequest = async (viewer, applicationId, input, { origin } = {
     actor: viewer,
     type: 'status',
     message: confirmed
-      ? `${partnerName} confirmed employment${employeeNumber ? ` (employee no. ${employeeNumber})` : ''}${note ? `: ${note}` : ''}. Ready to issue the offer.`
+      ? `${partnerName} confirmed employment${employeeNumber ? ` (employee no. ${employeeNumber})` : ''}${note ? `: ${note}` : ''}. ${overLimit ? `It goes through the usual review: ${overLimit}` : 'Ready to issue the offer.'}`
       : `${partnerName} did not confirm employment: ${note}. It goes through the usual review.`,
   })
-  if (confirmed) {
+  if (confirmed && !overLimit) {
     await notifyUsers(
       await creditStaffIds({ permission: 'offers.issue' }),
       { type: 'pre_approval_ready', title: `Issue the offer: ${application.reference}`, body: `${application.applicantName}, confirmed by ${partnerName}`, applicationId },

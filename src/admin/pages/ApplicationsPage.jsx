@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowDownToLine, ChevronLeft, ChevronRight, FilePen, FilePlus2, FileStack, Loader2, Search, X } from 'lucide-react'
+import { MouBadge } from '@/components/MouBadge'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -398,7 +399,10 @@ export function ApplicationsPage() {
                   <Link to={`/admin/applications/${row.id}`} className="block px-4 py-3.5 hover:bg-muted/30">
                     <div className="flex items-start justify-between gap-3">
                       <div className="min-w-0">
-                        <p className="truncate font-medium text-foreground">{row.companyName || row.applicantName}</p>
+                        <p className="flex min-w-0 items-center gap-1.5">
+                          <span className="truncate font-medium text-foreground">{row.companyName || row.applicantName}</span>
+                          {row.preApproval ? <MouBadge /> : null}
+                        </p>
                         <p className="text-xs text-muted-foreground">
                           {row.reference}, {money(row.amount)} {(row.productName || LOAN_TYPE_LABELS[row.loanType]).toLowerCase()}
                         </p>
@@ -435,7 +439,10 @@ export function ApplicationsPage() {
                       <tr key={row.id} className="group cursor-pointer transition-colors hover:bg-muted/30" onClick={() => navigate(`/admin/applications/${row.id}`)}>
                         <td className="px-5 py-3">
                           <Link to={`/admin/applications/${row.id}`} className="block rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" onClick={(event) => event.stopPropagation()}>
-                            <span className="block font-medium text-foreground group-hover:text-primary">{row.companyName || row.applicantName}</span>
+                            <span className="flex items-center gap-1.5">
+                              <span className="font-medium text-foreground group-hover:text-primary">{row.companyName || row.applicantName}</span>
+                              {row.preApproval ? <MouBadge /> : null}
+                            </span>
                             <span className="block text-xs text-muted-foreground">
                               {row.reference}
                               {row.companyName ? `, ${row.applicantName}` : ''}, {(row.productName || LOAN_TYPE_LABELS[row.loanType]).toLowerCase()}

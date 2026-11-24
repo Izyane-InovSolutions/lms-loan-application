@@ -9,6 +9,7 @@ import { isDeployed } from '../_lib/runtime.js'
 import { CHANNELS, issueTicket, normaliseEmail, normalisePhone, subjectFor } from '../_lib/verification.js'
 import { getSetting } from '../_lib/settings.js'
 import { getLookup, valuesFor } from '../_lib/kyc/lookups.js'
+import { refuseStaffEmail } from '../_lib/staffEmail.js'
 
 /*
  * The applicant's code when they start an application (api/_lib/verification.js):
@@ -63,6 +64,8 @@ const contactFrom = (body) => {
 
 const start = async (req) => {
   const { channel, value } = await target(req.body)
+  // A staff email can't apply: refused before a code is sent.
+  if (channel === 'email') await refuseStaffEmail(value)
   const sms = channel === 'phone' ? await getSms() : null
   if (channel === 'phone' && !sms) fail(400, 'Codes can’t be sent by text message here. Use your email instead.', 'sms_unavailable')
   const subject = subjectFor(channel, value)
