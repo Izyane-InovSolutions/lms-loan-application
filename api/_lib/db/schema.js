@@ -143,6 +143,8 @@ export const auditLog = pgTable(
     entityId: text('entity_id'),
     detail: jsonb('detail').notNull().default(sql`'{}'::jsonb`),
     ip: text('ip'),
+    // The browser's own description of itself (User-Agent), for the browser and device used.
+    userAgent: text('user_agent'),
   },
   (table) => [
     index('audit_log_at_idx').on(table.at),

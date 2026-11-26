@@ -3,7 +3,7 @@ import { getDb, schema } from '../db/client.js'
 import { addEvent } from '../applications.js'
 import { caseWorkflow, systemTransition } from '../workflow.js'
 import { getSetting } from '../settings.js'
-import { getAiProvider } from '../ai/index.js'
+import { aiInsightsEnabled, getAiProvider } from '../ai/index.js'
 import { prescreenApplication } from '../ai/prescreen.js'
 import { findFormMismatches } from '../../../src/utils/documentChecks.js'
 import { currentDocuments } from '../../../src/config/applications.js'
@@ -60,7 +60,8 @@ export const runPrescreen = async (applicationId, { actor = null } = {}) => {
 
   let aiReview = null
   let aiError = null
-  if (await getAiProvider()) {
+  // AI insights switched off in Settings: the policy rules alone, and no review to show.
+  if ((await aiInsightsEnabled()) && (await getAiProvider())) {
     try {
       aiReview = await prescreenApplication({
         loanType: application.loanType,

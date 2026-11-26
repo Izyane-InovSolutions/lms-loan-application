@@ -125,3 +125,20 @@ describe('restoring an earlier workflow version', () => {
     expect((await admin.get('/admin/workflow')).body.published.version).toBe(before.published.version + 1)
   })
 })
+
+describe('the audit log of a workflow action', () => {
+  it('names the stages it moved between, and is found by the case reference', async () => {
+    const id = await submit('audit-detail@example.com')
+    const browser = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/157.0.0.0 Safari/537.36'
+    const { reference } = (await admin.get(`/applications/${id}`, { 'user-agent': browser })).body.application
+    expect((await act(officer, id, 'start_review')).status).toBe(200)
+    const { entries } = (await admin.get(`/audit?q=${encodeURIComponent(reference)}`)).body
+    const entry = entries.find((row) => row.action === 'application.start_review')
+    expect(entry, JSON.stringify(entries.map((row) => row.action))).toBeTruthy()
+    expect(entry.detail).toMatchObject({ reference, fromStage: expect.any(String), toStage: expect.any(String) })
+    expect(entry.detail.fromStage).not.toBe(entry.detail.toStage)
+    // Each entry keeps the browser it came from.
+    const opened = entries.find((row) => row.action === 'application.viewed' && row.userAgent)
+    expect(opened?.userAgent).toBe(browser)
+  })
+})

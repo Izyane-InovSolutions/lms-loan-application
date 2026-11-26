@@ -36,7 +36,8 @@ const listAudit = async (req, res, { query }) => {
   }
   if (search) {
     const pattern = `%${search.replace(/[%_\\]/g, '\\$&')}%`
-    filters.push(or(ilike(auditLog.actorLabel, pattern), ilike(auditLog.action, pattern), ilike(auditLog.entityId, pattern)))
+    // The details too: a case reference, a partner's name, an email.
+    filters.push(or(ilike(auditLog.actorLabel, pattern), ilike(auditLog.action, pattern), ilike(auditLog.entityId, pattern), sql`${auditLog.detail}::text ilike ${pattern}`))
   }
   if (from && !Number.isNaN(Date.parse(from))) filters.push(gte(auditLog.at, new Date(from)))
   if (to && !Number.isNaN(Date.parse(to))) {

@@ -160,7 +160,10 @@ describe('the pre-approval route', () => {
     const overId = await submit({ amount: 25000 })
     const over = await row(overId)
     expect(over.preApproval).toMatchObject({ stage: 'partner', overLimit: expect.stringMatching(/above the pre-approved limit of K20,000/) })
-    expect((await partnerUser.get('/partner/requests')).body.requests.map((request) => request.id)).toContain(overId)
+    const pending = (await partnerUser.get('/partner/requests')).body.requests.find((request) => request.id === overId)
+    // The partner sees why it won't be fast-tracked.
+    expect(pending.overLimit).toMatch(/above the pre-approved limit of K20,000/)
+    expect((await partnerUser.get(`/partner/requests/${overId}`)).body.request.overLimit).toMatch(/K25,000 was asked for/)
     // Held for the partner like any other.
     const early = await manager.post(`/applications/${overId}/actions`, { action: 'issue_offer', version: over.version })
     expect(early.status).toBe(409)
@@ -178,7 +181,7 @@ describe('the pre-approval route', () => {
     expect(requests.map((request) => request.id)).toContain(caseId)
     expect(requests.every((request) => request.partnerId === 'zesco-limited')).toBe(true)
     expect(Object.keys(requests[0]).sort()).toEqual(
-      ['amount', 'applicantName', 'employerName', 'id', 'monthlyInstalment', 'nrc', 'passportNumber', 'partnerDecision', 'partnerId', 'partnerName', 'reference', 'stage', 'staffMatch', 'submittedAt', 'tenure', 'version'].sort()
+      ['amount', 'applicantName', 'employerName', 'id', 'monthlyInstalment', 'nrc', 'overLimit', 'partnerDecision', 'partnerId', 'partnerName', 'passportNumber', 'reference', 'stage', 'staffMatch', 'submittedAt', 'tenure', 'version'].sort()
     )
     expect((await partnerUser.get(`/applications/${caseId}`)).status).toBe(404)
     expect((await partnerUser.get('/applications')).body.applications || []).toEqual([])

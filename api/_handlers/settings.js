@@ -638,6 +638,7 @@ const VALIDATORS = {
     const providerIds = AI_MODEL_PROVIDERS.map((entry) => entry.id)
     return {
       enabled: value.enabled !== false,
+      insights: value.insights !== false,
       provider: ['environment', 'off', ...providerIds].includes(value.provider) ? value.provider : 'environment',
       fallback: Boolean(value.fallback),
       fallbacks: (Array.isArray(value.fallbacks) ? value.fallbacks : []).filter((id, index, list) => providerIds.includes(id) && list.indexOf(id) === index),

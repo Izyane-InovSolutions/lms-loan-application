@@ -108,6 +108,12 @@ export const getAiProviders = async () => resolveSetup(await readSetting()).prov
 /** The chosen provider, or null when AI checks are off. */
 export const getAiProvider = async () => (await getAiProviders())[0] || null
 
+/** Whether AI insights (the review of a whole application) are on: AI on, and insights not switched off. */
+export const aiInsightsEnabled = async () => {
+  const setting = await readSetting()
+  return setting.enabled !== false && setting.insights !== false
+}
+
 /** Whether an upload of this type can be checked at all (by a model directly, or after OCR). */
 export const canReadMimeType = async (mimeType) => {
   const { providers, ocr } = resolveSetup(await readSetting())

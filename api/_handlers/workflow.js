@@ -172,7 +172,25 @@ const act = async (req, res, { params }) => {
     throw error
   }
   const { application: updated, result } = outcome
-  await recordAudit({ req, actor: viewer, action: `application.${input.action}`, entityType: 'application', entityId: application.id, detail: { reference: application.reference, status: updated.status } })
+  // What was done, in the workflow's own words: the action's name, and the stage it left and entered.
+  const before = await caseWorkflow(application).catch(() => null)
+  const after = updated.state !== application.state ? await caseWorkflow(updated).catch(() => null) : null
+  const actionLabel = before?.state?.actions?.find((entry) => entry.id === input.action)?.label || null
+  await recordAudit({
+    req,
+    actor: viewer,
+    action: `application.${input.action}`,
+    entityType: 'application',
+    entityId: application.id,
+    detail: {
+      reference: application.reference,
+      status: updated.status,
+      ...(actionLabel ? { actionLabel } : {}),
+      ...(before?.state?.label ? { fromStage: before.state.label } : {}),
+      ...(after?.state?.label ? { toStage: after.state.label } : {}),
+      ...(input.verdict ? { verdict: String(input.verdict).slice(0, 20) } : {}),
+    },
+  })
 
   if (result.consumeOtpFor) await consumeOtp('offer', result.consumeOtpFor)
   // The offer letter is made from the published template straight away.

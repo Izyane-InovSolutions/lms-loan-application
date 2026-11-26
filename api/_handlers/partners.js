@@ -27,7 +27,7 @@ const uploadStaffList = async (req, res, { params }) => {
   if (!rows.length) fail(400, 'No row has a valid NRC (123456/78/9).', 'invalid_csv')
   if (rows.length > STAFF_LIST_MAX_ROWS) fail(400, `A staff list can have up to ${STAFF_LIST_MAX_ROWS.toLocaleString()} people.`, 'too_large')
   const staffList = await replaceStaffList(params.id, rows, actor)
-  await recordAudit({ req, actor, action: 'partner.staff_list_uploaded', entityType: 'partner', entityId: params.id, detail: { count: rows.length, skipped: errors.length, version: staffList.version } })
+  await recordAudit({ req, actor, action: 'partner.staff_list_uploaded', entityType: 'partner', entityId: params.id, detail: { partnerName: (await partnerById(params.id))?.name || null, count: rows.length, skipped: errors.length, version: staffList.version } })
   return { staffList, count: rows.length, errors: errors.slice(0, 50), skipped: errors.length }
 }
 
@@ -38,7 +38,7 @@ const lookUpStaff = async (req, res, { params, query }) => {
   const nrc = text(query.get('nrc'), 20)
   if (!isNrc(nrc)) fail(400, 'Enter an NRC as 123456/78/9.', 'invalid_input')
   const match = await staffMatch(partner, nrc)
-  await recordAudit({ req, actor, action: 'partner.staff_looked_up', entityType: 'partner', entityId: params.id, detail: { found: match.onList } })
+  await recordAudit({ req, actor, action: 'partner.staff_looked_up', entityType: 'partner', entityId: params.id, detail: { partnerName: partner.name, found: match.onList } })
   return { found: match.onList, employeeNumber: match.employeeNumber, name: match.name }
 }
 
@@ -52,7 +52,7 @@ const listStaff = async (req, res, { params, query }) => {
   const pageSize = Math.min(100, Math.max(1, Number(query.get('pageSize')) || 25))
   const result = await staffListPage(partner, { q, page, pageSize })
   // A search that looks like an NRC isn't kept: only that one was made.
-  await recordAudit({ req, actor, action: 'partner.staff_list_viewed', entityType: 'partner', entityId: params.id, detail: { page, shown: result.people.length, total: result.total, searched: Boolean(q) } })
+  await recordAudit({ req, actor, action: 'partner.staff_list_viewed', entityType: 'partner', entityId: params.id, detail: { partnerName: partner.name, page, shown: result.people.length, total: result.total, searched: Boolean(q) } })
   return result
 }
 
@@ -68,21 +68,21 @@ const partnerToEdit = async (req, params) => {
 const addStaff = async (req, res, { params }) => {
   const { actor, partner } = await partnerToEdit(req, params)
   const result = await addStaffMember(partner, req.body || {}, actor)
-  await recordAudit({ req, actor, action: 'partner.staff_added', entityType: 'partner', entityId: partner.id, detail: { count: result.staffList.count } })
+  await recordAudit({ req, actor, action: 'partner.staff_added', entityType: 'partner', entityId: partner.id, detail: { partnerName: partner.name, count: result.staffList.count } })
   return result
 }
 
 const editStaff = async (req, res, { params }) => {
   const { actor, partner } = await partnerToEdit(req, params)
   const result = await updateStaffMember(partner, params.personId, req.body || {}, actor)
-  await recordAudit({ req, actor, action: 'partner.staff_edited', entityType: 'partner', entityId: partner.id, detail: { count: result.staffList.count } })
+  await recordAudit({ req, actor, action: 'partner.staff_edited', entityType: 'partner', entityId: partner.id, detail: { partnerName: partner.name, count: result.staffList.count } })
   return result
 }
 
 const removeStaff = async (req, res, { params }) => {
   const { actor, partner } = await partnerToEdit(req, params)
   const result = await removeStaffMember(partner, params.personId, actor)
-  await recordAudit({ req, actor, action: 'partner.staff_removed', entityType: 'partner', entityId: partner.id, detail: { count: result.staffList.count } })
+  await recordAudit({ req, actor, action: 'partner.staff_removed', entityType: 'partner', entityId: partner.id, detail: { partnerName: partner.name, count: result.staffList.count } })
   return result
 }
 
@@ -100,14 +100,14 @@ const listRequests = async (req, res, { query }) => {
 const answerRequest = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'partner.confirm' })
   const request = await decideRequest(viewer, params.id, req.body || {}, { origin: appOrigin(req) })
-  await recordAudit({ req, actor: viewer, action: request.partnerDecision?.confirmed ? 'partner.employment_confirmed' : 'partner.employment_refused', entityType: 'application', entityId: params.id, detail: { reference: request.reference, partner: request.partnerId } })
+  await recordAudit({ req, actor: viewer, action: request.partnerDecision?.confirmed ? 'partner.employment_confirmed' : 'partner.employment_refused', entityType: 'application', entityId: params.id, detail: { reference: request.reference, partner: request.partnerId, partnerName: request.partnerName } })
   return { request }
 }
 
 const getRequest = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'partner.confirm' })
   const request = await partnerRequestDetail(viewer, params.id)
-  await recordAudit({ req, actor: viewer, action: 'partner.request_viewed', entityType: 'application', entityId: params.id, detail: { reference: request.reference, partner: request.partnerId } })
+  await recordAudit({ req, actor: viewer, action: 'partner.request_viewed', entityType: 'application', entityId: params.id, detail: { reference: request.reference, partner: request.partnerId, partnerName: request.partnerName } })
   return { request }
 }
 

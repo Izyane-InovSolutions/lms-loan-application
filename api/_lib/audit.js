@@ -16,5 +16,6 @@ export const recordAudit = async ({ req, actor, action, entityType = null, entit
     entityId: entityId == null ? null : String(entityId),
     detail,
     ip: req ? clientIp(req) : null,
+    userAgent: req?.headers?.['user-agent'] ? String(req.headers['user-agent']).slice(0, 400) : null,
   })
 }

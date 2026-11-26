@@ -348,7 +348,8 @@ export function CasePage() {
               prescreen={prescreen}
               zra={application.checks?.zra}
               crb={{ reports: crbReports, provider: crbProvider, hasConsent: hasCrbConsent, applies: crbApplies(application.loanType, application.data) }}
-              showAi={may.work || may.decide}
+              // Settings → AI: with insights off, no AI review shows, not even one made before.
+              showAi={(may.work || may.decide) && state.aiInsights !== false}
               canRerun={may.work}
               onRerun={() => post('/prescreen', {}, 'Policy rules run again')}
               onOpenDocument={(value) => {

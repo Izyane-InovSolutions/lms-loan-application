@@ -75,7 +75,7 @@ const TAB_GROUPS = [
     tabs: [
       { id: "kyc", label: "Customer records", icon: IdCard, hint: "Your KYC platform, to look up applicants and fill in their forms." },
       { id: "crb", label: "Credit bureau", icon: Gauge, hint: "Which bureau to use, when reports are pulled, and consent." },
-      { id: "ai", label: "AI document checks", icon: ScanText, hint: "Reading and checking each uploaded document." },
+      { id: "ai", label: "AI", icon: ScanText, hint: "AI document checks and AI insights on applications." },
       { id: "zra", label: "ZRA Web Services", icon: Landmark, hint: "Verifying NRCs, TPINs and passports with ZRA." },
     ],
   },
@@ -1354,6 +1354,18 @@ function AiTab({ settings, integrations, notify, onSaved }) {
             description="Checks uploaded documents and prescreens applications. Applicants can’t turn it on or off; this switch decides for everyone."
             checked={value.enabled !== false}
             onChange={(enabled) => ai.set({ enabled })}
+          />
+          <Toggle
+            id="ai-insights"
+            label="AI insights"
+            description={
+              value.enabled === false
+                ? "Off while AI analysis is off."
+                : "The AI’s review of each application: a score, a recommendation, a summary and flags on the case, and guidance for applicants before they submit. Off, documents are still read and the policy rules still run."
+            }
+            checked={value.enabled !== false && value.insights !== false}
+            disabled={value.enabled === false}
+            onChange={(insights) => ai.set({ insights })}
           />
           <div className="grid gap-4 sm:grid-cols-2">
             <Field id="ai-provider" label="Model">

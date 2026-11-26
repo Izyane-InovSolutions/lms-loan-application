@@ -17,6 +17,7 @@ import { copyBlob, deleteBlobsForDraft, readBlob } from '../_lib/blob.js'
 import { afterResponse } from '../_lib/after.js'
 import { addEvent, applicantFromData, findVisibleApplication, nextReference, scopeApplications } from '../_lib/applications.js'
 import { getLms } from '../_lib/lms/index.js'
+import { aiInsightsEnabled } from '../_lib/ai/index.js'
 import { refuseStaffEmail } from '../_lib/staffEmail.js'
 import { queueLmsSync, syncApplicationToLms } from '../_lib/lms/sync.js'
 import { getPublishedWorkflow } from '../_lib/workflowVersions.js'
@@ -592,6 +593,8 @@ export const loadCase = async (applicationId, viewer) => {
     locations: points,
     crbReports: crbRows.map(crbReportFor(viewer)),
     lmsConfigured: Boolean(await getLms()),
+    // Settings → AI: off, the case page shows no AI review, not even one made before.
+    aiInsights: await aiInsightsEnabled(),
     offersRequireAcceptance: (await getSetting('offers')).requireAcceptance,
     stages: await getSetting('stages'),
     offersRequireSignature: (await getSetting('offers')).requireSignature,

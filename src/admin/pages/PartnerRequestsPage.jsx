@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
+import { OverLimitNotice } from '@/components/OverLimitNotice'
 import { api } from '../api'
 import { EmptyState, ErrorState, Field, FormError, PageHeader, SkeletonRows, dateTime, money, useToast } from '../components'
 
@@ -78,6 +79,7 @@ export function PartnerRequestsPage() {
                   {money(request.amount)} over {request.tenure} months ({money(request.monthlyInstalment)} a month) · {request.reference} · applied {dateTime(request.submittedAt)}
                   {request.employerName ? ` · says they work at ${request.employerName}` : ''}
                 </p>
+                <OverLimitNotice text={request.overLimit} className="mt-1" />
                 <StaffMatch match={request.staffMatch} />
                 {request.partnerDecision ? (
                   <p className={cn('flex items-center gap-1.5', request.partnerDecision.confirmed ? 'text-success' : 'text-destructive')}>
@@ -204,13 +206,14 @@ function ReviewDialog({ requestId, onClose, onAnswer, onGone }) {
               ) : null}
             </section>
 
-            <section aria-labelledby="review-loan" className="space-y-1">
+            <section aria-labelledby="review-loan" className="space-y-2">
               <h3 id="review-loan" className="font-medium text-foreground">
                 What they applied for
               </h3>
               <p className="text-muted-foreground">
                 {money(request.amount)} over {request.tenure} months ({money(request.monthlyInstalment)} a month) · {request.reference} · applied {dateTime(request.submittedAt)}
               </p>
+              <OverLimitNotice text={request.overLimit} />
             </section>
 
             <section aria-labelledby="review-documents" className="space-y-2">
@@ -314,11 +317,12 @@ function AnswerDialog({ answering, onClose, onAnswered }) {
           <DialogTitle>{confirming ? `Confirm ${request.applicantName} works for you` : `You can’t confirm ${request.applicantName}`}</DialogTitle>
           <DialogDescription>
             {confirming
-              ? 'Their loan offer can then be issued. Confirm only someone currently employed by your organisation.'
+              ? `${request.overLimit ? 'Their application then goes through the lender’s usual review, as it is above the pre-approved limit.' : 'Their loan offer can then be issued.'} Confirm only someone currently employed by your organisation.`
               : 'Say what doesn’t match. Their application then goes through the lender’s usual review instead.'}
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={submit} className="space-y-4" noValidate>
+          <OverLimitNotice text={request.overLimit} />
           {confirming ? (
             <Field id="answer-employee-number" label="Employee number (optional)">
               <Input id="answer-employee-number" value={employeeNumber} onChange={(event) => setEmployeeNumber(event.target.value)} />
