@@ -28,6 +28,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
+import { TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { SimpleText } from "@/lib/simpleText";
 import { registeredRoles, roleLabel } from "@/config/roles";
@@ -57,8 +58,9 @@ import { PartnersTab } from "./PartnersTab";
 import { DangerZoneTab } from "./DangerZoneTab";
 
 /*
- * The settings sections, in groups. The groups are laid out as a ribbon that wraps (no
- * sideways scrolling), and as one grouped dropdown on a phone. `hint` is the line shown
+ * The settings sections, in groups. On larger screens the groups are line tabs with the
+ * selected group's sections as a second row of tabs below; on a phone they are one grouped
+ * dropdown. Choosing a group opens its first section. `hint` is the line shown
  * under the section's name, so an admin knows they are in the right place.
  */
 const TAB_GROUPS = [
@@ -215,7 +217,8 @@ export function SettingsPage() {
     (!entry.adminOnly || user?.role === "admin") &&
     (!entry.feature || features?.[entry.feature]);
   const groups = TAB_GROUPS.map((group) => ({ ...group, tabs: group.tabs.filter(allowed) })).filter((group) => group.tabs.length);
-  const current = groups.flatMap((group) => group.tabs).find((entry) => entry.id === tab);
+  const currentGroup = groups.find((group) => group.tabs.some((entry) => entry.id === tab));
+  const current = currentGroup?.tabs.find((entry) => entry.id === tab);
   const legalNeedsAttention = Boolean(state.legalPlaceholders && (state.legalPlaceholders.terms || state.legalPlaceholders.privacy));
   const choose = (id) => setParams({ tab: id }, { replace: true });
 
@@ -245,53 +248,43 @@ export function SettingsPage() {
         </Select>
       </div>
 
-      {/* Larger screens: a ribbon of labelled groups that wraps instead of scrolling. */}
-      <nav aria-label="Settings sections" className="hidden rounded-lg border bg-card p-2 shadow-sm md:block">
-        <div className="flex flex-wrap gap-x-5 gap-y-2">
+      {/* Larger screens: the categories as line tabs, then only that category's sections. */}
+      <nav aria-label="Settings sections" className="hidden space-y-4 md:block">
+        <TabsList
+          variant="line"
+          aria-label="Settings categories"
+          value={currentGroup?.label}
+          onValueChange={(label) => {
+            const group = groups.find((entry) => entry.label === label);
+            if (group && group !== currentGroup) choose(group.tabs[0].id);
+          }}
+        >
           {groups.map((group) => (
-            <div
-              key={group.label}
-              role="group"
-              aria-label={group.label}
-              className="flex flex-col px-1 py-1"
-            >
-              <span className="px-2 pb-1 text-[0.68rem] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
-                {group.label}
-              </span>
-              <div className="flex flex-wrap gap-1">
-                {group.tabs.map((entry) => {
-                  const Icon = entry.icon;
-                  const active = tab === entry.id;
-                  return (
-                    <button
-                      key={entry.id}
-                      type="button"
-                      onClick={() => choose(entry.id)}
-                      aria-current={active ? "page" : undefined}
-                      title={entry.hint}
-                      className={cn(
-                        "inline-flex items-center gap-2 whitespace-nowrap rounded-md px-2.5 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                        active
-                          ? entry.danger
-                            ? "bg-destructive/10 text-destructive"
-                            : "bg-primary/10 text-primary"
-                          : entry.danger
-                            ? "text-destructive/80 hover:bg-destructive/10 hover:text-destructive"
-                            : "text-muted-foreground hover:bg-muted hover:text-foreground",
-                      )}
-                    >
-                      <Icon className="size-4 shrink-0" aria-hidden="true" />
-                      {entry.label}
-                      {entry.id === "legal" && legalNeedsAttention ? (
-                        <span className="inline-block size-1.5 rounded-full bg-warning" aria-label="needs attention" />
-                      ) : null}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+            <TabsTrigger key={group.label} value={group.label}>
+              {group.label}
+              {group.tabs.some((entry) => entry.id === "legal") && legalNeedsAttention ? (
+                <span className="inline-block size-1.5 rounded-full bg-warning" aria-label="needs attention" />
+              ) : null}
+            </TabsTrigger>
           ))}
-        </div>
+        </TabsList>
+
+        {currentGroup && currentGroup.tabs.length > 1 ? (
+          <TabsList aria-label={currentGroup.label} value={tab} onValueChange={choose}>
+            {currentGroup.tabs.map((entry) => {
+              const Icon = entry.icon;
+              return (
+                <TabsTrigger key={entry.id} value={entry.id} title={entry.hint} tone={entry.danger ? "danger" : undefined}>
+                  <Icon aria-hidden="true" />
+                  {entry.label}
+                  {entry.id === "legal" && legalNeedsAttention ? (
+                    <span className="inline-block size-1.5 rounded-full bg-warning" aria-label="needs attention" />
+                  ) : null}
+                </TabsTrigger>
+              );
+            })}
+          </TabsList>
+        ) : null}
       </nav>
 
       {current ? (
