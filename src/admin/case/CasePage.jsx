@@ -75,6 +75,8 @@ export function CasePage() {
   const [documentId, setDocumentId] = useState(null)
   const tabs = useRef(null)
   const [dialog, setDialog] = useState(null)
+  // The case just moved to a stage this person doesn't work: { stage, roles, closed }, for the "Done" dialog.
+  const [handoff, setHandoff] = useState(null)
   // Counted up by the summary's "Enter the figure", which opens the figures for editing.
   const [figureRequest, setFigureRequest] = useState(0)
   // Who the case can be assigned to at its stage ({ stage, people }); null until loaded.
@@ -149,7 +151,12 @@ export function CasePage() {
       try {
         const data = await api(`/applications/${id}/actions`, { method: 'POST', body: { action, version: state.application.version, ...payload } })
         setState({ status: 'ready', ...data })
-        if (message) notify(message)
+        // Moved on to a stage they don't work (or closed): say it's done and offer the way back, rather than leave them on a read-only page.
+        const before = state.workflow
+        const after = data.workflow
+        if (before && after && !before.readOnly && after.readOnly && after.state?.id !== before.state?.id) {
+          setHandoff({ stage: after.state.label, roles: after.state.roles || [], closed: after.state.type === 'final' })
+        } else if (message) notify(message)
       } catch (error) {
         if (error.code === 'stale') load()
         throw error
@@ -565,6 +572,7 @@ export function CasePage() {
 
       </div>
 
+      <HandoffDialog handoff={handoff} onStay={() => setHandoff(null)} onLeave={() => navigate('/admin/applications')} />
       <CaseDialogs
         product={product}
         collateralCatalog={collateralCatalog}
@@ -804,6 +812,37 @@ export const groupActions = (input) => {
   return groups
 }
 
+/**
+ * "Done": the case has moved to a stage this person doesn't work, so there's nothing left for
+ * them to do on it. Back to the list, or stay and read it.
+ */
+function HandoffDialog({ handoff, onStay, onLeave }) {
+  const who = (handoff?.roles || []).map((role) => roleLabel(role)).join(' or ')
+  return (
+    <Dialog open={Boolean(handoff)} onOpenChange={(open) => (open ? null : onStay())}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <CheckCircle2 className="size-5 text-success" aria-hidden="true" />
+            {handoff?.closed ? `Done: ${handoff.stage}` : `Moved to ${handoff?.stage}`}
+          </DialogTitle>
+          <DialogDescription>
+            {handoff?.closed
+              ? 'The case is closed. You can still view it, read only.'
+              : `${who ? `${who} takes it from here.` : 'It’s with the next stage now.'} There’s nothing more for you to do on it; you can still view it, read only.`}
+          </DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={onStay}>
+            Keep viewing
+          </Button>
+          <Button onClick={onLeave}>Back to applications</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
 /** A greyed-out button with why on hover (a disabled button shows no tooltip of its own) and for screen readers. */
 function Held({ reason, children }) {
   return (
@@ -857,6 +896,21 @@ function CaseActions({ application, workflow, readOnly, may, userId, canTake, ha
       )
     }
     const [first] = usable
+    // Approving is held (underwriting, the appraisal or the legal check isn't done) while declining stays open:
+    // a greyed Approve saying why, and Decline beside it, rather than one button that looks as if approval is possible.
+    const heldApprove = (group.type === 'decide' || group.single) && group.actions.find((action) => action.kind === 'approve' && action.blocked)
+    if (heldApprove) {
+      return (
+        <React.Fragment key={group.key}>
+          <Held reason={heldApprove.blocked}>
+            <Button disabled>Approve</Button>
+          </Held>
+          <Button variant="outline" className="text-destructive hover:text-destructive" onClick={() => onOpen({ type: group.single ? 'recommend' : 'decide', group, action: first })}>
+            Decline
+          </Button>
+        </React.Fragment>
+      )
+    }
     if (group.type === 'claim') {
       return (
         <Button key={group.key} onClick={run(group.key, () => onClaim(first))} disabled={Boolean(busy)}>
@@ -941,14 +995,16 @@ const recommendVerdicts = (dialog) => {
   const approve = { value: 'approve', label: 'Approve', tone: 'primary' }
   const decline = { value: 'decline', label: 'Decline', tone: 'destructive' }
   if (!dialog?.group?.single) return [approve, decline]
-  const usable = dialog.group.actions.filter((action) => !action.blocked)
-  return [...(usable.some((action) => action.kind === 'approve') ? [approve] : []), ...(usable.some((action) => action.kind === 'reject') ? [decline] : [])]
+  // A held approval stays in view, greyed with its reason (the dialog's blocked), rather than vanishing.
+  const has = (kind) => dialog.group.actions.some((action) => action.kind === kind && (!action.blocked || kind === 'approve'))
+  return [...(has('approve') ? [approve] : []), ...(has('reject') ? [decline] : [])]
 }
 
 /** The decide dialog's choices: the approve, decline and send-back actions this person may take, labelled as the workflow names them. */
 const decideVerdicts = (dialog) =>
   (dialog?.type === 'decide' ? dialog.group?.actions || [] : [])
-    .filter((action) => !action.blocked)
+    // A held approval stays in view, greyed with its reason; other held actions are left out.
+    .filter((action) => !action.blocked || action.kind === 'approve')
     .map((action) => ({
       value: { approve: 'approve', reject: 'decline', return: 'return' }[action.kind],
       label: action.kind === 'return' ? action.label : { approve: 'Approve', reject: 'Decline' }[action.kind],
@@ -1067,7 +1123,8 @@ function CaseDialogs({ dialog, onClose, application, product, collateralCatalog,
         description={dialog?.group?.single ? 'Your decision stands, within your approval limit.' : `A colleague reviews your recommendation and makes the final decision${dialog?.action?.toLabel ? ` (${dialog.action.toLabel})` : ''}.`}
         before={decisionBefore}
         blocked={(values) =>
-          values.verdict === 'approve' && (dialog?.group?.single ? workflow?.state?.approvalHold : workflow?.state?.valuationHold)
+          (values.verdict === 'approve' && chosenAction(values)?.blocked) ||
+          (values.verdict === 'approve' && (dialog?.group?.single ? workflow?.state?.approvalHold : workflow?.state?.valuationHold))
             ? `${dialog?.group?.single ? 'Approval' : 'Recommending approval'} waits for ${dialog?.group?.single ? workflow.state.approvalHold : workflow.state.valuationHold}.`
             : outstanding(neededFor(chosenAction(values), values.verdict))
         }
@@ -1090,7 +1147,8 @@ function CaseDialogs({ dialog, onClose, application, product, collateralCatalog,
         }
         before={decisionBefore}
         blocked={(values) =>
-          values.verdict === 'approve' && workflow?.state?.approvalHold ? `Approval waits for ${workflow.state.approvalHold}.` : outstanding(neededFor(chosenAction(values), values.verdict))
+          (values.verdict === 'approve' && chosenAction(values)?.blocked) ||
+          (values.verdict === 'approve' && workflow?.state?.approvalHold ? `Approval waits for ${workflow.state.approvalHold}.` : outstanding(neededFor(chosenAction(values), values.verdict)))
         }
         fields={[VERDICT_REASON]}
         outcomes={outcomeButtons(decideVerdicts(dialog))}
