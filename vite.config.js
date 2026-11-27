@@ -84,6 +84,15 @@ function localBlobStaticPlugin() {
   }
 }
 
+// A stamp for this build (and for each start of the dev server): the page compares it with the
+// one the browser last ran and drops stale display caches when it changes (index.html).
+const APP_BUILD = process.env.LOS_BUILD_ID || Date.now().toString(36)
+
+const buildStampPlugin = () => ({
+  name: 'los-build-stamp',
+  transformIndexHtml: (html) => html.replaceAll('__APP_BUILD__', APP_BUILD),
+})
+
 export default defineConfig(({ mode }) => {
   // Vite only exposes VITE_-prefixed vars to app code by default; our api/*
   // handlers are plain Node code reading process.env directly (matching how
@@ -92,7 +101,7 @@ export default defineConfig(({ mode }) => {
   Object.assign(process.env, env)
 
   return {
-  plugins: [react(), localApiDevPlugin(), localBlobStaticPlugin()],
+  plugins: [react(), localApiDevPlugin(), localBlobStaticPlugin(), buildStampPlugin()],
   resolve: {
     alias: {
       '@': path.resolve(process.cwd(), 'src'),

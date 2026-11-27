@@ -17,6 +17,23 @@
     />
     <title>Loan Application — Loan Origination</title>
     <script>
+      // A newer build than this browser last ran: forget what it saved for display (the theme and
+      // branding caches, view and board layouts) so the new version shows as built, with no need to
+      // clear the browser. Kept: unfinished application drafts, the referral link, dark mode.
+      // __APP_BUILD__ is stamped in by vite.config.js (a new value per build, and per dev-server start).
+      try {
+        var build = '__APP_BUILD__'
+        if (localStorage.getItem('los:build') !== build) {
+          ;['los:theme-css', 'los:theme-font', 'los:branding', 'los:workflow-view'].forEach(function (key) {
+            localStorage.removeItem(key)
+          })
+          for (var i = localStorage.length - 1; i >= 0; i--) {
+            var key = localStorage.key(i)
+            if (key && key.indexOf('los:pipeline:') === 0) localStorage.removeItem(key)
+          }
+          localStorage.setItem('los:build', build)
+        }
+      } catch (error) {}
       // The workspace theme saved by the last visit (src/lib/applyTheme.js), applied before
       // anything is drawn so the default colours never flash up first.
       try {
