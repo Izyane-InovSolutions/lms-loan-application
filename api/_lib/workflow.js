@@ -16,6 +16,8 @@ import { listDocumentKinds } from './templates.js'
 import { priceLoan, productFor } from '../../src/config/loanProducts.js'
 import { getCollateralCatalog, getProducts } from './products.js'
 import { approvalHold, valuationHold } from '../../src/config/appraisal.js'
+import { checkTerms, defaultTerms, lusakaDate, summarizeTerms, termsHold } from '../../src/config/loanTerms.js'
+import { assetHold, underwritingStatus } from '../../src/config/underwriting.js'
 import { collateralItems } from '../../src/config/collateral.js'
 import { openConditions, parseConditions } from '../../src/config/conditions.js'
 import { ACTIVE_PRE_APPROVAL_STAGES, heldForPartner, heldReason, isOnPreApprovalRoute, mayActOnHeldCase } from '../../src/config/partners.js'
@@ -64,6 +66,8 @@ const reason = (input, message = 'Add a short explanation.') => {
 
 /** Approved amount and tenure, defaulting to what was asked for and held to the product limits. */
 const terms = (application, input, settings) => {
+  // Appraised terms are the loan: the dialogs no longer set the amount or tenure (loanTerms.js).
+  if (application.terms) return { amount: application.terms.amount, tenure: application.terms.tenure }
   const product = productFor(application, settings.products)
   const amount = input.amount === undefined || input.amount === '' || input.amount === null ? application.amount : Number(input.amount)
   const tenure = input.tenure === undefined || input.tenure === '' || input.tenure === null ? application.tenure : Number(input.tenure)
@@ -183,10 +187,37 @@ const progressWithout = (flow, application, fromId) => {
 // Graph actions
 // ---------------------------------------------------------------------------
 
+/** The permissions a work stage's own work needs, beyond its actions' (loanTerms.js, underwriting.js). */
+const WORK_PERMISSIONS = { terms: ['cases.work'], underwriting: ['cases.work', 'legal.verify'] }
+
 /**
  * Whether `viewer` works on cases in `state`: someone who may take one of its actions (on
- * the offer, record the acceptance) and, where the state names roles, holds one of them.
- * Admins work everywhere.
+ * the offer, record the acceptance; on a work stage, do its work — the loan terms
+ * `cases.work`, underwriting `cases.work` or `legal.verify`) and, where the state names
+ * roles, holds one of them. Admins work everywhere. What decides which cases staff see
+ * (visibility.js) and which they may change (findVisibleApplication, workflowView.readOnly);
+ * who may take or be assigned a case is worksOn's.
+ *
+ * Given the state's workflow `definition`: on a version with no underwriting stage, the legal
+ * sign-off holds approval, so `legal.verify` works any state that approves or recommends.
+ */
+export const worksOnStage = (viewer, state, definition = null) => {
+  if (!state || state.type === 'final') return false
+  if (viewer.role === 'admin') return true
+  if (state.roles?.length && !state.roles.includes(viewer.role)) return false
+  const held = (permission) => Boolean(viewer.permissions?.includes(permission))
+  if (state.type === 'offer') return held('offers.record')
+  if ((WORK_PERMISSIONS[state.work] || []).some(held)) return true
+  if (held('legal.verify') && definition && !definition.states?.some((entry) => entry.work === 'underwriting') && (state.actions || []).some((action) => ['approve', 'recommend'].includes(action.kind))) return true
+  return (state.actions || []).some((action) => held(actionPermission(action)))
+}
+
+/**
+ * Whether `viewer` may work a case in `state` themselves: take it, be assigned it, have it in
+ * their queue. Someone who may take one of its actions (on the offer, record the acceptance)
+ * and, where the state names roles, holds one of them. Narrower than worksOnStage, which also
+ * counts a work stage's own permissions (a legal officer verifies at Underwriting but doesn't
+ * become the case's officer there). Admins work everywhere.
  */
 export const worksOn = (viewer, state) => {
   if (!state || state.type === 'final') return false
@@ -324,6 +355,20 @@ const resolveLegacyAction = (flow, state, application, input) => {
   }
 }
 
+/**
+ * Whether a workflow version has an underwriting stage (underwriting.js): there, approval waits
+ * for the assets as underwriting records them; older versions keep appraisal.js's holds.
+ */
+const hasUnderwriting = (definition) => (definition?.states || []).some((entry) => entry.work === 'underwriting')
+
+/** What holds an approval on this version, in one phrase; null when nothing does. */
+const approvalHoldFor = (definition, application, documents, catalog, workflowSettings) =>
+  hasUnderwriting(definition) ? assetHold(application, catalog, workflowSettings, { documents }) : approvalHold(application, documents, catalog, workflowSettings)
+
+/** What holds a recommendation to approve (or leaving an appraisal stage): the valuations. */
+const valuationHoldFor = (definition, application, catalog, workflowSettings) =>
+  hasUnderwriting(definition) ? assetHold(application, catalog, workflowSettings, { only: 'valuation' }) : valuationHold(application, catalog, workflowSettings)
+
 /** Runs a graph action: checks who and what, does the action's own work, and enters its target. */
 const runTransition = async (tx, viewer, application, flow, state, action, input, settings) => {
   if (!action) fail(400, 'Unknown action.', 'invalid_input')
@@ -345,8 +390,23 @@ const runTransition = async (tx, viewer, application, flow, state, action, input
   // Leaving the Appraisal stage forward needs every pledged item valued; so does recommending
   // approval, in case a valuation was taken back since (appraisal.js). A decline never waits.
   if ((state.appraisal && kind?.forward && action.kind !== 'reject') || recommendTerms) {
-    const hold = valuationHold(application, settings.collateralCatalog, settings.workflow)
+    const hold = valuationHoldFor(flow.definition, application, settings.collateralCatalog, settings.workflow)
     if (hold) fail(409, `${recommendTerms ? 'Recommending approval' : 'Moving on'} waits for ${hold}.`, 'valuation_incomplete')
+  }
+
+  // Leaving the terms stage forward waits for valid terms (loanTerms.js). A decline — a reject,
+  // or a recommendation to decline — never waits.
+  const declining = action.kind === 'reject' || (action.kind === 'recommend' && verdict === 'decline')
+  if (state.work === 'terms' && kind?.forward && !declining && termsHold(application, productFor(application, settings.products))) {
+    fail(409, 'Moving on waits for the loan terms.', 'terms_incomplete')
+  }
+
+  // Leaving underwriting forward waits for each section it has: valuation and legal
+  // verification of every asset, and every required document verified (underwriting.js).
+  if (state.work === 'underwriting' && kind?.forward && !declining) {
+    const documents = await tx.select().from(applicationDocuments).where(eq(applicationDocuments.applicationId, application.id))
+    const { hold } = underwritingStatus(application, documents, productFor(application, settings.products), settings.collateralCatalog, settings.workflow)
+    if (hold) fail(409, `Moving on waits for: ${hold}.`, 'underwriting_incomplete')
   }
 
   const neededChecks = [...(state.requiredChecks || []), ...(action.kind === 'recommend' && verdict !== 'approve' ? [] : action.options?.checks || [])]
@@ -405,6 +465,8 @@ const runTransition = async (tx, viewer, application, flow, state, action, input
   } else if (action.kind === 'pay_out') {
     const open = openConditions(application)
     if (open.length) fail(409, `Tick off the offer’s conditions first: ${open.map((condition) => condition.text).join('; ')}.`, 'conditions_open')
+    // The schedule runs from the payout date once the money is out.
+    if (application.terms) changes.terms = { ...application.terms, paidOutOn: lusakaDate() }
     event = { type: 'status', message: rationale ? `Paid out (${rationale})` : 'Paid out', visibleToCustomer: true }
   }
 
@@ -445,10 +507,11 @@ const decision = async (tx, viewer, application, action, input, rationale, setti
     }
   }
 
-  // The appraisal first, as the workspace asks (appraisal.js): every collateral item valued,
-  // and every collateral item and document verified by the legal officer.
+  // The appraisal first, as the workspace asks: on a version with an underwriting stage, each
+  // asset valued and legally verified as underwriting records it (underwriting.js); on older
+  // ones, every collateral item valued, and every item and proof file verified (appraisal.js).
   const documents = await tx.select().from(applicationDocuments).where(eq(applicationDocuments.applicationId, application.id))
-  const hold = approvalHold(application, documents, settings.collateralCatalog, settings.workflow)
+  const hold = approvalHoldFor(flow.definition, application, documents, settings.collateralCatalog, settings.workflow)
   if (hold) fail(409, `Approval waits for ${hold}.`, 'approval_held')
 
   const approved = terms(application, { amount: input.amount ?? recommendation?.amount, tenure: input.tenure ?? recommendation?.tenure }, settings)
@@ -462,7 +525,9 @@ const decision = async (tx, viewer, application, action, input, rationale, setti
   // The conditions, as a checklist the loan isn't booked or paid out without (conditions.js).
   changes.checks = { ...(application.checks || {}), conditions: parseConditions(conditions) }
   if (singleStep) changes.assignedOfficer = application.assignedOfficer || viewer.id
-  if (approved.amount !== application.amount || approved.tenure !== application.tenure) {
+  if (application.terms?.summary) {
+    Object.assign(changes, { totalRepayable: application.terms.summary.totalRepayable, monthlyInstalment: application.terms.summary.instalment })
+  } else if (approved.amount !== application.amount || approved.tenure !== application.tenure) {
     const price = priceLoan(approved.amount, approved.tenure, productFor(application, settings.products))
     Object.assign(changes, { totalRepayable: price.total, monthlyInstalment: price.monthly })
   }
@@ -653,6 +718,25 @@ const UTILITY = {
       changes: { status: 'info_requested', infoRequest: { message, documents, requestedBy: viewer.name, requestedAt: new Date().toISOString() } },
       event: { type: 'info_request', message, visibleToCustomer: true },
       notify: { headline: 'We need something from you', body: `Please send us the following so we can continue with your application: ${message}` },
+    }
+  },
+
+  /** Saves the loan terms the appraiser structured; only while the case is at the terms stage. */
+  async save_terms(tx, viewer, application, input, ctx) {
+    requireCase(viewer, 'cases.work')
+    if (ctx.state.work !== 'terms') fail(409, 'The loan terms are set at the appraisal stage.', 'invalid_state')
+    const product = productFor(application, ctx.settings.products)
+    const { terms, errors } = checkTerms(input.terms && typeof input.terms === 'object' ? input.terms : defaultTerms(product, application), product)
+    if (Object.keys(errors).length) fail(400, 'Check the loan terms.', 'invalid_terms', { errors })
+    const summary = summarizeTerms(terms)
+    const money = (value) => `K${value.toLocaleString('en-US', { maximumFractionDigits: 2 })}`
+    return {
+      changes: { terms: { ...terms, summary, savedBy: viewer.id, savedByName: viewer.name, savedAt: new Date().toISOString() } },
+      event: {
+        type: 'note',
+        message: `Loan terms saved: ${money(terms.amount)} over ${terms.tenure} months, ${terms.annualRate}% a year (${terms.calculation === 'reducing' ? 'reducing balance' : 'flat'}), ${summary.periods} instalments of ${money(summary.instalment)}`,
+      },
+      auditDetail: { amount: terms.amount, tenure: terms.tenure },
     }
   },
 
@@ -887,6 +971,11 @@ const blockedReason = (viewer, application, state, action, recommendation, roleN
   // check, and leaving Appraisal for the valuations.
   if (action.kind === 'approve' && holds.approval) return `Approval waits for ${holds.approval}.`
   if (state.appraisal && action.kind === 'move' && holds.valuation) return `Moves on once valued: waiting for ${holds.valuation}.`
+  // Every forward action is held by the stage's work, except a reject and a recommendation
+  // (it may be to decline, which never waits; the server checks the verdict).
+  const heldByWork = ACTION_KINDS[action.kind]?.forward && !['reject', 'recommend'].includes(action.kind)
+  if (state.work === 'terms' && heldByWork && holds.terms) return 'Moves on once the loan terms are saved.'
+  if (state.work === 'underwriting' && heldByWork && holds.underwriting?.hold) return `Moves on once underwriting is complete: ${holds.underwriting.hold}.`
   const conditions = openConditions(application)
   if (action.kind === 'pay_out' && conditions.length) return `Payout waits for the offer’s conditions: ${conditions.map((condition) => condition.text).join('; ')}.`
   return null
@@ -897,15 +986,24 @@ const blockedReason = (viewer, application, state, action, recommendation, roleN
  * approval } — whether approval waits for the legal check at all, what holds leaving
  * Appraisal or recommending approval, and what holds an approval; null when nothing does.
  */
-const appraisalFor = async (application) => {
+const appraisalFor = async (application, state, definition) => {
   const settings = await getSetting('workflow')
   const catalog = await getCollateralCatalog()
   const documents = await (await getDb()).select().from(applicationDocuments).where(eq(applicationDocuments.applicationId, application.id))
+  const product = productFor(application, await getProducts())
   return {
     legalRequired: settings.requireLegalReview !== false && collateralItems(application.data).length > 0,
-    valuation: valuationHold(application, catalog, settings),
-    approval: approvalHold(application, documents, catalog, settings),
+    valuation: valuationHoldFor(definition, application, catalog, settings),
+    approval: approvalHoldFor(definition, application, documents, catalog, settings),
+    terms: state.work === 'terms' ? termsHold(application, product) : null,
+    underwriting: state.work === 'underwriting' ? underwritingStatus(application, documents, product, catalog, settings) : null,
   }
+}
+
+/** Whether underwriting's asset sections count (Settings → Credit workflow requireValuation / requireLegalReview). */
+const underwritingRequirements = async () => {
+  const settings = await getSetting('workflow')
+  return { requireValuation: settings.requireValuation !== false, requireLegalReview: settings.requireLegalReview !== false }
 }
 
 /**
@@ -922,7 +1020,7 @@ export const workflowView = async (viewer, application, { recommendation = null 
   const stepStates = analysis.order.map((id) => stateById(definition, id)).filter((entry) => entry?.trackProgress && appliesTo(entry, product))
   const outstanding = state.type === 'final' ? [] : await outstandingDocuments(await getDb(), application, state, await listDocumentKinds({ includeRetired: true }), definition)
   const currentStretch = new Set([state.id, ...laterStates(definition, state.id, product)])
-  const appraisal = state.type === 'final' ? { legalRequired: false, valuation: null, approval: null } : await appraisalFor(application)
+  const appraisal = state.type === 'final' ? { legalRequired: false, valuation: null, approval: null, terms: null, underwriting: null } : await appraisalFor(application, state, definition)
   const preApproval = application.preApproval
     ? {
         ...application.preApproval,
@@ -956,9 +1054,24 @@ export const workflowView = async (viewer, application, { recommendation = null 
       approvalHold: appraisal.approval,
       valuationHold: appraisal.valuation,
       appraisal: Boolean(state.appraisal),
+      work: state.work || null,
+      termsHold: appraisal.terms,
+      // In the underwriting state: each section's entries and what holds Approve (underwriting.js).
+      underwriting: appraisal.underwriting,
+      // The sections the workspace asks underwriting for, so the case page reads a passed stage the same way.
+      underwritingRequires: await underwritingRequirements(),
     },
+    // Where the case stands against the flow's work stages ({ terms, underwriting }: 'current',
+    // 'ahead' or 'passed'), for the case page's Loan terms and Underwriting tabs; {} on a flow without them.
+    workStages: Object.fromEntries(
+      (definition.states || [])
+        .filter((entry) => entry.work && appliesTo(entry, product))
+        .map((entry) => [entry.work, entry.id === state.id ? 'current' : currentStretch.has(entry.id) ? 'ahead' : 'passed'])
+    ),
     phase,
     worksHere: worksOn(viewer, state),
+    // A case they may read but not change: at a stage their role doesn't work on.
+    readOnly: viewer.role !== 'admin' && !worksOnStage(viewer, state, definition),
     steps: stepStates.map((entry) => ({
       id: entry.id,
       label: stepName(entry),

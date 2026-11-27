@@ -11,7 +11,7 @@
  * A loan with no collateral has neither to wait for.
  */
 
-import { collateralItems, itemLabel } from './collateral.js'
+import { DEFAULT_COLLATERAL_CATALOG, appraisedItems, collateralItems, collateralLendingValue, itemLabel } from './collateral.js'
 import { describeOutstanding, legalReviewComplete, legalReviewOutstanding } from './legalReview.js'
 
 /** The pledged items not yet valued, by label ("Collateral 1: Passenger vehicle"). */
@@ -38,3 +38,16 @@ export const legalHold = (application, documents, catalog, workflowSettings = {}
 /** What holds an approval, in one phrase; null when nothing does. */
 export const approvalHold = (application, documents, catalog, workflowSettings = {}) =>
   [valuationHold(application, catalog, workflowSettings), legalHold(application, documents, catalog, workflowSettings)].filter(Boolean).join('; and ') || null
+
+/**
+ * Whether the assets cover the loan, once valued: their total lending value (valued market
+ * value, less the haircut, times the loan-to-value) against the amount (the appraised terms,
+ * else the approved or asked amount). `short` is a warning for underwriting and the decision,
+ * never a hold: the decision is the approver's judgement. Not short while any asset is unvalued.
+ */
+export const lendingCover = (application, catalog = DEFAULT_COLLATERAL_CATALOG) => {
+  const items = appraisedItems(application?.data, application?.valuations)
+  const lendingValue = collateralLendingValue(items, catalog)
+  const amount = Number(application?.terms?.amount ?? application?.approvedAmount ?? application?.amount) || 0
+  return { lendingValue, amount, short: items.length > 0 && items.every((item) => item.valued) && amount > lendingValue }
+}

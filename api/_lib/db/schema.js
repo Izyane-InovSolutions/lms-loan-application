@@ -143,6 +143,8 @@ export const auditLog = pgTable(
     entityId: text('entity_id'),
     detail: jsonb('detail').notNull().default(sql`'{}'::jsonb`),
     ip: text('ip'),
+    // The browser's own description of itself (User-Agent), for the browser and device used.
+    userAgent: text('user_agent'),
   },
   (table) => [
     index('audit_log_at_idx').on(table.at),
@@ -225,6 +227,8 @@ export const applications = pgTable(
     // { partnerId, partnerName, mouReference, stage: partner | issue | issued | review,
     //   staffMatch, partnerDecision, issued, reason }.
     preApproval: jsonb('pre_approval'),
+    // The loan terms the appraiser structured (src/config/loanTerms.js): the Terms, a summary, and who saved them.
+    terms: jsonb('terms'),
     // The contact the applicant confirmed with a code as they started: { channel, value, at }
     // (api/_lib/verification.js). Null for agent-assisted applications and those from before.
     contactVerification: jsonb('contact_verification'),

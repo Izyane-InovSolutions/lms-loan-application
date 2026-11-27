@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, inArray, lt, ne, sql } from 'drizzle-orm'
 import { getDb, schema } from '../_lib/db/client.js'
 import { appOrigin, clientIp as clientIpOf, fail, text } from '../_lib/http.js'
-import { requirePermission, requireUser } from '../_lib/rbac.js'
+import { can, requirePermission, requireUser } from '../_lib/rbac.js'
 import { discardSignature, parseSignature, signOfferDocuments } from '../_lib/signing.js'
 import { recordAudit } from '../_lib/audit.js'
 import { putBlob } from '../_lib/blob.js'
@@ -28,11 +28,12 @@ import { loadCase } from './applications.js'
 import { checkOtp, consumeOtp } from '../_lib/otp.js'
 import { creditStaffIds, followerIds, notifyUsers } from '../_lib/notify.js'
 import { textCustomer } from '../_lib/sms.js'
-import { WITHDRAWABLE_STATUSES, requestableSlots } from '../../src/config/applications.js'
+import { OPEN_STATUSES, WITHDRAWABLE_STATUSES, requestableSlots } from '../../src/config/applications.js'
 import { analyzeCaseUpload } from '../_lib/ai/documents.js'
 import { getApplicationProduct, getCollateralCatalog, getProducts } from '../_lib/products.js'
 import { conditionsOf, openConditions } from '../../src/config/conditions.js'
 import { collateralItems, itemLabel } from '../../src/config/collateral.js'
+import { LEGAL_CHECKS, LEGAL_ROLES, LEGAL_SLOT_PATTERN, VALUATION_METHODS, legalDocumentsOf, requiredDocumentsFor } from '../../src/config/underwriting.js'
 import { ensureOfferDocuments } from '../_lib/offerDocuments.js'
 import { issueStageDocuments } from '../_lib/stageDocuments.js'
 import { assertNotHeld } from '../_lib/preApproval.js'
@@ -69,7 +70,7 @@ const handToLms = async (application, actor = null) => {
  */
 const setCondition = async (req, res, { params }) => {
   const viewer = await requireUser(req, { anyPermission: ['cases.work', 'cases.disburse'] })
-  const application = await findVisibleApplication(viewer, params.id)
+  const application = await findVisibleApplication(viewer, params.id, { change: true })
   assertNotHeld(viewer, application)
   const conditions = conditionsOf(application)
   const condition = conditions.find((entry) => entry.id === params.conditionId)
@@ -156,7 +157,13 @@ const verifyAcceptanceCode = async (req, viewer, application, input) => {
 
 const act = async (req, res, { params }) => {
   const viewer = await requireUser(req, { staff: true })
-  const application = await findVisibleApplication(viewer, params.id)
+  // Withdrawing, recording the customer's acceptance, adding a note and handing the case to
+  // someone else (a manager's assign) stay open on any case they see; their own checks still
+  // apply (applications.note, cases.assign and the stage's assignees). Taking it themselves does not.
+  const body = req.body || {}
+  const handing = body.action === 'assign' && Boolean(body.officerId) && body.officerId !== viewer.id
+  const utility = ['withdraw', 'record_acceptance', 'note'].includes(body.action) || handing
+  const application = await findVisibleApplication(viewer, params.id, { change: !utility })
   const input = { ...(req.body || {}) }
   const { requireSignature } = await getSetting('offers')
   // The customer's emailed code is checked once, here, where the caller's address is known
@@ -172,7 +179,26 @@ const act = async (req, res, { params }) => {
     throw error
   }
   const { application: updated, result } = outcome
-  await recordAudit({ req, actor: viewer, action: `application.${input.action}`, entityType: 'application', entityId: application.id, detail: { reference: application.reference, status: updated.status } })
+  // What was done, in the workflow's own words: the action's name, and the stage it left and entered.
+  const before = await caseWorkflow(application).catch(() => null)
+  const after = updated.state !== application.state ? await caseWorkflow(updated).catch(() => null) : null
+  const actionLabel = before?.state?.actions?.find((entry) => entry.id === input.action)?.label || null
+  await recordAudit({
+    req,
+    actor: viewer,
+    action: `application.${input.action}`,
+    entityType: 'application',
+    entityId: application.id,
+    detail: {
+      reference: application.reference,
+      status: updated.status,
+      ...(actionLabel ? { actionLabel } : {}),
+      ...(before?.state?.label ? { fromStage: before.state.label } : {}),
+      ...(after?.state?.label ? { toStage: after.state.label } : {}),
+      ...(input.verdict ? { verdict: String(input.verdict).slice(0, 20) } : {}),
+      ...(result.auditDetail || {}),
+    },
+  })
 
   if (result.consumeOtpFor) await consumeOtp('offer', result.consumeOtpFor)
   // The offer letter is made from the published template straight away.
@@ -214,14 +240,15 @@ const verificationTarget = async (db, application, { target, id }) => {
 }
 
 /**
- * Legal review (legal.verify): marks one pledged collateral item or one document verified,
- * records an issue with it (a note is needed), or clears it. Body: { target: 'collateral' |
+ * Legal review (legal.verify) and document verification (legal.verify or cases.work, for the
+ * case's required documents, underwriting.js): marks one pledged collateral item or one
+ * document verified, records an issue with it (a note is needed), or clears it. Body: { target: 'collateral' |
  * 'document', id: item index | document id, status: 'verified' | 'issue' | 'clear', note }.
  * Stored in applications.verifications; a newer copy of a document starts unchecked.
  */
 const verify = async (req, res, { params }) => {
-  const viewer = await requireUser(req, { permission: 'legal.verify' })
-  const application = await findVisibleApplication(viewer, params.id)
+  const viewer = await requireUser(req, { anyPermission: ['legal.verify', 'cases.work'] })
+  const application = await findVisibleApplication(viewer, params.id, { change: true })
   assertNotHeld(viewer, application)
   const { status } = req.body || {}
   const note = text(req.body?.note, 500)
@@ -229,6 +256,13 @@ const verify = async (req, res, { params }) => {
   if (status === 'issue' && note.length < 3) fail(400, 'Say what the issue is.', 'note_required')
   const db = await getDb()
   const { group, key, label } = await verificationTarget(db, application, req.body || {})
+  // Document verification in underwriting (a required document) is the case officer's too;
+  // the collateral and its proof files stay the legal officer's.
+  if (!can(viewer, 'legal.verify')) {
+    const documents = await db.select().from(applicationDocuments).where(eq(applicationDocuments.applicationId, application.id))
+    const required = group === 'documents' && requiredDocumentsFor(application, documents, await getApplicationProduct(application)).some((document) => document.id === key)
+    if (!required) fail(403, 'Your role does not have access to this.', 'forbidden')
+  }
 
   const check = { status, note: note || null, by: viewer.id, byName: viewer.name, at: new Date().toISOString() }
   // One statement, so two people checking different items at once don't overwrite each other.
@@ -255,7 +289,7 @@ const verify = async (req, res, { params }) => {
  */
 const commentOnVerification = async (req, res, { params }) => {
   const viewer = await requireUser(req, { anyPermission: ['legal.verify', 'cases.work'] })
-  const application = await findVisibleApplication(viewer, params.id)
+  const application = await findVisibleApplication(viewer, params.id, { change: true })
   const message = text(req.body?.text, 1000)
   if (message.length < 2) fail(400, 'Write the comment first.', 'invalid_input')
   const db = await getDb()
@@ -271,7 +305,7 @@ const commentOnVerification = async (req, res, { params }) => {
 }
 
 // A valuation's figures, as an officer enters them: kwacha amounts and ISO dates.
-const valuationAmount = (value, label, { required = false } = {}) => {
+const kwachaField = (value, label, { required = false } = {}) => {
   if ((value === '' || value === null || value === undefined) && !required) return null
   const amount = Number(String(value ?? '').replace(/[^0-9.]/g, ''))
   if (!(amount > 0)) fail(400, `Enter the ${label} in kwacha.`, 'invalid_input')
@@ -297,22 +331,48 @@ const appraisedItem = (application, index) => {
  * it and when, its market and forced-sale values, whether and when it was inspected, and
  * notes. From then on the item's lending value is worked out on the market value, not the
  * applicant's estimate, so the rules run again. Body: { valuer, valuedOn, marketValue,
- * forcedSaleValue?, inspectedOn?, notes? }. A report already uploaded is kept.
+ * forcedSaleValue?, inspectedOn?, notes?, asset?: { type, assetId, owner, description,
+ * location }, valuationAmount?, method?, valuerCompany?, valuerLicence?, valuerContact?,
+ * remark? }. A report already uploaded is kept. In an underwriting state the report must be
+ * attached first and the valuer's name is optional; older workflow versions keep their rule.
  */
 const saveValuation = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'cases.work' })
-  const application = await findVisibleApplication(viewer, params.id)
+  const application = await findVisibleApplication(viewer, params.id, { change: true })
   assertNotHeld(viewer, application)
   const { position, item } = appraisedItem(application, params.index)
   const body = req.body || {}
-  const valuer = text(body.valuer, 120)
-  if (valuer.length < 2) fail(400, 'Say who valued it: the valuer or firm.', 'invalid_input')
-  const marketValue = valuationAmount(body.marketValue, 'market value', { required: true })
-  const forcedSaleValue = valuationAmount(body.forcedSaleValue, 'forced-sale value')
-  if (forcedSaleValue && forcedSaleValue > marketValue) fail(400, 'The forced-sale value can’t be more than the market value.', 'invalid_input')
   const previous = application.valuations?.[position] || {}
+  // In an underwriting state (underwriting.js) the report comes first, and the asset is described;
+  // older workflow versions keep their rule.
+  const underwriting = (await caseWorkflow(application)).state.work === 'underwriting'
+  if (underwriting && !previous.reportId) fail(400, 'Attach the valuation report first.', 'report_required')
+  const valuer = text(body.valuer, 120)
+  if (!underwriting && valuer.length < 2) fail(400, 'Say who valued it: the valuer or firm.', 'invalid_input')
+  const marketValue = kwachaField(body.marketValue, 'market value', { required: true })
+  const forcedSaleValue = kwachaField(body.forcedSaleValue, 'forced-sale value')
+  if (forcedSaleValue && forcedSaleValue > marketValue) fail(400, 'The forced-sale value can’t be more than the market value.', 'invalid_input')
+  const method = body.method ? String(body.method) : null
+  if (method && !VALUATION_METHODS.some(([key]) => key === method)) fail(400, 'Choose how it was valued: market comparison, income, cost or other.', 'invalid_input')
+  const given = body.asset && typeof body.asset === 'object' ? body.asset : {}
+  // The asset as the application describes it, unless the valuer's details say otherwise.
+  const asset = {
+    type: text(given.type, 120) || previous.asset?.type || itemLabel(item, await getCollateralCatalog()),
+    assetId: text(given.assetId, 120) || null,
+    owner: text(given.owner, 160) || null,
+    description: text(given.description, 500) || String(item.description || '').trim(),
+    location: text(given.location, 200) || null,
+  }
+  if (underwriting && asset.description.length < 3) fail(400, 'Describe the asset.', 'invalid_input')
   const valuation = {
-    valuer,
+    asset,
+    valuationAmount: kwachaField(body.valuationAmount, 'valuation amount'),
+    method,
+    valuerCompany: text(body.valuerCompany, 120) || null,
+    valuerLicence: text(body.valuerLicence, 60) || null,
+    valuerContact: text(body.valuerContact, 120) || null,
+    remark: text(body.remark, 1000) || null,
+    valuer: valuer || null,
     valuedOn: valuationDate(body.valuedOn, 'it was valued', { required: true }),
     marketValue,
     forcedSaleValue,
@@ -333,7 +393,7 @@ const saveValuation = async (req, res, { params }) => {
     applicationId: application.id,
     actor: viewer,
     type: 'valuation',
-    message: `Valued collateral item ${position + 1} (${itemLabel(item, await getCollateralCatalog())}) at K${marketValue.toLocaleString()}${stated ? ` (the applicant estimated K${stated.toLocaleString()})` : ''}, by ${valuer}${valuation.inspectedOn ? `, inspected ${valuation.inspectedOn}` : ''}`,
+    message: `Valued collateral item ${position + 1} (${itemLabel(item, await getCollateralCatalog())}) at K${marketValue.toLocaleString()}${stated ? ` (the applicant estimated K${stated.toLocaleString()})` : ''}${valuer || valuation.valuerCompany ? `, by ${[valuer, valuation.valuerCompany].filter(Boolean).join(', ')}` : ''}${valuation.inspectedOn ? `, inspected ${valuation.inspectedOn}` : ''}`,
   })
   await recordAudit({ req, actor: viewer, action: 'application.collateral_valued', entityType: 'application', entityId: application.id, detail: { reference: application.reference, item: position, marketValue } })
   // The lending value is a rule input.
@@ -344,7 +404,7 @@ const saveValuation = async (req, res, { params }) => {
 /** The valuer's report for one collateral item: filed on the case (slot valuation.<index>), linked to its valuation. A newer one replaces it. */
 const uploadValuationReport = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'cases.work' })
-  const application = await findVisibleApplication(viewer, params.id)
+  const application = await findVisibleApplication(viewer, params.id, { change: true })
   assertNotHeld(viewer, application)
   const { position } = appraisedItem(application, params.index)
   const { file } = await readSingleUpload(req)
@@ -372,6 +432,127 @@ const uploadValuationReport = async (req, res, { params }) => {
     .set({ valuations: sql`jsonb_set(${applications.valuations}, ${`{${position}}`}::text[], ${JSON.stringify(linked)}::jsonb)`, updatedAt: new Date() })
     .where(eq(applications.id, application.id))
   await addEvent(db, { applicationId: application.id, actor: viewer, type: 'document', message: `Added the valuation report for collateral item ${position + 1}` })
+  return loadCase(application.id, viewer)
+}
+
+// Legal verification (underwriting.js): one record per pledged asset, at
+// applications.verifications.legal[index], by the legal officer (legal.verify).
+
+const legalChoice = (value, choices, message) => {
+  if (value === undefined || value === null || value === '') return null
+  if (!choices.some(([key]) => key === value)) fail(400, message, 'invalid_input')
+  return value
+}
+
+/** Writes one asset's legal record in one statement, so a check on another asset isn't lost. */
+const writeLegal = (db, application, position, record) =>
+  db
+    .update(applications)
+    .set({
+      verifications: sql`jsonb_set(${applications.verifications} || jsonb_build_object('legal', coalesce(${applications.verifications} -> 'legal', '{}'::jsonb)), ${`{legal,${position}}`}::text[], ${JSON.stringify(record)}::jsonb)`,
+      updatedAt: new Date(),
+    })
+    .where(eq(applications.id, application.id))
+
+/**
+ * Saves the legal verification of one pledged asset: the title, who verified it, the six
+ * checks (each done, with an optional note: undone with a note is an issue), the documents'
+ * names (renamed, or added as other_<n>; files are attached separately) and a remark.
+ * Body: { title: { number, owner, details }, verifiedBy: { name, firm, role, licence },
+ * checks: { [key]: { done, note } }, documents?: { [slotKey]: { label } }, remark }.
+ */
+/** A closed case (declined, withdrawn, paid out…) keeps its legal records as they were. */
+const assertOpenForLegal = (application) => {
+  if (!OPEN_STATUSES.includes(application.status)) fail(409, 'This case is closed: its legal verification can no longer change.', 'invalid_state')
+}
+
+const saveLegal = async (req, res, { params }) => {
+  const viewer = await requireUser(req, { permission: 'legal.verify' })
+  const application = await findVisibleApplication(viewer, params.id, { change: true })
+  assertNotHeld(viewer, application)
+  assertOpenForLegal(application)
+  const { position, item } = appraisedItem(application, params.index)
+  const body = req.body || {}
+  const title = body.title && typeof body.title === 'object' ? body.title : {}
+  const verifiedBy = body.verifiedBy && typeof body.verifiedBy === 'object' ? body.verifiedBy : {}
+  const checks = body.checks && typeof body.checks === 'object' ? body.checks : {}
+  const db = await getDb()
+  // Read again, so a document attached since the case was read isn't unlinked.
+  const [fresh] = await db.select({ verifications: applications.verifications }).from(applications).where(eq(applications.id, application.id))
+  // The files stay as attached; only names change here, and slots can be added.
+  const documents = legalDocumentsOf(fresh?.verifications?.legal?.[position])
+  for (const [key, entry] of Object.entries(body.documents && typeof body.documents === 'object' ? body.documents : {})) {
+    if (!LEGAL_SLOT_PATTERN.test(key)) fail(400, 'That isn’t a legal document slot.', 'invalid_input')
+    const label = text(entry?.label, 120)
+    documents[key] = { label: label || documents[key]?.label || 'Other document', required: Boolean(documents[key]?.required), documentId: documents[key]?.documentId || null }
+  }
+  const record = {
+    title: { number: text(title.number, 120) || null, owner: text(title.owner, 160) || null, details: text(title.details, 1000) || null },
+    verifiedBy: {
+      name: text(verifiedBy.name, 120) || null,
+      firm: text(verifiedBy.firm, 160) || null,
+      role: legalChoice(verifiedBy.role, LEGAL_ROLES, 'Choose the verifier’s role: advocate, conveyancer, legal officer or other.'),
+      licence: text(verifiedBy.licence, 60) || null,
+    },
+    checks: Object.fromEntries(LEGAL_CHECKS.map(([key]) => [key, { done: checks[key]?.done === true, note: text(checks[key]?.note, 500) || null }])),
+    documents,
+    remark: text(body.remark, 1000) || null,
+    by: viewer.id,
+    byName: viewer.name,
+    at: new Date().toISOString(),
+  }
+  await writeLegal(db, application, position, record)
+  const done = LEGAL_CHECKS.filter(([key]) => record.checks[key].done).length
+  await addEvent(db, {
+    applicationId: application.id,
+    actor: viewer,
+    type: 'verification',
+    message: `Saved the legal verification of collateral item ${position + 1} (${itemLabel(item, await getCollateralCatalog())}): ${done} of ${LEGAL_CHECKS.length} checks done`,
+  })
+  await recordAudit({ req, actor: viewer, action: 'application.legal_saved', entityType: 'application', entityId: application.id, detail: { reference: application.reference, item: position, checksDone: done } })
+  return loadCase(application.id, viewer)
+}
+
+/**
+ * Attaches a legal document to one pledged asset's slot (title_deed, search_report,
+ * legal_opinion, or other_<n>, which is added, named by the `label` field): filed on the case
+ * (slot legal.<index>.<slot>) and linked to the record. A newer one replaces the link.
+ */
+const uploadLegalDocument = async (req, res, { params }) => {
+  const viewer = await requireUser(req, { permission: 'legal.verify' })
+  const application = await findVisibleApplication(viewer, params.id, { change: true })
+  assertNotHeld(viewer, application)
+  assertOpenForLegal(application)
+  const { position } = appraisedItem(application, params.index)
+  const key = String(params.slot || '')
+  if (!LEGAL_SLOT_PATTERN.test(key)) fail(404, 'That isn’t a legal document slot.', 'not_found')
+  const { fields, file } = await readSingleUpload(req)
+  const db = await getDb()
+  // Read again after the upload, so a save made meanwhile isn't overwritten.
+  const [fresh] = await db.select({ verifications: applications.verifications }).from(applications).where(eq(applications.id, application.id))
+  const previous = fresh?.verifications?.legal?.[position] || {}
+  const documents = legalDocumentsOf(previous)
+  const slot = documents[key] || { label: text(fields.label, 120) || 'Other document', required: false, documentId: null }
+  const stored = await putBlob(`applications/${application.id}/legal-${position}-${key}-${file.filename}`, file.data, { contentType: file.contentType })
+  const [document] = await db
+    .insert(applicationDocuments)
+    .values({
+      applicationId: application.id,
+      slot: `legal.${position}.${key}`,
+      docType: 'legal',
+      label: `Collateral ${position + 1} ${slot.label.charAt(0).toLowerCase()}${slot.label.slice(1)}`,
+      pathname: stored.pathname,
+      url: stored.url,
+      filename: file.filename,
+      contentType: file.contentType,
+      size: file.size,
+      source: 'staff',
+      uploadedBy: viewer.id,
+    })
+    .returning({ id: applicationDocuments.id })
+  await writeLegal(db, application, position, { ...previous, documents: { ...documents, [key]: { ...slot, documentId: document.id } } })
+  await addEvent(db, { applicationId: application.id, actor: viewer, type: 'document', message: `Added the ${slot.label.toLowerCase()} for collateral item ${position + 1}` })
+  await recordAudit({ req, actor: viewer, action: 'application.legal_document_added', entityType: 'application', entityId: application.id, detail: { reference: application.reference, item: position, slot: key } })
   return loadCase(application.id, viewer)
 }
 
@@ -450,7 +631,7 @@ const FIGURE_LABELS = { netPay: 'Net monthly pay', averageMonthlyCredits: 'Avera
  */
 const setFigures = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'cases.work' })
-  const application = await findVisibleApplication(viewer, params.id)
+  const application = await findVisibleApplication(viewer, params.id, { change: true })
   assertNotHeld(viewer, application)
   const allowed = MANUAL_FIGURES[application.loanType] || {}
   const note = text(req.body?.note, 300) || null
@@ -481,14 +662,17 @@ const setFigures = async (req, res, { params }) => {
 
 const rerunPrescreen = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'cases.work' })
-  const application = await findVisibleApplication(viewer, params.id)
+  const application = await findVisibleApplication(viewer, params.id, { change: true })
   assertNotHeld(viewer, application)
   await runPrescreen(application.id, { actor: viewer })
   await recordAudit({ req, actor: viewer, action: 'application.prescreen_rerun', entityType: 'application', entityId: application.id })
   return loadCase(application.id, viewer)
 }
 
-/** A field visit: where the staff member is now, with a note. Needs their device's location. */
+/**
+ * A field visit: where the staff member is now, with a note. Needs their device's location.
+ * Like a note, open on any case they see (an agent visits its customer whatever the stage).
+ */
 const logVisit = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'applications.note' })
   const application = await findVisibleApplication(viewer, params.id)
@@ -522,7 +706,7 @@ const logVisit = async (req, res, { params }) => {
  */
 const runCreditCheck = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'cases.work' })
-  const application = await findVisibleApplication(viewer, params.id)
+  const application = await findVisibleApplication(viewer, params.id, { change: true })
   assertNotHeld(viewer, application)
   try {
     await pullCreditReport(application, { actor: viewer, req })
@@ -881,6 +1065,8 @@ export const workflowRoutes = [
   ['PUT', '/applications/:id/valuations/:index', saveValuation],
   ['POST', '/applications/:id/conditions/:conditionId', setCondition],
   ['POST', '/applications/:id/valuations/:index/report', uploadValuationReport],
+  ['PUT', '/applications/:id/legal/:index', saveLegal],
+  ['POST', '/applications/:id/legal/:index/documents/:slot', uploadLegalDocument],
   ['POST', '/applications/:id/prescreen', rerunPrescreen],
   ['POST', '/applications/:id/figures', setFigures],
   ['GET', '/applications/:id/facts', previewFacts],

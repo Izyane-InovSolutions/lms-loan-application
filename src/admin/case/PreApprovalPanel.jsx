@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { cn } from '@/lib/utils'
+import { OverLimitNotice } from '@/components/OverLimitNotice'
 import { PRE_APPROVAL_STAGES } from '@/config/partners'
 import { Field, FormError, dateTime, money } from '../components'
 
@@ -41,7 +42,7 @@ export function PreApprovalPanel({ application, preApproval, canIssue, heldMessa
               Waiting for {partnerName} to confirm the applicant works there.
             </p>
           ) : null}
-          {stage === 'partner' && preApproval.overLimit ? <p className="text-muted-foreground">{preApproval.overLimit} Once confirmed, it goes through the usual review.</p> : null}
+          {stage === 'partner' && preApproval.overLimit ? <OverLimitNotice text={preApproval.overLimit} className="mt-1" /> : null}
           {partnerDecision ? (
             <p className={cn('flex items-center gap-1.5', partnerDecision.confirmed ? 'text-success' : 'text-destructive')}>
               {partnerDecision.confirmed ? <CheckCircle2 className="size-4" aria-hidden="true" /> : <CircleSlash className="size-4" aria-hidden="true" />}
@@ -61,7 +62,9 @@ export function PreApprovalPanel({ application, preApproval, canIssue, heldMessa
               {heldMessage}
             </p>
           ) : null}
-          {stage === 'review' && reason ? <p className="text-muted-foreground">Goes through the usual review: {reason}</p> : null}
+          {stage === 'review' && reason ? (
+            /\babove the pre-approved limit\b/.test(reason) ? <OverLimitNotice text={reason} className="mt-1" /> : <p className="text-muted-foreground">Goes through the usual review: {reason}</p>
+          ) : null}
           {onRoute && canIssue && preApproval.issueBlocked && stage === 'issue' ? <p className="text-warning">{preApproval.issueBlocked}</p> : null}
         </div>
         {onRoute && canIssue ? (

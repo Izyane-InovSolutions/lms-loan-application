@@ -1,12 +1,14 @@
 import React, { useCallback, useEffect, useState } from 'react'
-import { useSearchParams } from 'react-router-dom'
-import { ArrowDownToLine, ChevronDown, History, Loader2, Search, X } from 'lucide-react'
+import { Link, useSearchParams } from 'react-router-dom'
+import { ArrowDownToLine, ChevronDown, History, Loader2, Monitor, Search, Smartphone, Tablet, Terminal, X } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
 import { roleLabel } from '@/config/roles'
+import { statusLabel } from '@/config/applications'
+import { describeUserAgent } from '@/utils/userAgent'
 import { api, toQuery } from '../api'
 import { EmptyState, ErrorState, PageHeader, SkeletonRows, dateTime, downloadCsv, useToast } from '../components'
 
@@ -34,6 +36,7 @@ const ACTION_LABELS = {
   'application.request_info': 'Asked the applicant for information',
   'application.info_response': 'Applicant replied to a request',
   'application.check': 'Updated the verification checklist',
+  'application.save_terms': 'Saved the loan terms',
   'application.recommend': 'Recommended a decision',
   'application.decide': 'Made a credit decision',
   'application.note': 'Added a note',
@@ -71,7 +74,97 @@ const ACTION_LABELS = {
   'role.updated': 'Changed a role',
   'role.reset': 'Reset a role to its defaults',
   'role.deleted': 'Deleted a role',
+  'role.restored': 'Restored a role',
+  'user.deleted': 'Deleted a team member',
+  'application.collateral_valued': 'Valued the collateral',
+  'application.legal_saved': 'Saved the legal verification',
+  'application.legal_document_added': 'Added a legal document',
+  'application.condition_met': 'Ticked off an offer condition',
+  'application.condition_reopened': 'Reopened an offer condition',
+  'application.crb_failed': 'Credit report couldn’t be pulled',
+  'application.document_received': 'Received a document from the applicant',
+  'application.document_signed': 'Customer signed a document',
+  'application.document_uploaded': 'Uploaded a document',
+  'application.documents_generated': 'Generated the offer documents',
+  'application.documents_sent': 'Sent documents to the customer',
+  'application.figures_entered': 'Entered figures for the rules',
+  'application.verification_verified': 'Verified an item',
+  'application.verification_rejected': 'Rejected an item',
+  'application.verification_pending': 'Reset an item’s verification',
+  'application.take': 'Took a case',
+  'application.take_state': 'Took a case at its stage',
+  'application.issue_offer': 'Issued a pre-approved offer',
+  'application.leave_pre_approval': 'Sent a pre-approved case to full review',
+  'application.cancel_request': 'Cancelled a request to the applicant',
+  'draft.viewed': 'Opened an unfinished application',
+  'draft.resumed': 'Resumed an unfinished application',
+  'draft.reminded': 'Reminded an applicant to finish',
+  'kyc.looked_up': 'Looked up a customer record',
+  'partner.employment_confirmed': 'Partner confirmed employment',
+  'partner.employment_refused': 'Partner refused employment',
+  'partner.request_viewed': 'Partner opened a request',
+  'partner.document_viewed': 'Partner viewed a document',
+  'partner.staff_list_uploaded': 'Uploaded a partner’s staff list',
+  'partner.staff_list_viewed': 'Viewed a partner’s staff list',
+  'partner.staff_looked_up': 'Checked an NRC on a staff list',
+  'partner.staff_added': 'Added someone to a staff list',
+  'partner.staff_edited': 'Edited someone on a staff list',
+  'partner.staff_removed': 'Removed someone from a staff list',
+  'workflow.draft_saved': 'Saved a draft of the workflow',
+  'workflow.draft_discarded': 'Discarded the workflow draft',
+  'workflow.published': 'Published a new workflow',
+  'workflow.version_restored': 'Restored an earlier workflow',
+  'workflow.cases_moved': 'Moved open cases to the new workflow',
+  'rules.version_restored': 'Restored earlier policy rules',
+  'template.draft_saved': 'Saved a document template draft',
+  'template.draft_discarded': 'Discarded a document template draft',
+  'template.published': 'Published a document template',
+  'settings.crb_tested': 'Tested the credit bureau connection',
+  'settings.kyc_tested': 'Tested the customer records connection',
+  'settings.zra_tested': 'Tested the ZRA connection',
+  'settings.logo_updated': 'Changed the logo',
+  'settings.logo_removed': 'Removed the logo',
+  'settings.product_deleted': 'Deleted a loan product',
+  'privacy.previewed': 'Previewed a person’s data',
+  'privacy.request_logged': 'Logged a data request',
+  'privacy.request_updated': 'Updated a data request',
+  'zra.applicant_lookup': 'Checked a TPIN with ZRA',
+  'zra.uat_authenticated': 'Signed in to ZRA (test)',
+  'zra.uat_lookup': 'Looked up a TPIN with ZRA (test)',
+  'data.wiped': 'Wiped workspace data',
 }
+
+/** An action without a label here, in words: "application.send_to_credit" → "Send to credit". */
+const humanize = (code) => {
+  const words = String(code).split('.').pop().replace(/_/g, ' ')
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
+
+/** The plain name of an action: its label, the workflow's own name for it, or its code in words. */
+export const actionLabel = (entry) => ACTION_LABELS[entry.action] || entry.detail?.actionLabel || humanize(entry.action)
+
+// The settings each key holds, as the Settings page names them.
+const SETTING_LABELS = {
+  workflow: 'Credit workflow',
+  offers: 'Offers',
+  lms: 'Loan management system',
+  stages: 'Stages',
+  products: 'Loan products',
+  loanTypes: 'Loan categories',
+  collateral: 'Collateral',
+  partners: 'Partners',
+  crb: 'Credit bureau',
+  kyc: 'Customer records',
+  ai: 'AI review',
+  branding: 'Branding',
+  notifications: 'Notifications',
+  retention: 'Data retention',
+  sms: 'Text messages',
+  email: 'Email',
+  zra: 'ZRA',
+  security: 'Security',
+}
+const settingLabel = (key) => SETTING_LABELS[key] || humanize(key)
 
 const CATEGORIES = [
   { value: 'all', label: 'All activity' },
@@ -82,6 +175,10 @@ const CATEGORIES = [
   { value: 'rules.', label: 'Policy rules' },
   { value: 'settings.', label: 'Settings' },
   { value: 'privacy.', label: 'Data requests' },
+  { value: 'workflow.', label: 'Workflow' },
+  { value: 'partner.', label: 'Partners and staff lists' },
+  { value: 'template.', label: 'Document templates' },
+  { value: 'draft.', label: 'Unfinished applications' },
 ]
 
 const FIELD_LABELS = { role: 'Role', status: 'Status', managerId: 'Reports to', name: 'Name', phone: 'Phone', referralCode: 'Referral code' }
@@ -93,18 +190,33 @@ const formatValue = (key, value) => {
   return String(value)
 }
 
-/** One-line reading of an entry, used here and on the admin home page. */
+const plural = (count, one, many = `${one}s`) => `${Number(count).toLocaleString()} ${count === 1 ? one : many}`
+
+/** One-line reading of an entry, used here and on the admin home page: what was done, and to what. */
 export const describeAction = (entry) => {
-  const base = ACTION_LABELS[entry.action] || entry.action
+  const base = actionLabel(entry)
   const detail = entry.detail || {}
-  if (entry.action === 'user.invited' && detail.email) return `${base}: ${detail.email} as ${roleLabel(detail.role).toLowerCase()}`
-  if (entry.action.startsWith('application.') && detail.reference) return `${base}: ${detail.reference}`
-  if (entry.action === 'rules.published' && detail.version) return `${base} (version ${detail.version})`
-  if (entry.action.startsWith('role.') && (detail.after?.label || detail.label)) return `${base}: ${detail.after?.label || detail.label}`
-  if (entry.action === 'user.updated' && detail.after) {
+  const action = entry.action
+  if (action === 'user.invited' && detail.email) return `${base}: ${detail.email} as ${roleLabel(detail.role).toLowerCase()}`
+  if (action === 'settings.updated' && entry.entityId) return `${base}: ${settingLabel(entry.entityId)}`
+  if (action.startsWith('application.') && detail.reference) {
+    const move = detail.fromStage && detail.toStage ? ` (${detail.fromStage} → ${detail.toStage})` : ''
+    return `${base}: ${detail.reference}${move}`
+  }
+  if (action.startsWith('partner.employment_') || action.startsWith('partner.request_') || action === 'partner.document_viewed') {
+    return `${base}: ${[detail.reference, detail.partnerName].filter(Boolean).join(', ')}`.replace(/: $/, '')
+  }
+  if (action === 'partner.staff_list_uploaded') return `${base}: ${detail.partnerName || entry.entityId}, ${plural(detail.count, 'person', 'people')}${detail.skipped ? `, ${detail.skipped} skipped` : ''}`
+  if (action.startsWith('partner.staff_')) return `${base}: ${detail.partnerName || entry.entityId}${detail.count != null && /added|edited|removed/.test(action) ? ` (now ${plural(detail.count, 'person', 'people')})` : ''}`
+  if ((action === 'rules.published' || action === 'workflow.published') && detail.version) return `${base} (version ${detail.version})`
+  if (action.endsWith('version_restored') && detail.fromVersion) return `${base} (version ${detail.fromVersion})`
+  if (action === 'workflow.cases_moved' && detail.moved != null) return `${base}: ${plural(detail.moved, 'case')} to version ${detail.version}${detail.kept ? `, ${detail.kept} kept` : ''}`
+  if (action.startsWith('role.') && (detail.after?.label || detail.label)) return `${base}: ${detail.after?.label || detail.label}`
+  if (action === 'user.updated' && detail.after) {
     const changes = Object.keys(detail.after).map((key) => (FIELD_LABELS[key] || key).toLowerCase())
     return `${base} (${changes.join(', ')})`
   }
+  if (action.startsWith('template.') && (detail.label || detail.kind)) return `${base}: ${detail.label || humanize(detail.kind)}`
   return base
 }
 
@@ -225,7 +337,7 @@ export function AuditPage() {
         if (page === EXPORT_PAGE_LIMIT - 1) capped = true
       }
       downloadCsv(`audit-log-${new Date().toISOString().slice(0, 10)}.csv`, [
-        ['Time (UTC)', 'Person', 'Person id', 'Action', 'Description', 'Record type', 'Record id', 'IP address', 'Details'],
+        ['Time (UTC)', 'Person', 'Person id', 'Action', 'Description', 'Record type', 'Record id', 'IP address', 'Browser and device', 'User agent', 'Details'],
         ...rows.map((entry) => [
           entry.at,
           entry.actorLabel,
@@ -235,6 +347,8 @@ export function AuditPage() {
           entry.entityType || '',
           entry.entityId || '',
           entry.ip || '',
+          describeUserAgent(entry.userAgent)?.label || '',
+          entry.userAgent || '',
           entry.detail && Object.keys(entry.detail).length ? JSON.stringify(entry.detail) : '',
         ]),
       ])
@@ -274,7 +388,7 @@ export function AuditPage() {
             <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
             <Input
               type="search"
-              placeholder="Search by person or record"
+              placeholder="Search by person, case or detail"
               aria-label="Search the audit log"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
@@ -296,7 +410,7 @@ export function AuditPage() {
                 <optgroup label="Specific actions">
                   {showActions.map((row) => (
                     <option key={row.action} value={row.action}>
-                      {ACTION_LABELS[row.action] || row.action} ({row.count.toLocaleString()})
+                      {actionLabel({ action: row.action })} ({row.count.toLocaleString()})
                     </option>
                   ))}
                 </optgroup>
@@ -357,7 +471,6 @@ export function AuditPage() {
           <ul className="divide-y">
             {state.entries.map((entry, index) => {
               const isOpen = expanded === entry.id
-              const hasDetail = entry.detail && Object.keys(entry.detail).length > 0
               const newDay = index === 0 || dayKey(entry.at) !== dayKey(state.entries[index - 1].at)
               return (
                 <React.Fragment key={entry.id}>
@@ -371,7 +484,7 @@ export function AuditPage() {
                       type="button"
                       onClick={() => setExpanded(isOpen ? null : entry.id)}
                       aria-expanded={isOpen}
-                      disabled={!hasDetail && !entry.ip}
+
                       className="grid w-full grid-cols-[1fr_auto] items-start gap-x-4 gap-y-1 px-5 py-3.5 text-left transition-colors hover:bg-muted/30 focus-visible:bg-muted/40 focus-visible:outline-none disabled:cursor-default disabled:hover:bg-transparent sm:grid-cols-[11rem_1fr_auto]"
                     >
                       <time dateTime={entry.at} className="col-span-2 text-xs tabular-nums text-muted-foreground sm:col-span-1 sm:pt-0.5">
@@ -379,15 +492,14 @@ export function AuditPage() {
                       </time>
                       <span className="min-w-0">
                         <span className="block text-sm text-foreground">{describeAction(entry)}</span>
-                        <span className="block truncate text-xs text-muted-foreground">{entry.actorLabel}</span>
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {entry.actorLabel}
+                          {entry.userAgent ? ` · ${describeUserAgent(entry.userAgent)?.label}` : ''}
+                        </span>
                       </span>
-                      {hasDetail || entry.ip ? (
-                        <ChevronDown className={cn('mt-1 size-4 text-muted-foreground transition-transform', isOpen && 'rotate-180')} aria-hidden="true" />
-                      ) : (
-                        <span />
-                      )}
+                      <ChevronDown className={cn('mt-1 size-4 text-muted-foreground transition-transform', isOpen && 'rotate-180')} aria-hidden="true" />
                     </button>
-                    {isOpen ? <EntryDetail entry={entry} /> : null}
+                    {isOpen ? <EntryDetail entry={entry} onFilter={setFilter} /> : null}
                   </li>
                 </React.Fragment>
               )
@@ -413,28 +525,100 @@ export function AuditPage() {
   )
 }
 
-// Detail keys worth showing, in plain words. Ids and values already in the one-line
-// description are left out rather than printed raw.
-const DETAIL_LABELS = { email: 'Email', role: 'Role', emailed: 'Email sent' }
+// Detail keys in plain words; others are shown with their name in words. Already in the
+// one-line description, or only for machines, are left out.
+const DETAIL_LABELS = {
+  email: 'Email',
+  role: 'Role',
+  emailed: 'Email sent',
+  reference: 'Case',
+  status: 'Status after',
+  fromStage: 'From stage',
+  toStage: 'To stage',
+  verdict: 'Verdict',
+  partnerName: 'Partner',
+  count: 'People on the list',
+  skipped: 'Rows skipped',
+  version: 'Version',
+  fromVersion: 'Restored from version',
+  moved: 'Cases moved',
+  kept: 'Cases kept on their version',
+  found: 'On the list',
+  shown: 'Shown',
+  total: 'Total',
+  page: 'Page',
+  searched: 'Searched',
+  filename: 'File',
+  document: 'Document',
+  label: 'Name',
+  kind: 'Kind',
+  note: 'Note',
+  target: 'Item',
+  key: 'Check',
+  states: 'States',
+  policies: 'Policies',
+  applications: 'Applications',
+}
+const HIDDEN_DETAIL = new Set(['before', 'after', 'actionLabel', 'partner', 'userAgent', 'id', 'signature', 'latitude', 'longitude'])
+
+const wordsFor = (key) => DETAIL_LABELS[key] || humanize(key.replace(/([a-z])([A-Z])/g, '$1_$2').toLowerCase())
 
 const detailValue = (key, value) => {
   if (key === 'role') return roleLabel(value)
-  if (typeof value === 'boolean') return value ? 'Yes' : 'No — link shared manually'
-  return typeof value === 'object' ? JSON.stringify(value) : String(value)
+  if (key === 'status' && typeof value === 'string') return statusLabel(value)
+  if (key === 'emailed' && value === false) return 'No — link shared manually'
+  if (typeof value === 'boolean') return value ? 'Yes' : 'No'
+  if (typeof value === 'number') return value.toLocaleString()
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value)) return dateTime(value)
+  if (Array.isArray(value)) return value.length > 6 ? `${value.slice(0, 6).join(', ')} and ${value.length - 6} more` : value.join(', ') || 'none'
+  if (value && typeof value === 'object') return Object.entries(value).map(([inner, innerValue]) => `${wordsFor(inner)}: ${typeof innerValue === 'object' ? JSON.stringify(innerValue) : innerValue}`).join(' · ')
+  return String(value)
 }
 
-const ENTITY_LABELS = { user: 'account' }
+/** What a settings change changed: each top-level field whose value differs, before and after. */
+const settingChanges = (before = {}, after = {}) =>
+  [...new Set([...Object.keys(before || {}), ...Object.keys(after || {})])]
+    .filter((key) => JSON.stringify(before?.[key]) !== JSON.stringify(after?.[key]))
+    .map((key) => ({ key, before: before?.[key], after: after?.[key] }))
 
-function EntryDetail({ entry }) {
+const shortValue = (value) => {
+  if (value === null || value === undefined || value === '') return 'none'
+  if (typeof value === 'boolean') return value ? 'on' : 'off'
+  if (typeof value === 'object') return Array.isArray(value) ? plural(value.length, 'item') : 'changed'
+  const text = String(value)
+  return text.length > 60 ? `${text.slice(0, 57)}…` : text
+}
+
+const ENTITY_LABELS = { user: 'Account', application: 'Case', partner: 'Partner', setting: 'Setting', role: 'Role', workflow: 'Workflow', ruleset: 'Policy rules' }
+
+/** Where the record lives in the workspace, when it has a page. */
+const recordLink = (entry) => {
+  if (entry.entityType === 'application' && entry.entityId) return { to: `/admin/applications/${entry.entityId}`, label: 'Open the case' }
+  if (entry.entityType === 'partner' && entry.entityId) return { to: `/admin/settings?tab=partners&partner=${encodeURIComponent(entry.entityId)}`, label: 'Open the partner' }
+  if (entry.entityType === 'setting' && entry.entityId) return { to: `/admin/settings?tab=${encodeURIComponent(entry.entityId)}`, label: 'Open these settings' }
+  if (entry.action.startsWith('workflow.')) return { to: '/admin/workflow', label: 'Open the workflow' }
+  if (entry.action.startsWith('rules.')) return { to: '/admin/rules', label: 'Open the policy rules' }
+  return null
+}
+
+function DeviceIcon({ device }) {
+  const Icon = device === 'Phone' ? Smartphone : device === 'Tablet' ? Tablet : device === 'Script or tool' ? Terminal : Monitor
+  return <Icon className="size-3.5" aria-hidden="true" />
+}
+
+function EntryDetail({ entry, onFilter }) {
   const { before, after, ...rest } = entry.detail || {}
-  const extra = Object.entries(rest).filter(([key, value]) => DETAIL_LABELS[key] && value !== null && value !== undefined)
+  const isSetting = entry.action === 'settings.updated'
+  const changes = isSetting ? settingChanges(before, after) : []
+  const extra = Object.entries(rest).filter(([key, value]) => !HIDDEN_DETAIL.has(key) && value !== null && value !== undefined && value !== '')
+  const link = recordLink(entry)
   return (
     <div className="space-y-3 bg-muted/30 px-5 py-4 text-sm sm:pl-[12.25rem]">
-      {after ? (
+      {after && !isSetting ? (
         <dl className="space-y-1">
           {Object.keys(after).map((key) => (
             <div key={key} className="flex flex-wrap gap-x-2">
-              <dt className="text-muted-foreground">{FIELD_LABELS[key] || key}</dt>
+              <dt className="text-muted-foreground">{FIELD_LABELS[key] || wordsFor(key)}</dt>
               <dd className="text-foreground">
                 {formatValue(key, before?.[key])} <span className="text-muted-foreground">to</span> {formatValue(key, after[key])}
               </dd>
@@ -442,20 +626,74 @@ function EntryDetail({ entry }) {
           ))}
         </dl>
       ) : null}
+      {isSetting ? (
+        changes.length ? (
+          <div>
+            <p className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">What changed</p>
+            <dl className="space-y-1">
+              {changes.map((change) => (
+                <div key={change.key} className="flex flex-wrap gap-x-2">
+                  <dt className="text-muted-foreground">{wordsFor(change.key)}</dt>
+                  <dd className="text-foreground">
+                    {typeof change.after === 'object' && change.after !== null && !Array.isArray(change.after) ? (
+                      'changed'
+                    ) : (
+                      <>
+                        {shortValue(change.before)} <span className="text-muted-foreground">to</span> {shortValue(change.after)}
+                      </>
+                    )}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        ) : (
+          <p className="text-muted-foreground">Saved with no changes.</p>
+        )
+      ) : null}
       {extra.length ? (
-        <dl className="flex flex-wrap gap-x-8 gap-y-1">
+        <dl className="grid gap-x-8 gap-y-1 sm:grid-cols-2">
           {extra.map(([key, value]) => (
-            <div key={key} className="flex gap-2">
-              <dt className="text-muted-foreground">{DETAIL_LABELS[key]}</dt>
-              <dd className="text-foreground">{detailValue(key, value)}</dd>
+            <div key={key} className="flex min-w-0 gap-2">
+              <dt className="shrink-0 text-muted-foreground">{wordsFor(key)}</dt>
+              <dd className="min-w-0 break-words text-foreground">{detailValue(key, value)}</dd>
             </div>
           ))}
         </dl>
       ) : null}
-      <p className="text-xs text-muted-foreground">
-        {entry.entityType ? `${ENTITY_LABELS[entry.entityType] || entry.entityType} ${entry.entityId}` : null}
-        {entry.ip ? `${entry.entityType ? ', ' : ''}from ${entry.ip}` : null}
-      </p>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
+        {/* A case is named by its reference above; its internal id adds nothing. */}
+        {entry.entityType && !(entry.entityType === 'application' && rest.reference) ? (
+          <span>
+            {ENTITY_LABELS[entry.entityType] || humanize(entry.entityType)} {entry.entityType === 'setting' ? settingLabel(entry.entityId) : entry.entityId}
+          </span>
+        ) : null}
+        {entry.ip ? <span>From {entry.ip}</span> : null}
+        {entry.userAgent ? (
+          <span title={entry.userAgent} className="inline-flex items-center gap-1">
+            <DeviceIcon device={describeUserAgent(entry.userAgent)?.device} />
+            {describeUserAgent(entry.userAgent)?.label}
+          </span>
+        ) : null}
+        <span className="font-mono">{entry.action}</span>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {link ? (
+          <Button asChild variant="outline" size="sm">
+            <Link to={link.to}>{link.label}</Link>
+          </Button>
+        ) : null}
+        {entry.actorId ? (
+          <Button variant="ghost" size="sm" onClick={() => onFilter('actor', entry.actorId)}>
+            Everything by {entry.actorLabel}
+          </Button>
+        ) : null}
+        {entry.entityType && entry.entityId ? (
+          <Button variant="ghost" size="sm" onClick={() => onFilter('entity', `${entry.entityType}:${entry.entityId}`)}>
+            Everything on this {(ENTITY_LABELS[entry.entityType] || entry.entityType).toLowerCase()}
+          </Button>
+        ) : null}
+      </div>
     </div>
   )
 }

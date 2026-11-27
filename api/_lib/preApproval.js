@@ -297,6 +297,8 @@ const toRequest = (row) => ({
   stage: row.preApproval?.stage,
   staffMatch: row.preApproval?.staffMatch || null,
   partnerDecision: row.preApproval?.partnerDecision || null,
+  // Above the pre-approved limit: confirming sends it to the usual review, not to an offer.
+  overLimit: row.preApproval?.overLimit || null,
 })
 
 /** pending: waiting for the partner. recent: the last 50 the partner answered. */

@@ -30,7 +30,7 @@ const summarize = (flow) => ({
   version: flow.version,
   legacy: flow.legacy,
   start: flow.definition.start,
-  states: flow.definition.states.map(({ id, label, type, roles = [], products = [], askApplicant = false, trackProgress = false, disabled = false, appraisal = false }) => ({
+  states: flow.definition.states.map(({ id, label, type, roles = [], products = [], askApplicant = false, trackProgress = false, disabled = false, appraisal = false, work = null }) => ({
     id,
     label,
     type,
@@ -40,6 +40,7 @@ const summarize = (flow) => ({
     trackProgress,
     disabled,
     appraisal,
+    work,
   })),
   order: flow.analysis.order,
   categories: flow.analysis.categories,
@@ -122,6 +123,8 @@ export const sanitizeWorkflow = (input) => {
       askApplicant: Boolean(state?.askApplicant),
       // Valuing collateral: secured loans only, and on once every item is valued (src/config/appraisal.js).
       appraisal: Boolean(state?.appraisal),
+      // What a stage works on: structuring the loan terms, or verifying them (src/config/loanTerms.js).
+      ...(type === 'work' && ['terms', 'underwriting'].includes(state?.work) ? { work: state.work } : {}),
       handToLms: Boolean(state?.handToLms),
       trackProgress: Boolean(state?.trackProgress),
       ...(state?.disabled && !system ? { disabled: true } : {}),

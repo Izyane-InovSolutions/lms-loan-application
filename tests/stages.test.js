@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest'
-import { createMemoryKv, client, draftPreparer, signedAcceptance } from './helpers.js'
+import { createMemoryKv, client, documentVerifier, draftPreparer, signedAcceptance } from './helpers.js'
 
 const kv = createMemoryKv()
 vi.mock('../api/_lib/kv.js', () => ({ default: kv }))
@@ -25,6 +25,18 @@ const submit = async (email) => {
 const act = async (who, id, action, extra = {}) => {
   const { version } = (await admin.get(`/applications/${id}`)).body.application
   return who.post(`/applications/${id}/actions`, { action, version, ...extra })
+}
+
+/** Sets the loan terms and approves Appraisal: the review stages come after it. */
+const appraise = async (who, id) => {
+  expect((await act(who, id, 'save_terms')).status).toBe(200)
+  expect((await act(who, id, 'transition', { actionId: 'appraised' })).status).toBe(200)
+}
+/** Verifies the required documents and approves Underwriting, on to the credit decision. */
+const underwrite = async (who, id) => {
+  const verify = documentVerifier(who, id)
+  for (const document of (await admin.get(`/applications/${id}`)).body.workflow.state.underwriting.documents) expect((await verify(document.id)).status).toBe(200)
+  expect((await act(who, id, 'transition', { actionId: 'underwritten' })).status).toBe(200)
 }
 
 const tick = async (who, id, checks) => {
@@ -82,6 +94,7 @@ describe('a case going through the stages', () => {
   it('needs review stages done, in order and with their checks, before a recommendation', async () => {
     id = await submit('staged@example.com')
     await act(officer, id, 'start_review')
+    await appraise(officer, id)
     await tick(officer, id, ['identity', 'income'])
 
     const early = await act(officer, id, 'recommend', { verdict: 'approve', rationale: 'Fine' })
@@ -94,9 +107,11 @@ describe('a case going through the stages', () => {
 
     // Field verification is for loan officers only (admins can always act).
     await tick(officer, id, ['site_visit'])
-    expect((await act(salesManager, id, 'complete_stage', { stage: 'field_verification' })).status).toBe(403)
+    // A sales manager who hasn't worked the case doesn't even see it there (stageVisibility.test.js).
+    expect((await act(salesManager, id, 'complete_stage', { stage: 'field_verification' })).status).toBe(404)
     const done = await act(officer, id, 'complete_stage', { stage: 'field_verification' })
     expect(done.body.application.stageProgress.field_verification).toMatchObject({ done: true, byName: 'Mwila Sakala' })
+    await underwrite(officer, id)
 
     expect((await act(officer, id, 'recommend', { verdict: 'approve', rationale: 'Affordable' })).body.application.status).toBe('pending_approval')
   })
@@ -112,6 +127,7 @@ describe('a case going through the stages', () => {
     const { body } = await admin.get(`/applications/${id}`)
     expect(body.application.stageProgress.credit_committee).toBeUndefined()
     expect(body.application.stageProgress.field_verification.done).toBe(true)
+    await underwrite(officer, id)
     await act(officer, id, 'recommend', { verdict: 'approve', rationale: 'Employer confirmed' })
     await act(salesManager, id, 'complete_stage', { stage: 'credit_committee' })
     expect((await act(salesManager, id, 'decide', { verdict: 'approve', rationale: 'Agreed' })).body.application.status).toBe('approved')
@@ -129,6 +145,7 @@ describe('a case going through the stages', () => {
   it('reopens a stage and those after it while its part of the flow is open', async () => {
     const other = await submit('reopen@example.com')
     await act(officer, other, 'start_review')
+    await appraise(officer, other)
     await tick(officer, other, ['documents', 'site_visit'])
     await act(officer, other, 'complete_stage', { stage: 'document_check' })
     await act(officer, other, 'complete_stage', { stage: 'field_verification' })

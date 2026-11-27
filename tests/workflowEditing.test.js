@@ -10,15 +10,15 @@ const links = (definition, id) => {
   return state.type === 'offer' ? [`accept→${state.offer.onAccept}`] : state.actions.map((action) => `${action.kind}→${action.to}`)
 }
 
-// Today's default: Pre-screening → Appraisal → Underwriting → Underwriting: approval → Offer Issuance → Loan Booking.
+// Today's default: Pre-screening → Appraisal → Underwriting → Credit decision → Underwriting: approval → Offer Issuance → Loan Booking.
 const base = () => forEditing(legacyToWorkflow({}))
 
 describe('the list view’s moves', () => {
   it('puts a new step in the path where it is dropped', () => {
     const added = addState(base(), { label: 'Credit check' })
     const moved = moveStep(added.definition, added.id, 'pending_approval')
-    expect(steps(moved)).toEqual(['submitted', 'appraisal', 'in_review', 'credit_check', 'pending_approval', 'approved', 'accepted'])
-    expect(links(moved, 'in_review')).toEqual(['recommend→credit_check'])
+    expect(steps(moved)).toEqual(['submitted', 'appraisal', 'in_review', 'decision', 'credit_check', 'pending_approval', 'approved', 'accepted'])
+    expect(links(moved, 'decision')).toEqual(['recommend→credit_check'])
     expect(links(moved, 'credit_check')).toEqual(['move→pending_approval'])
     expect(moved.states.find((state) => state.id === 'credit_check').actions[0].label).toBe('Recommend')
     expect(errors(moved)).toEqual([])
@@ -27,12 +27,12 @@ describe('the list view’s moves', () => {
   it('reconnects the steps it leaves, and the ones it lands between', () => {
     const added = addState(base(), { label: 'Credit check' })
     const first = moveStep(added.definition, added.id, 'pending_approval')
-    // Up above Underwriting: Appraisal now leads to it, it leads to Underwriting, and Underwriting skips it.
+    // Up above Underwriting: Appraisal now leads to it, it leads to Underwriting, and the decision skips it.
     const moved = moveStep(first, 'credit_check', 'in_review')
-    expect(steps(moved)).toEqual(['submitted', 'appraisal', 'credit_check', 'in_review', 'pending_approval', 'approved', 'accepted'])
+    expect(steps(moved)).toEqual(['submitted', 'appraisal', 'credit_check', 'in_review', 'decision', 'pending_approval', 'approved', 'accepted'])
     expect(links(moved, 'appraisal')).toEqual(['move→credit_check'])
     expect(links(moved, 'credit_check')).toEqual(['move→in_review'])
-    expect(links(moved, 'in_review')).toEqual(['recommend→pending_approval'])
+    expect(links(moved, 'decision')).toEqual(['recommend→pending_approval'])
     // It keeps the usual name wherever it leads.
     expect(moved.states.find((state) => state.id === 'credit_check').actions[0].label).toBe('Recommend')
     expect(errors(moved)).toEqual([])
@@ -49,7 +49,7 @@ describe('the list view’s moves', () => {
   it('leaves a step where it is when dropped on its own place', () => {
     const definition = base()
     expect(moveStep(definition, 'in_review', 'in_review')).toBe(definition)
-    expect(moveStep(definition, 'in_review', 'pending_approval')).toBe(definition)
+    expect(moveStep(definition, 'in_review', 'decision')).toBe(definition)
   })
 })
 
@@ -67,11 +67,13 @@ describe('turning a step off', () => {
 })
 
 describe('workflows published from the editor before today’s stages', () => {
-  // As the editor saved the old default: no Appraisal stage, the review called by a former name.
+  // As the editor saved the old default: no Appraisal stage, the review (which also decided) called by a former name.
   const former = (labels) => {
     const today = legacyToWorkflow({})
+    const decision = today.states.find((state) => state.id === 'decision')
     const states = today.states
-      .filter((state) => state.id !== 'appraisal')
+      .filter((state) => !['appraisal', 'decision'].includes(state.id))
+      .map(({ work: _work, ...state }) => (state.id === 'in_review' ? { ...state, actions: decision.actions } : state))
       .map((state) => ({
         ...state,
         label: labels[state.id] || state.label,

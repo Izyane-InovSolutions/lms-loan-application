@@ -93,6 +93,17 @@ export const MERGE_FIELDS = [
   { key: 'facility_fee', label: 'Facility fee', sample: 'K175.00' },
   { key: 'total_repayable', label: 'Total repayable', sample: 'K10,675.00' },
   { key: 'monthly_instalment', label: 'Monthly instalment', sample: 'K1,779.17' },
+  { key: 'interest_rate', label: 'Interest rate per year', sample: '24% a year' },
+  { key: 'interest_type', label: 'Interest type (fixed or declining)', sample: 'Fixed rate' },
+  { key: 'calculation_method', label: 'Interest calculation', sample: 'Reducing balance' },
+  { key: 'repayment_frequency', label: 'Repayment frequency', sample: 'Monthly' },
+  { key: 'repayment_frequency_lower', label: 'Repayment frequency, in a sentence', sample: 'monthly' },
+  { key: 'effective_date', label: 'Loan effective date', sample: '2 November 2026' },
+  { key: 'instalment', label: 'Instalment', sample: 'K4,640.00' },
+  { key: 'number_of_instalments', label: 'Number of instalments', sample: '12' },
+  { key: 'charges', label: 'Charges (one per line)', sample: 'Processing fee: K7,000.00' },
+  { key: 'total_charges', label: 'Total charges', sample: 'K7,000.00' },
+  { key: 'net_disbursed', label: 'Net amount paid out', sample: 'K43,000.00' },
   { key: 'first_repayment_date', label: 'First instalment due', sample: '2 December 2026' },
   {
     key: 'repayment_schedule',
@@ -127,7 +138,7 @@ export const fieldKeyFor = (name) =>
 // Fields staff write that may span lines. Everything else — names and addresses the
 // applicant typed — is kept to one line, so a line break in it can't start what reads as
 // a new clause of the agreement.
-const MULTILINE_FIELDS = new Set(['conditions'])
+const MULTILINE_FIELDS = new Set(['conditions', 'charges'])
 
 export const fillPlaceholders = (text, values) =>
   String(text || '').replace(/\{\{\s*([a-zA-Z0-9_ ]+?)\s*\}\}/g, (match, name) => {

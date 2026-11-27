@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Select } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { registeredRoles } from '@/config/roles'
-import { ACTION_KINDS, STATE_TYPES, SYSTEM_FINALS, isOfferDocument, missingForState, needsApproval, stateById, stateDocuments } from '@/config/workflow'
+import { ACTION_KINDS, STAGE_WORK, STATE_TYPES, SYSTEM_FINALS, isOfferDocument, missingForState, needsApproval, stateById, stateDocuments } from '@/config/workflow'
 import { addAction, changeAction, changeState, removeAction, removeState, setStateEnabled } from './editing'
 
 /*
@@ -305,14 +305,37 @@ export function StateDrawer({ definition, stateId, focusActionId, errors, docume
                 ) : null}
 
                 <Section title="Options">
+                  {state.type === 'work' ? (
+                    <label className="block space-y-1.5 text-sm">
+                      <span className="font-medium text-foreground">What this stage does</span>
+                      <Select value={state.work || ''} onChange={(event) => update({ work: event.target.value || undefined })}>
+                        <option value="">Nothing special</option>
+                        {Object.entries(STAGE_WORK).map(([key, label]) => (
+                          <option key={key} value={key}>
+                            {label}
+                          </option>
+                        ))}
+                      </Select>
+                      <span className="block text-xs text-muted-foreground">
+                        {state.work === 'terms'
+                          ? 'Staff set the loan terms here; its Move action waits until they are saved.'
+                          : state.work === 'underwriting'
+                            ? 'Staff verify the case here before the credit decision.'
+                            : 'One stage per loan can set the terms, and one can do the underwriting checks.'}
+                      </span>
+                    </label>
+                  ) : null}
                   <div className="space-y-3">
                     <Toggle label="Staff can ask the applicant for more" hint="Only before the decision. The case waits until they reply." checked={Boolean(state.askApplicant)} onChange={(value) => update({ askApplicant: value })} />
-                    <Toggle
-                      label="Collateral appraisal"
-                      hint="Only loans with collateral come here (others go straight past, by its Move action), and they move on once every item is valued."
-                      checked={Boolean(state.appraisal)}
-                      onChange={(value) => update({ appraisal: value })}
-                    />
+                    {state.appraisal ? (
+                      // Retired for new stages: kept so a version that values collateral here can still turn it off.
+                      <Toggle
+                        label="Collateral appraisal"
+                        hint="Only loans with collateral come here (others go straight past, by its Move action), and they move on once every item is valued."
+                        checked={Boolean(state.appraisal)}
+                        onChange={(value) => update({ appraisal: value })}
+                      />
+                    ) : null}
                     <Toggle label="Hand the loan to the LMS when a case arrives" hint="Where an LMS is connected." checked={Boolean(state.handToLms)} onChange={(value) => update({ handToLms: value })} />
                     {state.type === 'work' ? (
                       <Toggle label="Show as a step on the case" hint="Listed under Stages with “Mark as done”, and who did it." checked={Boolean(state.trackProgress)} onChange={(value) => update({ trackProgress: value })} />

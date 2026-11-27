@@ -8,6 +8,7 @@
  *   { start, checklist: [{ key, label, hint, requiredToApprove }],
  *     states: [{ id, label, type: 'work' | 'offer' | 'final', outcome?,
  *                roles, products, requiredChecks, askApplicant, handToLms, trackProgress, disabled?,
+ *                work?: 'terms' | 'underwriting',
  *                offer?: { onAccept }, documents?: [{ kind, required }],
  *                actions: [{ id, label, kind, to, permission?, options }] }] }
  *
@@ -24,7 +25,8 @@
  * A state can be turned off (`disabled`) instead of deleted: cases pass straight through it
  * by its Move action, as they pass a state limited to other products, and its setup stays.
  * A state marked `appraisal` (valuing what was pledged) is passed through the
- * same way by a case that pledged no collateral.
+ * same way by a case that pledged no collateral. Versions made since keep that flag only
+ * where it was set before: a state's `work` (STAGE_WORK) says what it does instead.
  */
 
 import { APPLICATION_STATUSES } from './applications.js'
@@ -89,6 +91,13 @@ export const missingForState = (role, state) => {
   if (state.type === 'offer') need('offers.record', 'Record acceptance')
   return [...needs].map(([permission, actions]) => ({ permission, label: PERMISSION_LABELS[permission] || permission, actions }))
 }
+
+/**
+ * What a stage does besides moving the case on (`state.work`): setting the loan terms
+ * (src/config/loanTerms.js), whose forward move waits for saved terms, or the underwriting
+ * checks. One stage of each per loan type, and the terms before the decision.
+ */
+export const STAGE_WORK = { terms: 'Sets the loan terms', underwriting: 'Underwriting checks' }
 
 /** Where a case is in the journey: before the decision, approved (awaiting acceptance), or accepted. */
 export const PHASES = { review: 'Before the decision', decided: 'After approval', accepted: 'After the customer accepts' }
@@ -419,6 +428,26 @@ export const validateWorkflow = (definition, { roles, documentKinds } = {}) => {
   }
   if (offers.length > 1) add(errors, 'A workflow can have one offer state.', offers[1].id)
 
+  // One stage of each kind of work for any one loan type (states for different products can share it).
+  const WORK_ONCE = { terms: 'Only one stage can set the loan terms.', underwriting: 'Only one stage can do the underwriting checks.' }
+  for (const [work, message] of Object.entries(WORK_ONCE)) {
+    const doing = states.filter((state) => state.work === work && state.type !== 'final' && !state.disabled)
+    const clash = PRODUCTS.map((product) => doing.filter((state) => appliesTo(state, product))).find((both) => both.length > 1)
+    if (clash) add(errors, message, clash[1].id)
+  }
+  // The terms come before the decision: no recommendation or approval may lead to them.
+  const decided = new Set()
+  for (const state of states) {
+    for (const action of state.actions || []) {
+      if (action.kind !== 'recommend' && action.kind !== 'approve') continue
+      if (!stateById(definition, action.to)) continue
+      decided.add(action.to)
+      reachableFrom(definition, action.to).forEach((id) => decided.add(id))
+    }
+  }
+  const lateTerms = states.find((state) => state.work === 'terms' && !state.disabled && decided.has(state.id))
+  if (lateTerms) add(errors, 'The loan terms must be set before the credit decision.', lateTerms.id)
+
   const analysis = analyzeWorkflow(definition)
   analysis.problems.forEach((problem) => add(errors, problem.message, problem.stateId))
 
@@ -471,6 +500,7 @@ export const DEFAULT_STAGE_NAMES = {
   submitted: 'Pre-screening',
   appraisal: 'Appraisal',
   in_review: 'Underwriting',
+  decision: 'Credit decision',
   pending_approval: 'Underwriting: approval',
   offer: 'Offer Issuance',
   booking: 'Loan Booking',
@@ -494,10 +524,10 @@ export const legacyToWorkflow = ({ workflow = {}, offers = {}, lms = {}, stages 
   const fourEyes = workflow.requireSecondApproval !== false
   const requiredToApprove = (stages.checklist || DEFAULT_CHECKLIST).filter((check) => check.requiredToApprove).map((check) => check.key)
 
-  // The stages a case moves through, by default: Pre-screening; Appraisal (valuing the
-  // collateral: secured loans only); Underwriting (the officer's checks and recommendation,
-  // then a second person's decision); Offer Issuance; Loan Booking. Draft, before them, is
-  // the unfinished application.
+  // The stages a case moves through, by default: Pre-screening; Appraisal (setting the loan
+  // terms, every loan); Underwriting (the checks); Credit decision (the officer's
+  // recommendation, then a second person's decision); Offer Issuance; Loan Booking. Draft,
+  // before them, is the unfinished application.
   const reviewName = name('in_review', DEFAULT_STAGE_NAMES.in_review)
   const approvalName = name('pending_approval', DEFAULT_STAGE_NAMES.pending_approval)
   const closingStatus = requireAcceptance ? 'accepted' : 'approved'
@@ -535,21 +565,35 @@ export const legacyToWorkflow = ({ workflow = {}, offers = {}, lms = {}, stages 
       actions: [{ id: 'start_review', label: 'Start the review', kind: 'move', to: 'appraisal', options: { claim: true } }],
     },
     {
-      // Valuing what was pledged. A loan with no collateral passes straight through, and one
-      // with collateral moves on once every item is valued (Settings → Credit workflow).
+      // Structuring the loan: approved amount, tenure, rate, charges (loanTerms.js). Every
+      // loan comes here, and Approve waits for saved terms.
       id: 'appraisal',
       label: DEFAULT_STAGE_NAMES.appraisal,
       type: 'work',
       roles: [],
       products: [],
-      appraisal: true,
+      work: 'terms',
       askApplicant: true,
-      actions: [{ id: 'appraised', label: 'Appraisal done', kind: 'move', to: review[0]?.id || 'in_review', permission: 'cases.work' }],
+      actions: [{ id: 'appraised', label: 'Approve', kind: 'move', to: review[0]?.id || 'in_review', permission: 'cases.work' }],
     },
     ...review.map((stage, index) => stageState(stage, reviewName, 'in_review', review[index + 1]?.id || 'in_review', PHASE_PERMISSIONS.review)),
     {
+      // Verifying the case (valuation and the checks); its Approve only moves on.
       id: 'in_review',
-      label: review.length ? `${reviewName}: ready to recommend` : reviewName,
+      label: reviewName,
+      type: 'work',
+      roles: [],
+      products: [],
+      work: 'underwriting',
+      askApplicant: true,
+      legacyStatus: 'in_review',
+      actions: [{ id: 'underwritten', label: 'Approve', kind: 'move', to: 'decision', permission: 'cases.work' }],
+    },
+    {
+      // The decision, as underwriting held it before: a recommendation for a second person,
+      // or (four-eyes off) the officer's own approve or decline.
+      id: 'decision',
+      label: DEFAULT_STAGE_NAMES.decision,
       type: 'work',
       roles: [],
       products: [],

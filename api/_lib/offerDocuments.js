@@ -10,6 +10,7 @@ import { addEvent } from './applications.js'
 import { brandName, getLetterhead } from './branding.js'
 import { LOAN_TYPE_LABELS, APPROVED_STATUSES } from '../../src/config/applications.js'
 import { OFFER_DOCUMENT_KINDS, TEMPLATE_KINDS } from '../../src/config/templates.js'
+import { CALCULATIONS, FREQUENCIES, INTEREST_TYPES, chargeAmount, scheduleFor, summarizeTerms } from '../../src/config/loanTerms.js'
 import { describeInterest, priceLoan, repaymentSchedule } from '../../src/config/loanProducts.js'
 
 const { applications, applicationDocuments, appraisals } = schema
@@ -47,6 +48,14 @@ const approvalOf = async (db, applicationId) => {
 
 /** The schedule's merge fields: when the first instalment falls due, and every instalment, one per line. */
 const scheduleValues = (amount, tenure, product, application) => {
+  const terms = application.terms
+  if (terms) {
+    // From the payout once it is made; until then, from the effective date.
+    const rows = scheduleFor(terms, terms.paidOutOn || terms.effectiveDate)
+    const lines = rows.map((row) => `${row.number}. ${longDate(row.due)}: ${kwacha(row.instalment)} (${kwacha(row.balance)} left after it)`)
+    const header = terms.paidOutOn ? `Paid out on ${longDate(terms.paidOutOn)}:` : `If paid out on ${longDate(terms.effectiveDate)} (each date moves with the actual payout date):`
+    return { first_repayment_date: longDate(rows[0]?.due), repayment_schedule: [header, ...lines].join('\n') }
+  }
   if (!product) return { repayment_schedule: '', first_repayment_date: '' }
   const paidOut = application.status === 'disbursed' && application.updatedAt
   const payout = paidOut ? new Date(application.updatedAt) : new Date()
@@ -55,6 +64,45 @@ const scheduleValues = (amount, tenure, product, application) => {
   return {
     first_repayment_date: longDate(rows[0].due),
     repayment_schedule: [paidOut ? `Paid out on ${longDate(payout)}:` : `If paid out on ${longDate(payout)} (each date moves with the actual payout date):`, ...lines].join('\n'),
+  }
+}
+
+/**
+ * The structured loan terms' merge fields. A case without terms leaves the terms-only ones
+ * empty, and fills those the default letters use in a sentence from today's monthly pricing.
+ */
+const termsValues = (terms, { tenure }) => {
+  if (!terms)
+    return {
+      interest_rate: '',
+      interest_type: '',
+      calculation_method: '',
+      repayment_frequency: '',
+      effective_date: '',
+      number_of_instalments: String(tenure),
+      repayment_frequency_lower: 'monthly',
+      charges: '',
+      total_charges: '',
+    }
+  const summary = summarizeTerms(terms)
+  const frequency = FREQUENCIES[terms.frequency]?.label || ''
+  return {
+    interest: `${terms.annualRate}% a year, ${(CALCULATIONS[terms.calculation] || '').toLowerCase()}`,
+    interest_amount: kwacha(summary.totalInterest),
+    facility_fee: kwacha(summary.totalCharges),
+    interest_rate: `${terms.annualRate}% a year`,
+    interest_type: INTEREST_TYPES[terms.interestType] || '',
+    calculation_method: CALCULATIONS[terms.calculation] || '',
+    repayment_frequency: frequency,
+    repayment_frequency_lower: frequency.toLowerCase(),
+    effective_date: longDate(terms.effectiveDate),
+    instalment: kwacha(summary.instalment),
+    monthly_instalment: kwacha(summary.instalment),
+    total_repayable: kwacha(summary.totalRepayable),
+    number_of_instalments: String(summary.periods),
+    charges: (terms.charges || []).map((charge) => `${charge.name}: ${kwacha(chargeAmount(charge, terms.amount))}`).join('\n'),
+    total_charges: kwacha(summary.totalCharges),
+    net_disbursed: kwacha(summary.netDisbursed),
   }
 }
 
@@ -88,6 +136,11 @@ export const mergeValuesFor = async (application) => {
     facility_fee: kwacha(price.fee),
     total_repayable: kwacha(application.totalRepayable ?? price.total),
     monthly_instalment: kwacha(application.monthlyInstalment ?? price.monthly),
+    instalment: kwacha(application.monthlyInstalment ?? price.monthly),
+    // Today's pricing pays the fee on top of the loan: the whole amount is paid out.
+    net_disbursed: kwacha(amount),
+    // With terms, the interest, charges, instalment and payout come from them instead.
+    ...termsValues(application.terms, { tenure }),
     // Dated from the payout once it is made; until then, as if paid out today.
     ...scheduleValues(amount, tenure, product, application),
     conditions: approval?.conditions || 'None.',
@@ -120,10 +173,23 @@ export const renderTemplate = async (template, values, { label = TEMPLATE_KINDS[
           ['NRC', values.customer_nrc],
           ['Amount', values.amount],
           ['Tenure', values.tenure],
-          ['Interest', `${values.interest} (${values.interest_amount})`],
-          ['Facility fee', values.facility_fee],
-          ['Total repayable', values.total_repayable],
-          ['Monthly instalment', values.monthly_instalment],
+          ...(values.interest_rate
+            ? [
+                ['Interest rate', values.interest_rate],
+                ['Calculation', values.calculation_method],
+                ['Repayment frequency', values.repayment_frequency],
+                ['Instalment', values.instalment],
+                ['Number of instalments', values.number_of_instalments],
+                ['Charges (total)', values.total_charges],
+                ['Net amount paid out', values.net_disbursed],
+                ['Total repayable', values.total_repayable],
+              ]
+            : [
+                ['Interest', `${values.interest} (${values.interest_amount})`],
+                ['Facility fee', values.facility_fee],
+                ['Total repayable', values.total_repayable],
+                ['Monthly instalment', values.monthly_instalment],
+              ]),
           ['Conditions', values.conditions],
           ['Offer open until', values.offer_expiry_date],
         ],

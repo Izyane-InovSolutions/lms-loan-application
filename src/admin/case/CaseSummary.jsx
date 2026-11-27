@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react'
-import { AlertTriangle, Check, CheckCircle2, ChevronDown, CircleDashed, ClipboardList, FileSearch, FileText, Gauge, Loader2, MapPin, RefreshCw, ShieldAlert, Sparkles, UserCheck } from 'lucide-react'
+import { AlertTriangle, Check, CheckCircle2, ChevronDown, CircleDashed, ClipboardList, FileText, Gauge, Loader2, MapPin, RefreshCw, ShieldAlert, Sparkles, UserCheck } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -184,14 +184,49 @@ const SCORE_BANDS = [
 ]
 export const scoreBand = (score) => SCORE_BANDS.find((band) => score >= band.min)
 
+/**
+ * A card's frame: a button that opens its details below when `onSelect` is given (the
+ * open one ringed, with a chevron), else a plain box.
+ */
+function CardFrame({ active, onSelect, label, className, children }) {
+  const row = <span className={cn('flex w-full min-w-0 items-center gap-3', className)}>{children}</span>
+  const frame = 'flex w-full flex-col rounded-xl border bg-card text-left shadow-sm'
+  if (!onSelect) return <div className={cn(frame, 'px-4 py-3.5')}>{row}</div>
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      aria-expanded={Boolean(active)}
+      aria-label={`${label}: ${active ? 'hide' : 'show'} details`}
+      className={cn(
+        frame,
+        // A card you can open: it lifts and takes the brand colour on hover, and stays ringed while open.
+        'group overflow-hidden transition-all hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+        active && 'border-primary shadow-md ring-1 ring-primary'
+      )}
+    >
+      <span className="flex w-full flex-1 items-center px-4 py-3.5">{row}</span>
+      <span
+        className={cn(
+          'flex w-full items-center justify-between border-t px-4 py-1.5 text-xs font-medium transition-colors',
+          active ? 'border-primary/30 bg-primary text-primary-foreground' : 'bg-primary/[0.04] text-primary group-hover:bg-primary/10'
+        )}
+      >
+        {active ? 'Hide details' : 'View details'}
+        <ChevronDown className={cn('size-3.5 transition-transform', active && 'rotate-180')} aria-hidden="true" />
+      </span>
+    </button>
+  )
+}
+
 /** The AI's score out of 100 as a ring, with its band and the recommendation beside it. */
-function ScoreCard({ review }) {
+function ScoreCard({ review, active, onSelect }) {
   const recommendation = RECOMMENDATIONS[review.recommendation]
   const scored = Number.isFinite(review.score)
   const band = scored ? scoreBand(review.score) : null
   const circumference = 2 * Math.PI * 34
   return (
-    <div className="flex items-center gap-4 rounded-lg border bg-background/60 px-4 py-3">
+    <CardFrame active={active} onSelect={onSelect} label="AI score" className="gap-4">
       <div className={cn('relative size-20 shrink-0', band?.tone || 'text-muted-foreground')}>
         <svg viewBox="0 0 80 80" className="size-full -rotate-90" aria-hidden="true">
           <circle cx="40" cy="40" r="34" fill="none" strokeWidth="7" className="stroke-muted" />
@@ -213,50 +248,7 @@ function ScoreCard({ review }) {
           {review.riskLevel ? <span className="whitespace-nowrap font-normal text-muted-foreground">· {review.riskLevel[0].toUpperCase() + review.riskLevel.slice(1)} risk</span> : null}
         </p>
       </div>
-    </div>
-  )
-}
-
-const OVERVIEW_TONES = { high: 'text-destructive', medium: 'text-warning', low: 'text-muted-foreground', unknown: 'text-warning' }
-const OVERVIEW_LIMIT = 2
-
-/** The few most serious points from one source, one line each, and a way into the detail. */
-function Overview({ icon, title, items, empty, extra, onMore }) {
-  const shown = items.slice(0, OVERVIEW_LIMIT)
-  const hidden = items.length - shown.length
-  return (
-    <div className="flex flex-col rounded-lg border p-4">
-      <SubHeading icon={icon}>
-        {title}
-      </SubHeading>
-      {shown.length ? (
-        <ul className="mt-3 space-y-2">
-          {shown.map((item) => {
-            const Icon = item.tone === 'unknown' ? CircleDashed : AlertTriangle
-            return (
-              <li key={item.key} className="flex gap-2 text-sm">
-                <Icon className={cn('mt-0.5 size-4 shrink-0', OVERVIEW_TONES[item.tone])} aria-hidden="true" />
-                <span className="min-w-0" title={item.text}>
-                  <span className="line-clamp-2 text-foreground sm:line-clamp-1">{item.text}</span>
-                  {item.detail ? <span className="mt-0.5 line-clamp-1 block text-xs text-muted-foreground">{item.detail}</span> : null}
-                </span>
-              </li>
-            )
-          })}
-        </ul>
-      ) : (
-        <p className="mt-3 flex items-center gap-2 text-sm text-muted-foreground">
-          <CheckCircle2 className="size-4 text-success" aria-hidden="true" />
-          {empty}
-        </p>
-      )}
-      <p className="mt-3 flex flex-wrap items-baseline gap-x-2 text-xs">
-        <button type="button" onClick={onMore} className="font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-          {hidden > 0 ? `View all ${items.length}` : 'View details'}
-        </button>
-        {extra ? <span className="text-muted-foreground">· {extra}</span> : null}
-      </p>
-    </div>
+    </CardFrame>
   )
 }
 
@@ -288,15 +280,15 @@ function AiSummary({ text }) {
 }
 
 /** A card's figure with a small picture of it on the left (`graphic`). */
-function Tile({ label, graphic, children }) {
+function Tile({ label, graphic, active, onSelect, children }) {
   return (
-    <div className="flex items-center gap-3 rounded-lg border bg-background/60 px-4 py-3">
+    <CardFrame active={active} onSelect={onSelect} label={label}>
       {graphic ? <div className="shrink-0">{graphic}</div> : null}
       <div className="min-w-0">
         <p className="text-xs text-muted-foreground">{label}</p>
         <div className="mt-1">{children}</div>
       </div>
-    </div>
+    </CardFrame>
   )
 }
 
@@ -381,7 +373,7 @@ function CrbGauge({ score, tone }) {
 const BAND_TONE = { 'Very low risk': 'text-success', 'Low risk': 'text-success', 'Medium risk': 'text-warning', 'High risk': 'text-destructive' }
 
 /** The credit bureau tile: the score and its band, and when the report was pulled (the Credit bureau panel has the report). */
-function CrbTile({ reports = [], applies = true, hasConsent, score }) {
+function CrbTile({ reports = [], applies = true, hasConsent, score, active, onSelect }) {
   const latest = reports[0]
   const band = latest?.report?.band
   const note = latest
@@ -394,7 +386,7 @@ function CrbTile({ reports = [], applies = true, hasConsent, score }) {
           ? 'Not pulled yet'
           : 'No consent'
   return (
-    <Tile label="CRB score" graphic={<CrbGauge score={score} tone={BAND_TONE[band]} />}>
+    <Tile label="CRB score" graphic={<CrbGauge score={score} tone={BAND_TONE[band]} />} active={active} onSelect={onSelect}>
       <p className={cn('text-sm font-medium', score == null ? 'text-muted-foreground' : BAND_TONE[band] || 'text-foreground')}>
         {score == null ? 'No score' : <span className="tabular-nums">{score}</span>}
         {score != null && band ? <span className="font-normal">{` · ${band}`}</span> : null}
@@ -505,10 +497,13 @@ function UncheckedRules({ results, evidence, actions, onOpenDocument, onOpenDeta
  * @param actions  what an unchecked rule's button does, by the action its reason names
  *                 (enter_figure, ask_applicant, run_crb, rerun, settings); missing: no button
  */
-export function CaseSummary({ application, documents: allDocuments, prescreen, zra, crb, showAi, canRerun, onRerun, onOpenDocument, onOpenDetails, actions = {} }) {
+export function CaseSummary({ application, documents: allDocuments, prescreen, zra, crb, crbDetail = null, showAi, canRerun, onRerun, onOpenDocument, onOpenDetails, actions: given = {} }) {
   const [busy, setBusy] = useState(false)
-  // The detailed report's open tab, or null while it is folded away.
+  // Which card's details are open below the cards ('ai', 'rules', 'documents', 'crb'), or null: only the cards show until one is picked.
   const [report, setReport] = useState(null)
+  const toggle = (key) => setReport((open) => (open === key ? null : key))
+  // "Go to credit check" on a rule it couldn't check opens the bureau card here.
+  const actions = { ...given, ...(given.run_crb && crbDetail ? { run_crb: () => openReport('crb') } : {}) }
   const reportRef = useRef(null)
   const [scrollToReport, setScrollToReport] = useState(false)
   const openReport = (tab) => {
@@ -585,8 +580,8 @@ export function CaseSummary({ application, documents: allDocuments, prescreen, z
   const crbScore = crb?.reports?.[0]?.score ?? prescreen.facts?.crb_score ?? null
 
   return (
-    <section className="rounded-xl border bg-card" aria-labelledby="case-summary-title">
-      <div className="flex items-start justify-between gap-3 border-b px-5 py-4">
+    <section aria-labelledby="case-summary-title">
+      <div className="flex items-start justify-between gap-3 pb-3">
         <div className="min-w-0">
           <h2 id="case-summary-title" className="text-sm font-semibold text-foreground">
             Assessment summary
@@ -604,12 +599,14 @@ export function CaseSummary({ application, documents: allDocuments, prescreen, z
         ) : null}
       </div>
 
-      <div className="space-y-5 p-5">
+      <div className="space-y-4">
         <div className={cn('grid gap-3', review && 'lg:grid-cols-[minmax(0,4fr)_minmax(0,8fr)]')}>
-          {review ? <ScoreCard review={review} /> : null}
+          {review ? <ScoreCard review={review} active={report === 'ai'} onSelect={() => toggle('ai')} /> : null}
           <div className={cn('grid gap-3', showCrb ? 'sm:grid-cols-3' : 'sm:grid-cols-2')}>
             <Tile
               label="Policy rules"
+              active={report === 'rules'}
+              onSelect={() => toggle('rules')}
               graphic={
                 <Ring
                   label={`${fired.length} concerns, ${passed.length} passed, ${unknown.length} unchecked`}
@@ -631,6 +628,8 @@ export function CaseSummary({ application, documents: allDocuments, prescreen, z
             </Tile>
             <Tile
               label="Documents"
+              active={report === 'documents'}
+              onSelect={() => toggle('documents')}
               graphic={
                 <Ring
                   label={`${withFindings.length} of ${documents.length} with findings, ${unchecked.length} not checked`}
@@ -651,84 +650,15 @@ export function CaseSummary({ application, documents: allDocuments, prescreen, z
                 <p className="mt-1 text-xs text-muted-foreground">{unchecked.length ? `${unchecked.length} not checked` : 'All checked'}</p>
               ) : null}
             </Tile>
-            {showCrb ? <CrbTile {...crb} score={crbScore} /> : null}
+            {showCrb ? <CrbTile {...crb} score={crbScore} active={report === 'crb'} onSelect={crbDetail ? () => toggle('crb') : undefined} /> : null}
           </div>
         </div>
-        {review?.summary ? <AiSummary text={review.summary} /> : null}
         {showAi && !review && prescreen.aiError ? <p className="text-sm text-muted-foreground">The AI review couldn’t run.</p> : null}
 
-        <div className={cn('grid gap-4', review && 'lg:grid-cols-2')}>
-          <Overview
-            icon={ClipboardList}
-            title="Policy rules"
-            empty="No rule raised a concern."
-            items={[
-              ...fired.map((result) => ({
-                key: result.id,
-                text: result.message,
-                tone: result.outcome === 'decline' ? 'high' : result.outcome === 'refer' ? 'medium' : 'low',
-              })),
-              ...unknown.map((result) => ({
-                key: result.id,
-                text: `Couldn’t check: ${describeCondition(result)}`,
-                detail: reasonParts(result).why,
-                tone: 'unknown',
-              })),
-            ]}
-            onMore={() => openReport('rules')}
-          />
-          {review ? (
-            <Overview
-              icon={Sparkles}
-              title="AI review"
-              empty="The AI raised no flags."
-              items={flags.map((flag, index) => ({
-                key: `${flag.category}-${index}`,
-                text: flag.detail,
-                tone: flag.severity,
-              }))}
-              extra={review.missingInformation?.length ? `${review.missingInformation.length} missing` : null}
-              onMore={() => openReport('ai')}
-            />
-          ) : null}
-        </div>
-
-        <div className="rounded-lg border">
-          <button
-            type="button"
-            onClick={() => setReport(report ? null : 'rules')}
-            aria-expanded={Boolean(report)}
-            className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left text-sm font-medium text-foreground transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-          >
-            <span className="flex items-center gap-2">
-              <FileSearch className="size-4 text-muted-foreground" aria-hidden="true" />
-              Detailed report
-            </span>
-            <ChevronDown className={cn('size-4 shrink-0 text-muted-foreground transition-transform', report && 'rotate-180')} aria-hidden="true" />
-          </button>
-          {report ? (
-            <div ref={reportRef} className="scroll-mt-4 space-y-4 border-t p-4">
-              <div className="flex gap-1 overflow-x-auto border-b" role="tablist" aria-label="Detailed report">
-                {[['rules', `Policy rules (${prescreen.ruleResults.length})`], ...(review ? [['ai', `AI review (${flags.length})`]] : []), ['documents', `Documents (${documents.length})`]].map(
-                  ([key, label]) => (
-                    <button
-                      key={key}
-                      type="button"
-                      role="tab"
-                      aria-selected={report === key}
-                      onClick={() => setReport(key)}
-                      className={cn(
-                        '-mb-px shrink-0 border-b-2 px-3 py-2 text-sm font-medium transition-colors',
-                        report === key ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'
-                      )}
-                    >
-                      {label}
-                    </button>
-                  )
-                )}
-              </div>
+        {report ? (
+            <div ref={reportRef} className={cn('scroll-mt-4 space-y-4', report !== 'crb' && 'rounded-xl border bg-card p-4 shadow-sm')}>
               {report === 'rules' ? (
-                <div className="space-y-3 rounded-lg border p-4">
+                <div className="space-y-3">
                   <SubHeading icon={ClipboardList}>Policy rules</SubHeading>
                   {fired.length ? (
                     <ul className="space-y-3">
@@ -776,10 +706,11 @@ export function CaseSummary({ application, documents: allDocuments, prescreen, z
                 </div>
               ) : null}
               {report === 'ai' && review ? (
-                <div className="space-y-3 rounded-lg border p-4">
+                <div className="space-y-3">
                   <SubHeading icon={Sparkles} aside={review.model ? `${review.model}, ${timeAgo(review.generatedAt || prescreen.updatedAt)}` : null}>
                     AI review
                   </SubHeading>
+                  {review.summary ? <AiSummary text={review.summary} /> : null}
                   {flags.length ? (
                     <ul className="space-y-3">
                       {flags.map((flag, index) => (
@@ -873,9 +804,9 @@ export function CaseSummary({ application, documents: allDocuments, prescreen, z
                   )}
                 </div>
               ) : null}
+              {report === 'crb' ? crbDetail : null}
             </div>
-          ) : null}
-        </div>
+        ) : null}
 
         {/* The bureau report has its own panel on this tab; the ZRA check is shown here. */}
         {zra ? (

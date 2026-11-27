@@ -2,7 +2,7 @@ import { and, desc, eq, gte, inArray, isNotNull, isNull, lt, ne, sql } from 'dri
 import { getDb, schema } from '../_lib/db/client.js'
 import { can, requireUser } from '../_lib/rbac.js'
 import { getRole, rolesWith } from '../_lib/roles.js'
-import { scopeApplications } from '../_lib/applications.js'
+import { scopeFor } from '../_lib/applications.js'
 import { getSetting } from '../_lib/settings.js'
 import { scopeDrafts } from '../_lib/drafts.js'
 import { queueCondition } from '../_lib/workflow.js'
@@ -22,14 +22,14 @@ const int = (value) => Number(value) || 0
 
 /**
  * The home dashboard for the signed-in role. Every figure is limited to the applications
- * that role may see (scopeApplications), so an agent's "approval rate" is theirs alone.
+ * that role may see (scopeFor: its scope and the stages it works on), so an agent's "approval rate" is theirs alone.
  *
  * `days` (7–365, default 30) sets the period; KPIs compare it with the period before.
  */
 const dashboard = async (req, res, { query }) => {
   const viewer = await requireUser(req, { staff: true })
   const db = await getDb()
-  const scope = scopeApplications(viewer)
+  const scope = await scopeFor(viewer)
   const days = Math.min(365, Math.max(7, Number(query.get('days')) || 30))
   const now = new Date()
   const start = new Date(now.getTime() - days * DAY_MS)
@@ -180,6 +180,8 @@ const dashboard = async (req, res, { query }) => {
         overdue: sql`count(*) filter (where ${inArray(applications.status, OPEN_STATUSES)} and ${lt(applications.submittedAt, overdueBefore)})`,
       })
       .from(applications)
+      // Only the cases they may see (scopeFor), like every other figure here.
+      .where(scope)
     const [mine] = await db
       .select({
         judgements: sql`count(*)`,

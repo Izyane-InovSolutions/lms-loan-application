@@ -206,6 +206,9 @@ export const SETTING_DEFAULTS = {
   ai: {
     // Admin switch for AI document checks and the AI prescreen, for applicants and staff alike.
     enabled: true,
+    // AI insights: the AI's review of a whole application (score, recommendation, summary,
+    // flags, and the applicant's guidance before submitting). Off, documents are still read.
+    insights: true,
     provider: 'environment',
     // When the chosen model is overloaded, rate-limited or times out, try these in order.
     fallback: true,

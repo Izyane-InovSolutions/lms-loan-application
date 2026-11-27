@@ -1,6 +1,8 @@
 import { and, eq, or, sql } from 'drizzle-orm'
 import { getDb, schema } from './db/client.js'
 import { fail } from './http.js'
+import { stageCondition } from './visibility.js'
+import { caseWorkflow, worksOnStage } from './workflow.js'
 
 const { applications, applicationEvents, users } = schema
 
@@ -37,17 +39,35 @@ export const scopeApplications = (viewer) => {
   }
 }
 
-/** One application the viewer may see, or a 404 — never a 403, which would confirm it exists. */
-export const findVisibleApplication = async (viewer, id) => {
+/**
+ * Everything that decides which applications `viewer` sees: their role's scope, then the
+ * stages their role works on plus the cases they have worked on (visibility.js). Every list,
+ * count and case lookup for staff goes through this. A where-clause, or undefined.
+ */
+export const scopeFor = async (viewer) => {
+  const parts = [scopeApplications(viewer), await stageCondition(viewer)].filter(Boolean)
+  return parts.length ? and(...parts) : undefined
+}
+
+/**
+ * One application the viewer may see, or a 404 — never a 403, which would confirm it exists.
+ * With `change`, for anything that changes the case: a 403 unless their role works on the
+ * stage it is at (a case they only worked on before is theirs to read, not to change).
+ */
+export const findVisibleApplication = async (viewer, id, { change = false } = {}) => {
   if (!/^[0-9a-f-]{36}$/i.test(String(id))) fail(404, 'Application not found.', 'not_found')
   const db = await getDb()
-  const scope = scopeApplications(viewer)
+  const scope = await scopeFor(viewer)
   const [row] = await db
     .select()
     .from(applications)
     .where(scope ? and(eq(applications.id, id), scope) : eq(applications.id, id))
     .limit(1)
   if (!row) fail(404, 'Application not found.', 'not_found')
+  if (change && viewer.role !== 'admin' && viewer.role !== 'customer') {
+    const { flow, state } = await caseWorkflow(row)
+    if (!worksOnStage(viewer, state, flow.definition)) fail(403, 'This case is at a stage your role doesn’t work on.', 'read_only')
+  }
   return row
 }
 

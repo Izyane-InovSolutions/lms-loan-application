@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest'
-import { createMemoryKv, client, draftPreparer, emailCode, signaturePng, signedAcceptance } from './helpers.js'
+import { createMemoryKv, client, draftPreparer, emailCode, signaturePng, signedAcceptance, documentVerifier, toDecision } from './helpers.js'
 
 const kv = createMemoryKv()
 vi.mock('../api/_lib/kv.js', () => ({ default: kv }))
@@ -106,6 +106,7 @@ describe('the offer, on a workflow from before stage documents', () => {
     const email = 'legacy-offer@example.com'
     const { id, reference } = await submit(email)
     await act(officer, id, 'start_review')
+    await toDecision((action, extra) => act(officer, id, action, extra), { verify: documentVerifier(officer, id) })
     for (const check of ['identity', 'documents', 'income']) await act(officer, id, 'check', { check, done: true, note: 'Seen' })
     await act(officer, id, 'recommend', { verdict: 'approve', rationale: 'Affordable' })
     expect((await act(admin, id, 'decide', { verdict: 'approve', rationale: 'Agreed' })).body.application.status).toBe('approved')

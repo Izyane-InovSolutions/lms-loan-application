@@ -1,6 +1,6 @@
 import crypto from 'node:crypto'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
-import { PDF, createMemoryKv, client, draftPreparer, emailCode } from './helpers.js'
+import { PDF, createMemoryKv, client, draftPreparer, emailCode, termsFor, documentVerifier, toDecision } from './helpers.js'
 import { BUILT_IN_ROLES } from '../src/config/roles.js'
 
 const kv = createMemoryKv()
@@ -212,7 +212,10 @@ describe('application lifecycle', () => {
     const stale = await officer.post(`/applications/${applicationId}/actions`, { action: 'note', message: 'late', version: case_.version - 1 })
     expect(stale.body.code).toBe('stale')
 
-    // Approval needs the checklist first.
+    await toDecision((action, extra) => act(officer, action, extra), { terms: termsFor(4500), verify: documentVerifier(officer, applicationId) })
+    // Approval needs the checklist first, where the workspace marks items needed to approve.
+    const checklist = ['identity', 'documents', 'income'].map((key) => ({ key, label: key, requiredToApprove: true }))
+    expect((await admin.put('/settings/stages', { checklist, review: [], approval: [], closing: [] })).status).toBe(200)
     expect((await act(officer, 'recommend', { verdict: 'approve', rationale: 'Looks good' })).body.code).toBe('checks_incomplete')
     for (const check of ['identity', 'documents', 'income']) {
       expect((await act(officer, 'check', { check, done: true, note: 'Seen original' })).status).toBe(200)
@@ -289,6 +292,7 @@ describe('application lifecycle', () => {
     expect(replaced.body.prescreen.facts.net_monthly_pay).toBeNull()
 
     version = after.version
+    await toDecision((action, extra) => act({ action, ...extra }), { verify: documentVerifier(officer, submitted.id) })
     await act({ action: 'recommend', verdict: 'decline', rationale: 'Internal: suspected fake payslip' })
     const approver = client(handler)
     await approver.post('/auth/demo', { role: 'admin' })
@@ -312,10 +316,13 @@ describe('application lifecycle', () => {
       return response
     }
     await act({ action: 'start_review' })
+    await toDecision((action, extra) => act({ action, ...extra }), { terms: termsFor(5000), verify: documentVerifier(officer, submitted.id) })
     for (const check of ['identity', 'documents', 'income']) await act({ action: 'check', check, done: true, note: 'Seen original' })
-    const over = await act({ action: 'recommend', verdict: 'approve', rationale: 'Fine', amount: 5000 })
+    // The appraised amount is what is decided: over the officer's limit until the limit is raised.
+    const over = await act({ action: 'recommend', verdict: 'approve', rationale: 'Fine' })
     expect(over.body.code).toBe('over_limit')
-    const within = await act({ action: 'recommend', verdict: 'approve', rationale: 'Fine', amount: 3000 })
+    await admin.patch(`/users/${officerId}`, { approvalMin: 0, approvalMax: 5000 })
+    const within = await act({ action: 'recommend', verdict: 'approve', rationale: 'Fine' })
     expect(within.body.application.status).toBe('approved')
     await admin.patch(`/users/${officerId}`, { approvalMin: 0, approvalMax: null })
     await admin.put('/settings/workflow', { requireSecondApproval: true, slaDays: 3, requireLegalReview: false })

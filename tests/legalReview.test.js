@@ -28,7 +28,8 @@ beforeAll(async () => {
   const db = await getDb()
   const [row] = await db.select().from(schema.applications).where(eq(schema.applications.id, caseId))
   const collateral = { items: [{ code: 'MV-CAR', type: 'motor_vehicle', name: 'Passenger vehicle', description: 'Toyota Hilux ABC 1234', value: 180000, haircut: 0.3, ltv: 0.7 }] }
-  await db.update(schema.applications).set({ data: { ...row.data, collateral } }).where(eq(schema.applications.id, caseId))
+  // At Underwriting, where the legal officer works (stageVisibility.test.js).
+  await db.update(schema.applications).set({ data: { ...row.data, collateral }, state: 'in_review', status: 'in_review' }).where(eq(schema.applications.id, caseId))
 })
 
 describe('the legal officer', () => {
@@ -64,6 +65,35 @@ describe('the legal officer', () => {
   })
 })
 
+/**
+ * Publishes a workflow as it was before underwriting had its own stage (Appraisal values the
+ * collateral, then the review recommends), then puts the current one back; returns the older
+ * version's number.
+ */
+const publishOldStyleWorkflow = async () => {
+  const { legacyToWorkflow } = await import('../src/config/workflow.js')
+  const current = (await admin.get('/admin/workflow')).body.published.definition
+  const base = legacyToWorkflow({})
+  const decision = base.states.find((state) => state.id === 'decision')
+  const definition = {
+    ...base,
+    legacy: undefined,
+    states: base.states
+      .filter((state) => state.id !== 'decision')
+      .map((state) => {
+        if (state.id === 'appraisal') return { ...state, work: undefined, appraisal: true, actions: [{ id: 'appraised', label: 'Appraisal done', kind: 'move', to: 'in_review', permission: 'cases.work' }] }
+        if (state.id === 'in_review') return { ...state, work: undefined, actions: decision.actions }
+        return state
+      }),
+  }
+  expect((await admin.put('/admin/workflow/draft', { definition })).status).toBe(200)
+  const published = await admin.post('/admin/workflow/publish', {})
+  expect(published.status, JSON.stringify(published.body)).toBe(200)
+  expect((await admin.put('/admin/workflow/draft', { definition: current })).status).toBe(200)
+  expect((await admin.post('/admin/workflow/publish', {})).status).toBe(200)
+  return published.body.published.version
+}
+
 describe('legal sign-off before approval', () => {
   let pendingId
   const approveAs = (who, id) => async () => {
@@ -81,11 +111,14 @@ describe('legal sign-off before approval', () => {
 
   it('holds a secured loan until its collateral is valued and verified, with its proof files', async () => {
     const pending = { id: pendingId }
-    // The same case, now pledging a vehicle, with one proof file.
+    // The same case, now pledging a vehicle, with one proof file — on an older workflow version,
+    // without an underwriting stage: there, approval waits for this per-item check (a version
+    // with one waits for underwriting's own records, tests/underwriting.test.js).
     const db = await getDb()
     const [row] = await db.select().from(schema.applications).where(eq(schema.applications.id, pending.id))
     const collateral = { items: [{ code: 'MV-CAR', type: 'motor_vehicle', name: 'Passenger vehicle', description: 'Toyota Hilux ABC 1234', value: 180000, haircut: 0.3, ltv: 0.7 }] }
-    await db.update(schema.applications).set({ data: { ...row.data, collateral } }).where(eq(schema.applications.id, pending.id))
+    const oldVersion = await publishOldStyleWorkflow()
+    await db.update(schema.applications).set({ data: { ...row.data, collateral }, workflowVersion: oldVersion }).where(eq(schema.applications.id, pending.id))
     const [proof] = await db
       .insert(schema.applicationDocuments)
       .values({ applicationId: pending.id, slot: 'collateral.0.0', docType: 'collateral', label: 'Collateral 1 proof 1', pathname: 'x', url: 'x', filename: 'whitebook.pdf', source: 'applicant' })
@@ -168,6 +201,8 @@ describe('several proof files per collateral item', () => {
     body.data.documents.collateral = [[{ __draftFile__: 'personal.documents.collateral.0.0' }, { __draftFile__: 'personal.documents.collateral.0.1' }]]
     const filed = await client(handler).post('/applications', body, { authorization: `Bearer ${token}` })
     expect(filed.status).toBe(200)
+    // Once it reaches Underwriting, the legal officer's stage.
+    await (await getDb()).update(schema.applications).set({ state: 'in_review', status: 'in_review' }).where(eq(schema.applications.id, filed.body.id))
     const { documents } = (await legal.get(`/applications/${filed.body.id}`)).body
     expect(documents.filter((entry) => entry.slot.startsWith('collateral.')).map((entry) => [entry.slot, entry.label, entry.contentType])).toEqual(
       expect.arrayContaining([
@@ -180,7 +215,9 @@ describe('several proof files per collateral item', () => {
 
 describe('collateral valuations (Appraisal)', () => {
   it('records a valuation, lends on its market value, and files the valuer’s report', async () => {
-    // caseId pledged a vehicle the applicant put at K180,000.
+    // caseId pledged a vehicle the applicant put at K180,000. Back at Appraisal, the officer's stage
+    // (outside Underwriting, a valuation doesn't need its report first).
+    await (await getDb()).update(schema.applications).set({ state: 'appraisal', status: 'in_review' }).where(eq(schema.applications.id, caseId))
     const unvalued = (await officer.get(`/applications/${caseId}`)).body
     expect(unvalued.application.valuations).toEqual({})
     expect((await legal.put(`/applications/${caseId}/valuations/0`, { valuer: 'Knight Frank', valuedOn: '2026-10-30', marketValue: 150000 })).status).toBe(403)

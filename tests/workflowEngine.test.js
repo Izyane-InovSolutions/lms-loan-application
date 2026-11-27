@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest'
-import { createMemoryKv, client, draftPreparer, signedAcceptance } from './helpers.js'
+import { createMemoryKv, client, draftPreparer, signedAcceptance, documentVerifier, toDecision } from './helpers.js'
 
 const kv = createMemoryKv()
 vi.mock('../api/_lib/kv.js', () => ({ default: kv }))
@@ -7,13 +7,15 @@ vi.mock('../api/_lib/kv.js', () => ({ default: kv }))
 const { default: handler } = await import('../api/v1/[...path].js')
 const { putBlob } = await import('../api/_lib/blob.js')
 const { getDb, schema } = await import('../api/_lib/db/client.js')
-const { eq } = await import('drizzle-orm')
-const { getWorkflowVersion, saveDraftWorkflow, publishDraftWorkflow, isLegacyManaged } = await import('../api/_lib/workflowVersions.js')
+const { eq, sql } = await import('drizzle-orm')
+const { getWorkflowVersion, getPublishedWorkflow, saveDraftWorkflow, publishDraftWorkflow, isLegacyManaged, clearWorkflowCache } = await import('../api/_lib/workflowVersions.js')
+const { legacyStateOf, legacyToWorkflow, resolveState, validateWorkflow } = await import('../src/config/workflow.js')
 
 const prepareDraft = draftPreparer(kv, putBlob)
 const admin = client(handler)
 const officer = client(handler)
 const salesManager = client(handler)
+let salesManagerId
 const applicant = client(handler)
 
 const submit = async (email) => {
@@ -49,7 +51,74 @@ beforeAll(async () => {
   // Approval without legal sign-off: these tests are about what comes before and after it (tests/legalReview.test.js covers the gate).
   await admin.put('/settings/workflow', { requireSecondApproval: true, slaDays: 3, requireLegalReview: false })
   await officer.post('/auth/demo', { role: 'loan_officer' })
-  await salesManager.post('/auth/demo', { role: 'sales_manager' })
+  salesManagerId = (await salesManager.post('/auth/demo', { role: 'sales_manager' })).body.user.id
+})
+
+describe('the default graph: appraisal sets the terms, underwriting checks, then the decision', () => {
+  const byId = (definition, id) => definition.states.find((state) => state.id === id)
+
+  it('sets the terms at Appraisal for every loan, and decides after Underwriting', () => {
+    const definition = legacyToWorkflow({})
+    const appraisal = byId(definition, 'appraisal')
+    expect(appraisal.work).toBe('terms')
+    expect(appraisal.appraisal).toBeUndefined()
+    expect(appraisal.actions).toEqual([{ id: 'appraised', label: 'Approve', kind: 'move', to: 'in_review', permission: 'cases.work' }])
+    const underwriting = byId(definition, 'in_review')
+    expect(underwriting).toMatchObject({ label: 'Underwriting', work: 'underwriting', legacyStatus: 'in_review' })
+    expect(underwriting.actions).toEqual([{ id: 'underwritten', label: 'Approve', kind: 'move', to: 'decision', permission: 'cases.work' }])
+    const decision = byId(definition, 'decision')
+    expect(decision).toMatchObject({ label: 'Credit decision', legacyStatus: 'in_review', askApplicant: true })
+    expect(decision.actions.map((action) => [action.id, action.kind, action.to])).toEqual([['recommend', 'recommend', 'pending_approval']])
+    expect(byId(definition, 'pending_approval').actions.find((action) => action.kind === 'return').to).toBe('in_review')
+    const { errors, categories } = validateWorkflow(definition)
+    expect(errors).toEqual([])
+    expect(categories).toMatchObject({ appraisal: 'in_review', in_review: 'in_review', decision: 'in_review', pending_approval: 'pending_approval' })
+    // An unsecured loan no longer passes Appraisal by.
+    expect(resolveState(definition, 'appraisal', { form: 'personal', collateral: false }).id).toBe('appraisal')
+  })
+
+  it('lets the decision approve or decline alone with four-eyes off', () => {
+    const definition = legacyToWorkflow({ workflow: { requireSecondApproval: false } })
+    const decision = byId(definition, 'decision')
+    expect(decision.actions.map((action) => [action.kind, action.options.singleStep])).toEqual([
+      ['approve', true],
+      ['reject', true],
+    ])
+    expect(byId(definition, 'in_review').actions.map((action) => action.id)).toEqual(['underwritten'])
+    expect(validateWorkflow(definition).errors).toEqual([])
+  })
+
+  it('puts the review stages between Appraisal and Underwriting', () => {
+    const definition = legacyToWorkflow({ stages: { review: [{ id: 'document_check', label: 'Document check', checks: [], roles: [], products: [] }] } })
+    expect(byId(definition, 'appraisal').actions[0].to).toBe('document_check')
+    expect(byId(definition, 'document_check').actions[0].to).toBe('in_review')
+    expect(validateWorkflow(definition).errors).toEqual([])
+  })
+
+  it('maps a case in review to Underwriting, not the decision', () => {
+    expect(legacyStateOf(legacyToWorkflow({}), { status: 'in_review', loanType: 'personal', stageProgress: {} })).toBe('in_review')
+  })
+
+  it('allows one stage per loan to set the terms, one to underwrite, and terms before the decision', () => {
+    const definition = legacyToWorkflow({})
+    const twice = (work) => ({ ...definition, states: definition.states.map((state) => (state.id === 'submitted' || state.id === 'appraisal' || state.id === 'in_review' ? { ...state, work } : state)) })
+    const messages = (candidate) => validateWorkflow(candidate).errors.map((error) => error.message)
+    expect(messages(twice('terms'))).toContain('Only one stage can set the loan terms.')
+    expect(messages(twice('underwriting'))).toContain('Only one stage can do the underwriting checks.')
+    // Each for a different loan type is fine.
+    const split = {
+      ...definition,
+      states: definition.states.map((state) => {
+        if (state.id === 'appraisal') return { ...state, products: ['personal'] }
+        if (state.id === 'in_review') return { ...state, work: 'terms', products: ['business'] }
+        return state
+      }),
+    }
+    expect(messages(split).filter((message) => /loan terms/.test(message))).toEqual([])
+    // Terms set after the recommendation come too late.
+    const late = { ...definition, states: definition.states.map((state) => (state.id === 'appraisal' ? { ...state, work: undefined } : state.id === 'pending_approval' ? { ...state, work: 'terms' } : state)) }
+    expect(messages(late)).toContain('The loan terms must be set before the credit decision.')
+  })
 })
 
 describe('the workflow made from today’s settings', () => {
@@ -64,7 +133,9 @@ describe('the workflow made from today’s settings', () => {
 
   it('keeps status and state together through the usual journey', async () => {
     await act(officer, id, 'start_review')
-    expect(await consistent(id)).toMatchObject({ state: 'in_review', status: 'in_review' })
+    expect(await consistent(id)).toMatchObject({ state: 'appraisal', status: 'in_review' })
+    await toDecision((action, extra) => act(officer, id, action, extra), { verify: documentVerifier(officer, id) })
+    expect(await consistent(id)).toMatchObject({ state: 'decision', status: 'in_review' })
     for (const check of ['identity', 'documents', 'income']) await act(officer, id, 'check', { check, done: true })
     expect(await consistent(id)).toMatchObject({
       checks: {
@@ -74,7 +145,7 @@ describe('the workflow made from today’s settings', () => {
       },
     })
     await act(officer, id, 'request_info', { message: 'Send a clearer NRC please' })
-    expect(await consistent(id)).toMatchObject({ state: 'in_review', status: 'info_requested' })
+    expect(await consistent(id)).toMatchObject({ state: 'decision', status: 'info_requested' })
     expect((await act(officer, id, 'recommend', { verdict: 'approve', rationale: 'Fine' })).body.code).toBe('invalid_state')
     await act(officer, id, 'cancel_request', { reason: 'Found it in the file' })
     expect(await consistent(id)).toMatchObject({ status: 'in_review' })
@@ -83,6 +154,7 @@ describe('the workflow made from today’s settings', () => {
   it('lets underwriting ask the applicant for more before it decides', async () => {
     const other = await submit('underwriting-asks@example.com')
     await act(officer, other, 'start_review')
+    await toDecision((action, extra) => act(officer, other, action, extra), { verify: documentVerifier(officer, other) })
     for (const check of ['identity', 'documents', 'income']) await act(officer, other, 'check', { check, done: true })
     await act(officer, other, 'recommend', { verdict: 'approve', rationale: 'Affordable' })
     expect(await consistent(other)).toMatchObject({ state: 'pending_approval', status: 'pending_approval' })
@@ -98,7 +170,8 @@ describe('the workflow made from today’s settings', () => {
     expect((await admin.put('/settings/workflow', { requireSecondApproval: false, slaDays: 3, requireLegalReview: false })).status).toBe(200)
     const moved = await consistent(id)
     expect(moved.workflowVersion).toBe(2)
-    expect(moved.state).toBe('in_review')
+    // A case keeps its stage when the remade workflow still has it.
+    expect(moved.state).toBe('decision')
     const approved = await act(officer, id, 'recommend', { verdict: 'approve', rationale: 'Affordable' })
     expect(approved.body.application.status, JSON.stringify(approved.body)).toBe('approved')
     expect(await consistent(id)).toMatchObject({ state: 'approved' })
@@ -172,7 +245,7 @@ describe('a workflow published from the editor', () => {
 
   it('leaves open cases on the version they started with', async () => {
     const application = await consistent(before)
-    expect(application.state).toBe('in_review')
+    expect(application.state).toBe('appraisal')
     expect((await getWorkflowVersion(application.workflowVersion)).legacy).toBe(true)
     // Settings changes no longer rewrite the workflow.
     await admin.put('/settings/workflow', { requireSecondApproval: false, slaDays: 3, requireLegalReview: false })
@@ -184,8 +257,8 @@ describe('a workflow published from the editor', () => {
     expect((await move(officer, id, 'prescreen')).status).toBe(200)
     expect(await consistent(id)).toMatchObject({ state: 'prescreening', status: 'in_review' })
 
-    // Prescreening is the loan officers’.
-    expect((await move(salesManager, id, 'underwrite', { verdict: 'approve', rationale: 'Fine' })).status).toBe(403)
+    // Prescreening is the loan officers’: a sales manager who hasn't worked the case doesn't see it there.
+    expect((await move(salesManager, id, 'underwrite', { verdict: 'approve', rationale: 'Fine' })).status).toBe(404)
     expect((await move(officer, id, 'underwrite', { verdict: 'approve', rationale: 'Fine' })).body.code).toBe('checks_incomplete')
     await act(officer, id, 'check', { check: 'identity', done: true, note: 'NRC seen' })
     const recommended = await move(officer, id, 'underwrite', { verdict: 'approve', rationale: 'Affordable' })
@@ -211,7 +284,8 @@ describe('a workflow published from the editor', () => {
     expect(await consistent(id)).toMatchObject({ state: 'disbursement', status: 'accepted' })
     expect((await move(officer, id, 'pay', { note: 'EFT 1234' })).status).toBe(200)
     expect(await consistent(id)).toMatchObject({ state: 'paid_out', status: 'disbursed' })
-    expect((await move(officer, id, 'pay')).body.code).toBe('invalid_state')
+    // Closed: no stage there is anyone's to work, so it is read-only (stageVisibility.test.js).
+    expect((await move(officer, id, 'pay')).body.code).toBe('read_only')
   })
 
   it('holds booking and payout until the offer’s conditions are met', async () => {
@@ -237,11 +311,12 @@ describe('a workflow published from the editor', () => {
     const done = await officer.post(`/applications/${other}/conditions/c2`, { met: true })
     expect(done.body.application.checks.conditions.every((condition) => condition.met)).toBe(true)
     expect(done.body.events.some((event) => event.message === 'Condition met: Payroll deduction confirmed by the employer (HR letter received)')).toBe(true)
-    expect((await move(officer, other, 'pay', { note: 'EFT 9' })).status).toBe(200)
     expect((await officer.post(`/applications/${other}/conditions/nope`, { met: true })).status).toBe(404)
+    expect((await move(officer, other, 'pay', { note: 'EFT 9' })).status).toBe(200)
   })
 
   it('still finishes the old case on its old workflow', async () => {
+    await toDecision((action, extra) => act(officer, before, action, extra), { verify: documentVerifier(officer, before) })
     for (const check of ['identity', 'documents', 'income']) await act(officer, before, 'check', { check, done: true, note: 'Seen' })
     expect((await act(officer, before, 'recommend', { verdict: 'approve', rationale: 'Fine' })).body.application.status).toBe('pending_approval')
     expect(await consistent(before)).toMatchObject({ state: 'pending_approval' })
@@ -261,6 +336,8 @@ describe('what the workspace shows of a case’s workflow', () => {
       ['back', 'return', null],
       ['reject', 'reject', null],
     ])
+    // A manager following the case (its RM) sees it, though prescreening isn't theirs.
+    await (await getDb()).update(schema.applications).set({ assignedRm: salesManagerId }).where(eq(schema.applications.id, id))
     const forManager = (await salesManager.get(`/applications/${id}`)).body.workflow
     expect(forManager.actions[0].blocked).toMatch(/Waiting for loan officer/)
   })
@@ -370,5 +447,91 @@ describe('a role named on a state never grants a permission it lacks', () => {
     // A permission no state relies on can still go.
     expect((await admin.patch('/roles/loan_officer', { permissions: officers.permissions.filter((permission) => permission !== 'rules.view') })).status).toBe(200)
     await admin.post('/roles/loan_officer/reset', {})
+  })
+})
+
+/** The default graph as it was before Appraisal set the terms: Appraisal values collateral (secured loans only), Underwriting recommends. */
+const formerDefault = () => {
+  const definition = legacyToWorkflow({})
+  const decision = definition.states.find((state) => state.id === 'decision')
+  return {
+    ...definition,
+    states: definition.states
+      .filter((state) => state.id !== 'decision')
+      .map((state) => {
+        if (state.id === 'appraisal') return { ...state, work: undefined, appraisal: true, actions: [{ id: 'appraised', label: 'Appraisal done', kind: 'move', to: 'in_review', permission: 'cases.work' }] }
+        if (state.id === 'in_review') return { ...state, work: undefined, actions: decision.actions }
+        return state
+      }),
+  }
+}
+const SECURED = { items: [{ code: 'MV-CAR', type: 'motor_vehicle', name: 'Passenger vehicle', description: 'Toyota Hilux ABC 1234', value: 180000, haircut: 0.3, ltv: 0.7 }] }
+
+describe('sending a case back to Appraisal', () => {
+  beforeAll(async () => {
+    const definition = legacyToWorkflow({})
+    const states = definition.states.map((state) =>
+      state.id === 'in_review' ? { ...state, actions: [...state.actions, { id: 'back', label: 'Send back', kind: 'return', to: 'appraisal', permission: 'cases.work', options: { requireNote: true } }] } : state
+    )
+    await saveDraftWorkflow({ ...definition, legacy: undefined, states }, 'Underwriting can send back', { id: null })
+    await publishDraftWorkflow({ id: null }, 'Underwriting can send back')
+  })
+
+  it('keeps the saved terms, so Appraisal can approve again', async () => {
+    const id = await submit('terms-again@example.com')
+    expect((await act(officer, id, 'start_review')).status).toBe(200)
+    expect(await consistent(id)).toMatchObject({ state: 'appraisal', status: 'in_review' })
+    expect((await act(officer, id, 'save_terms')).status).toBe(200)
+    expect((await move(officer, id, 'appraised')).status).toBe(200)
+    expect(await consistent(id)).toMatchObject({ state: 'in_review' })
+    expect((await move(officer, id, 'back', { rationale: 'Tenure too long' })).status).toBe(200)
+    const back = await consistent(id)
+    expect(back.state).toBe('appraisal')
+    expect(back.terms?.summary?.instalment).toBeGreaterThan(0)
+    const again = await move(officer, id, 'appraised')
+    expect(again.status, JSON.stringify(again.body)).toBe(200)
+    expect(await consistent(id)).toMatchObject({ state: 'in_review' })
+  })
+})
+
+describe('a version still valuing collateral at Appraisal', () => {
+  beforeAll(async () => {
+    await saveDraftWorkflow({ ...formerDefault(), legacy: undefined }, 'Collateral appraisal', { id: null })
+    await publishDraftWorkflow({ id: null }, 'Collateral appraisal')
+  })
+
+  it('holds a secured loan on its valuation, and passes an unsecured one by', async () => {
+    const secured = await submit('former-secured@example.com')
+    const db = await getDb()
+    const data = (await row(secured)).data
+    await db.update(schema.applications).set({ data: { ...data, collateral: SECURED } }).where(eq(schema.applications.id, secured))
+    await act(officer, secured, 'start_review')
+    expect(await consistent(secured)).toMatchObject({ state: 'appraisal' })
+    const held = await move(officer, secured, 'appraised')
+    expect(held.status).toBe(409)
+    expect(held.body.code).toBe('valuation_incomplete')
+
+    const unsecured = await submit('former-unsecured@example.com')
+    await act(officer, unsecured, 'start_review')
+    expect(await consistent(unsecured)).toMatchObject({ state: 'in_review' })
+    expect((await act(officer, unsecured, 'recommend', { verdict: 'approve', rationale: 'Affordable' })).status).toBe(200)
+  })
+})
+
+describe('a workflow still made from the settings, on the former default', () => {
+  it('is remade with the new graph, keeping cases in review at Underwriting', async () => {
+    const db = await getDb()
+    const id = await submit('former-legacy@example.com')
+    const [{ max }] = await db.select({ max: sql`max(${schema.workflowVersions.version})::int` }).from(schema.workflowVersions)
+    await db.update(schema.workflowVersions).set({ status: 'retired' }).where(eq(schema.workflowVersions.status, 'published'))
+    await db.insert(schema.workflowVersions).values({ version: max + 1, status: 'published', definition: formerDefault(), legacy: true, note: 'Former default', publishedAt: new Date() })
+    await db.update(schema.applications).set({ state: 'in_review', status: 'in_review', workflowVersion: max + 1 }).where(eq(schema.applications.id, id))
+
+    clearWorkflowCache()
+    const current = await getPublishedWorkflow()
+    expect(current).toMatchObject({ version: max + 2, legacy: true })
+    expect(current.definition.states.find((state) => state.id === 'appraisal')).toMatchObject({ work: 'terms' })
+    expect(current.definition.states.find((state) => state.id === 'decision')).toBeTruthy()
+    expect(await consistent(id)).toMatchObject({ state: 'in_review', workflowVersion: max + 2 })
   })
 })

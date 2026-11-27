@@ -231,7 +231,7 @@ export function ResumeApplicationDialog({ open, onOpenChange, onResumed, onTrack
                   </Button>
                   <Button type="submit" disabled={verifying || sending}>
                     {verifying ? <Loader2 className="animate-spin" /> : <MailCheck />}
-                    {verifying ? 'Verifying…' : 'Verify and continue'}
+                    {verifying ? 'Verifying…' : 'Verify'}
                   </Button>
                 </div>
               ) : (

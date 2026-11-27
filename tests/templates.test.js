@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { PDFDocument } from 'pdf-lib'
-import { createMemoryKv, client, draftPreparer, emailCode, signedAcceptance } from './helpers.js'
+import { createMemoryKv, client, draftPreparer, emailCode, signedAcceptance, documentVerifier, toDecision } from './helpers.js'
 
 const kv = createMemoryKv()
 vi.mock('../api/_lib/kv.js', () => ({ default: kv }))
@@ -38,6 +38,8 @@ const approvedLoan = async (email) => {
   body.data.personalInfo.email = email
   const { body: submitted } = await applicant.post('/applications', body, { authorization: `Bearer ${token}` })
   await act(officer, submitted.id, 'start_review')
+  // act checks each step went through and returns the body.
+  await toDecision(async (action, extra) => ({ status: 200, body: await act(officer, submitted.id, action, extra) }), { verify: documentVerifier(officer, submitted.id) })
   for (const check of ['identity', 'documents', 'income']) await act(officer, submitted.id, 'check', { check, done: true, note: 'Seen' })
   await act(officer, submitted.id, 'recommend', { verdict: 'approve', rationale: 'Affordable', amount: 4500, conditions: 'Employer confirms payroll deduction.' })
   await act(admin, submitted.id, 'decide', { verdict: 'approve', rationale: 'Agreed' })

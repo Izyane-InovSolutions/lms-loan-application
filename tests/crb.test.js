@@ -19,6 +19,7 @@ vi.mock('../api/_lib/kv.js', () => ({ default: kv }))
 const { default: handler } = await import('../api/v1/[...path].js')
 const { putBlob } = await import('../api/_lib/blob.js')
 const { getDb, schema } = await import('../api/_lib/db/client.js')
+const { eq } = await import('drizzle-orm')
 const { identityFor } = await import('../api/_lib/crb/identity.js')
 const TRANSPORT = { username: 'transport-user', password: 'transport-secret' }
 const { resetProduct109Client } = await import('../api/_lib/crb/product109.js')
@@ -214,11 +215,12 @@ const submit = async (email, { nrc = '123456/78/9', crb = true, nationality, pas
 }
 
 let applicationId
+let managerId
 
 beforeAll(async () => {
   await admin.post('/auth/demo', { role: 'admin' })
   await officer.post('/auth/demo', { role: 'loan_officer' })
-  await manager.post('/auth/demo', { role: 'sales_manager' })
+  managerId = (await manager.post('/auth/demo', { role: 'sales_manager' })).body.user.id
   await dsa.post('/auth/demo', { role: 'dsa' })
   // Here the sales manager follows every case without working them (no cases.work), so
   // they are not credit staff: they see a report's headline only, and cannot pull one.
@@ -311,7 +313,7 @@ describe('Product 109 report processing', () => {
 describe('Product 109 pulls (against a stand-in bureau)', () => {
   it('asks the bureau about the applicant, in WSDL order, with both sets of credentials', async () => {
     const response = await officer.post(`/applications/${applicationId}/crb`)
-    expect(response.status).toBe(200)
+    expect(response.status, JSON.stringify(response.body)).toBe(200)
     expect(bureau.calls).toHaveLength(1)
     const [args] = bureau.calls
     expect(Object.keys(args)).toEqual(INPUT_ORDER)
@@ -373,6 +375,8 @@ describe('Product 109 pulls (against a stand-in bureau)', () => {
   })
 
   it('shows the full report to credit staff only, and the case to no one outside it', async () => {
+    // Following it as its RM: a case staff see without working its stage (stageVisibility.test.js).
+    await (await getDb()).update(schema.applications).set({ assignedRm: managerId }).where(eq(schema.applications.id, applicationId))
     const asManager = await manager.get(`/applications/${applicationId}`)
     expect(asManager.status).toBe(200)
     const [restricted] = asManager.body.crbReports

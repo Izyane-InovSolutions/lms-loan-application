@@ -1,6 +1,6 @@
 import kv from '../_lib/kv.js'
 import { consumeAiQuota } from '../_lib/aiQuota.js'
-import { getAiProvider, AiUnavailableError, classifyAiFailure } from '../_lib/ai/index.js'
+import { aiInsightsEnabled, getAiProvider, AiUnavailableError, classifyAiFailure } from '../_lib/ai/index.js'
 import { prescreenApplication } from '../_lib/ai/prescreen.js'
 
 const resolveEmailFromToken = async (req) => {
@@ -33,6 +33,10 @@ export default async function handler(req, res) {
     return res.status(401).json({ code: 'invalid_token', message: 'Missing or invalid draft token.' })
   }
 
+  // AI insights switched off in Settings: no review, as when no model is set up.
+  if (!(await aiInsightsEnabled())) {
+    return res.status(503).json({ code: 'ai_insights_off', message: 'AI insights are switched off.' })
+  }
   if (!(await getAiProvider())) {
     return res.status(503).json({ code: 'ai_unavailable', message: new AiUnavailableError().message })
   }

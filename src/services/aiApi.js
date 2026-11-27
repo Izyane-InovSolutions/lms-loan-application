@@ -30,7 +30,8 @@ export const prescreenApplication = (token, body, { signal, timeout = ANALYZE_TI
 export const isAiUnavailable = (error) => {
   const { status, data } = error?.response || {}
   // Older deployments answer 503 without a code; a coded 503 may be a provider outage.
-  return status === 503 && (!data?.code || data.code === 'ai_unavailable')
+  // ai_insights_off: an admin switched AI insights off; the form shows no AI guidance, quietly.
+  return status === 503 && (!data?.code || data.code === 'ai_unavailable' || data.code === 'ai_insights_off')
 }
 
 /**

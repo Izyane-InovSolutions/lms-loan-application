@@ -27,14 +27,15 @@ const STAGES = {
 }
 
 describe('the workflow today’s settings describe', () => {
-  it('is the usual backbone by default: review, a second approver, an offer, payout', () => {
+  it('is the usual backbone by default: terms, underwriting, a decision, a second approver, an offer, payout', () => {
     const definition = legacyToWorkflow({})
-    expect(ids(definition)).toEqual(['submitted', 'appraisal', 'in_review', 'pending_approval', 'approved', 'accepted', 'paid_out', 'declined', 'withdrawn', 'expired'])
+    expect(ids(definition)).toEqual(['submitted', 'appraisal', 'in_review', 'decision', 'pending_approval', 'approved', 'accepted', 'paid_out', 'declined', 'withdrawn', 'expired'])
     const { categories } = valid(definition)
     expect(categories).toMatchObject({
       submitted: 'submitted',
       appraisal: 'in_review',
       in_review: 'in_review',
+      decision: 'in_review',
       pending_approval: 'pending_approval',
       approved: 'approved',
       accepted: 'accepted',
@@ -42,22 +43,22 @@ describe('the workflow today’s settings describe', () => {
       declined: 'declined',
     })
     expect(definition.states.find((state) => state.id === 'approved').type).toBe('offer')
-    // Recommending approval needs the checks marked "needed to approve".
-    expect(definition.states.find((state) => state.id === 'in_review').actions[0].options.checks).toEqual(['identity', 'documents', 'income'])
-    // Appraisal values the collateral: a loan without any passes straight through to underwriting.
-    expect(definition.states.find((state) => state.id === 'appraisal')).toMatchObject({ label: 'Appraisal', appraisal: true })
-    expect(resolveState(definition, 'appraisal', { form: 'personal', collateral: false }).id).toBe('in_review')
+    // Recommending approval needs the checks marked "needed to approve": none by default (underwriting does the checking).
+    expect(definition.states.find((state) => state.id === 'decision').actions[0].options.checks).toEqual([])
+    expect(legacyToWorkflow({ stages: STAGES }).states.find((state) => state.id === 'decision').actions[0].options.checks).toEqual(['identity', 'documents'])
+    // Appraisal sets the loan terms, for every loan: with collateral or without.
+    expect(definition.states.find((state) => state.id === 'appraisal')).toMatchObject({ label: 'Appraisal', work: 'terms' })
+    expect(resolveState(definition, 'appraisal', { form: 'personal', collateral: false }).id).toBe('appraisal')
     expect(resolveState(definition, 'appraisal', { form: 'personal', collateral: true }).id).toBe('appraisal')
-    // Knowing only the form, collateral is unknown: the state applies.
-    expect(resolveState(definition, 'appraisal', 'personal').id).toBe('appraisal')
-    expect(definition.states.find((state) => state.id === 'in_review').label).toBe('Underwriting')
+    expect(definition.states.find((state) => state.id === 'in_review')).toMatchObject({ label: 'Underwriting', work: 'underwriting' })
+    expect(definition.states.find((state) => state.id === 'decision').label).toBe('Credit decision')
     expect(definition.states.find((state) => state.id === 'pending_approval')).toMatchObject({ label: 'Underwriting: approval', askApplicant: true })
   })
 
   it('lets the officer decide alone with four-eyes off', () => {
     const definition = legacyToWorkflow({ workflow: { requireSecondApproval: false } })
     expect(ids(definition)).not.toContain('pending_approval')
-    const review = definition.states.find((state) => state.id === 'in_review')
+    const review = definition.states.find((state) => state.id === 'decision')
     expect(review.actions.map((action) => action.kind)).toEqual(['approve', 'reject'])
     expect(review.actions[0]).toMatchObject({ permission: 'cases.recommend', options: { singleStep: true } })
     valid(definition)
@@ -85,6 +86,7 @@ describe('the workflow today’s settings describe', () => {
       'document_check',
       'field_verification',
       'in_review',
+      'decision',
       'credit_committee',
       'pending_approval',
       'approved',
@@ -97,7 +99,8 @@ describe('the workflow today’s settings describe', () => {
     ])
     const byId = Object.fromEntries(definition.states.map((state) => [state.id, state]))
     expect(byId.field_verification).toMatchObject({ label: 'Assessment: Field verification', roles: ['loan_officer'], requiredChecks: ['site_visit'], trackProgress: true })
-    expect(byId.in_review.label).toBe('Assessment: ready to recommend')
+    expect(byId.in_review.label).toBe('Assessment')
+    expect(byId.decision.actions[0].to).toBe('credit_committee')
     expect(byId.credit_committee.actions[0].options.fourEyes).toBe(true)
     expect(byId.approved.offer.onAccept).toBe('security_documents_signed')
 

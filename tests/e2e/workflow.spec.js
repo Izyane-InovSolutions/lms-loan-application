@@ -47,8 +47,8 @@ test('an admin builds the workflow in the editor, and cases follow it', async ({
   const order = await page.locator('article h3').allTextContents()
   expect(order.indexOf('Credit check')).toBe(order.indexOf('Underwriting: approval') - 1)
 
-  // Underwriting now recommends to the credit check.
-  await page.getByRole('button', { name: 'Edit Underwriting', exact: true }).click()
+  // The credit decision now recommends to the credit check.
+  await page.getByRole('button', { name: 'Edit Credit decision', exact: true }).click()
   await panel.getByLabel('Goes to').selectOption({ label: 'Credit check' })
   await page.keyboard.press('Escape')
   await expect(panel).toBeHidden()
@@ -73,18 +73,29 @@ test('an admin builds the workflow in the editor, and cases follow it', async ({
   await page.goto('/admin/pipeline')
   await expect(page.getByRole('heading', { name: 'Credit check' })).toBeVisible()
 
-  // An officer recommends a case in review; it goes to the sales managers' queue.
+  // An officer takes a new case through Appraisal (the terms) and Underwriting (the documents)
+  // and recommends it at the credit decision; it goes to the sales managers' queue.
   const officer = await browser.newPage()
   await signInAs(officer, 'Loan officer')
-  const { applications } = await (await officer.request.get('/api/v1/applications?status=in_review&pageSize=50')).json()
+  const { applications } = await (await officer.request.get('/api/v1/applications?status=submitted&pageSize=50')).json()
   const target = applications[0]
-  for (const check of ['identity', 'documents', 'income']) {
-    const { application } = await (await officer.request.get(`/api/v1/applications/${target.id}`)).json()
-    await officer.request.post(`/api/v1/applications/${target.id}/actions`, { data: { action: 'check', check, done: true, note: 'Seen', version: application.version } })
+  const caseOf = async () => (await officer.request.get(`/api/v1/applications/${target.id}`)).json()
+  const act = async (data) => {
+    const { application } = await caseOf()
+    const response = await officer.request.post(`/api/v1/applications/${target.id}/actions`, { data: { ...data, version: application.version } })
+    expect(response.ok(), await response.text()).toBe(true)
   }
-  const { application: current } = await (await officer.request.get(`/api/v1/applications/${target.id}`)).json()
-  const recommended = await officer.request.post(`/api/v1/applications/${target.id}/actions`, { data: { action: 'transition', actionId: 'recommend', verdict: 'approve', rationale: 'Affordable', version: current.version } })
-  expect(recommended.ok(), await recommended.text()).toBe(true)
+  await act({ action: 'start_review' })
+  await act({ action: 'save_terms' })
+  await act({ action: 'transition', actionId: 'appraised' })
+  const { workflow: underwriting } = await caseOf()
+  expect(underwriting.state.work).toBe('underwriting')
+  for (const document of underwriting.state.underwriting.documents) {
+    const verified = await officer.request.post(`/api/v1/applications/${target.id}/verifications`, { data: { target: 'document', id: document.id, status: 'verified' } })
+    expect(verified.ok(), await verified.text()).toBe(true)
+  }
+  await act({ action: 'transition', actionId: 'underwritten' })
+  await act({ action: 'transition', actionId: 'recommend', verdict: 'approve', rationale: 'Affordable' })
 
   const manager = await browser.newPage()
   await signInAs(manager, 'Sales manager')
@@ -122,7 +133,7 @@ test('in the list view, an admin drags a step into the path and turns another of
   await drag(page, row('Compliance').locator('[title="Drag to move"]'), { boundingBox: async () => ({ ...box, height: box.height / 2 }) })
   const order = await steps.locator('li h3').allTextContents()
   expect(order.indexOf('Compliance')).toBe(order.indexOf('Credit check') - 1)
-  await expect(row('Underwriting')).toContainText(/Recommend\s*Compliance/)
+  await expect(row('Credit decision')).toContainText(/Recommend\s*Compliance/)
   await expect(row('Compliance')).toContainText(/Recommend\s*Credit check/)
   await expect(page.getByText(/things? needs? fixing/)).toBeHidden()
 

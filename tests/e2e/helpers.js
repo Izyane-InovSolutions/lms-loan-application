@@ -71,14 +71,29 @@ export const acceptTermsAndSubmit = async (page) => {
 /**
  * Starts an application from the landing page's loan finder: the loan category, its sub
  * category, a monthly income above every default policy band (creditRules.js NET_PAY_BANDS /
- * REVENUE_BANDS), then the product's start button. Leaves the email step open.
+ * REVENUE_BANDS), then the product's start button. Leaves "First, confirm it’s you" open (confirmStart).
  */
 export const startFromFinder = async (page, { category, subcategory, income, product }) => {
   await page.getByRole('radiogroup', { name: 'Loan category' }).getByRole('radio', { name: new RegExp(category) }).click()
   await page.getByRole('radio', { name: subcategory, exact: true }).click()
   await page.locator('#qualify-income').fill(String(income))
   await page.getByRole('button', { name: `Start a ${product.toLowerCase()}` }).click()
-  await expect(page.locator('#start-email')).toBeVisible()
+  await expect(page.getByRole('region', { name: 'First, confirm it’s you' })).toBeVisible()
+}
+
+/**
+ * "First, confirm it’s you" at the start of the form (api/_lib/verification.js): the email,
+ * the code it is sent (read from the test run's store, purpose "start"), then on to the form.
+ */
+export const confirmStart = async (page, email) => {
+  const panel = page.getByRole('region', { name: 'First, confirm it’s you' })
+  // The store's file is written only once its folder exists (the first upload makes it); this is before any.
+  fs.mkdirSync(path.dirname(KV_FILE), { recursive: true })
+  await panel.getByRole('textbox', { name: 'Email address' }).fill(email)
+  await panel.getByRole('button', { name: 'Send the code' }).click()
+  await panel.getByRole('textbox', { name: 'Code' }).fill(await emailedCode(`email:${email}`, 'start'))
+  await panel.getByRole('button', { name: 'Confirm' }).click()
+  await expect(panel).toBeHidden()
 }
 
 export const signInAs = async (page, roleLabel) => {

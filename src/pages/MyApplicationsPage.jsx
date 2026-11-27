@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { cn } from '@/lib/utils'
 import { formatKwacha } from '@/config/loanProducts'
+import { FREQUENCIES, perPeriod } from '@/config/loanTerms'
 import { LOAN_TYPE_LABELS } from '@/config/applications'
 import { api } from '@/admin/api'
 import { SignaturePad } from '@/components/application/SignaturePad'
@@ -340,7 +341,7 @@ function ApplicationDetail({ id, email, onBack }) {
                 {formatKwacha(state.application.amount)} {(state.application.productName || LOAN_TYPE_LABELS[state.application.loanType]).toLowerCase()}
               </h1>
               <p className="mt-1 text-muted-foreground">
-                {state.application.reference}, {state.application.tenure} months, about {formatKwacha(Math.round(state.application.monthlyInstalment))} a month
+                {state.application.reference}, {state.application.tenure} months, about {formatKwacha(Math.round(state.application.monthlyInstalment))} {perPeriod(state.application.repaymentFrequency)}
               </p>
             </div>
             <StatusPill application={state.application} />
@@ -455,6 +456,7 @@ function OfferPanel({ application, documents, email, onDone }) {
     setCodeState(response.ok ? { status: 'sent', message: `We emailed a code to ${email}.` } : { status: 'error', message: result.message || 'The code could not be sent.' })
   }
 
+  const instalmentWord = (FREQUENCIES[offer.frequency]?.label || 'Monthly').toLowerCase()
   const allRead = documents.length > 0 && documents.every((document) => opened[document.id])
   const ready = signing ? agreed && name.trim().length >= 3 && signature && code.length === 6 : agreed
 
@@ -471,8 +473,9 @@ function OfferPanel({ application, documents, email, onDone }) {
         {[
           ['Amount', formatKwacha(offer.amount)],
           ['Tenure', `${offer.tenure} months`],
-          ['Monthly instalment', formatKwacha(Math.round(offer.monthlyInstalment))],
+          [`${FREQUENCIES[offer.frequency]?.label || 'Monthly'} instalment`, formatKwacha(Math.round(offer.monthlyInstalment))],
           ['Total repayable', formatKwacha(Math.round(offer.totalRepayable))],
+          ...(offer.netDisbursed != null ? [['Paid out to you', formatKwacha(offer.netDisbursed)]] : []),
         ].map(([label, value]) => (
           <div key={label}>
             <dt className="text-xs text-muted-foreground">{label}</dt>
@@ -480,6 +483,9 @@ function OfferPanel({ application, documents, email, onDone }) {
           </div>
         ))}
       </dl>
+      {offer.netDisbursed != null && offer.totalCharges ? (
+        <p className="mt-3 text-sm text-muted-foreground">Paid out to you is the amount less {formatKwacha(offer.totalCharges)} in charges, taken off before it is paid.</p>
+      ) : null}
       {offer.amount !== application.amount ? (
         <p className="mt-3 text-sm text-muted-foreground">This is different from the {formatKwacha(application.amount)} you asked for.</p>
       ) : null}
@@ -496,8 +502,8 @@ function OfferPanel({ application, documents, email, onDone }) {
         <input type="checkbox" checked={agreed} onChange={(event) => setAgreed(event.target.checked)} className="mt-0.5 size-4 accent-[hsl(var(--primary))]" />
         <span>
           {signing
-            ? 'I have read the offer letter. I accept this loan on these terms, and agree to repay it in the monthly instalments shown.'
-            : 'I accept this loan on these terms, and agree to repay it in the monthly instalments shown.'}
+            ? `I have read the offer letter. I accept this loan on these terms, and agree to repay it in the ${instalmentWord} instalments shown.`
+            : `I accept this loan on these terms, and agree to repay it in the ${instalmentWord} instalments shown.`}
         </span>
       </label>
       {signing && documents.length && !allRead ? <p className="ml-7 mt-1 text-xs text-muted-foreground">Open each document above to read it.</p> : null}
