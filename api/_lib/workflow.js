@@ -187,10 +187,37 @@ const progressWithout = (flow, application, fromId) => {
 // Graph actions
 // ---------------------------------------------------------------------------
 
+/** The permissions a work stage's own work needs, beyond its actions' (loanTerms.js, underwriting.js). */
+const WORK_PERMISSIONS = { terms: ['cases.work'], underwriting: ['cases.work', 'legal.verify'] }
+
 /**
  * Whether `viewer` works on cases in `state`: someone who may take one of its actions (on
- * the offer, record the acceptance) and, where the state names roles, holds one of them.
- * Admins work everywhere.
+ * the offer, record the acceptance; on a work stage, do its work — the loan terms
+ * `cases.work`, underwriting `cases.work` or `legal.verify`) and, where the state names
+ * roles, holds one of them. Admins work everywhere. What decides which cases staff see
+ * (visibility.js) and which they may change (findVisibleApplication, workflowView.readOnly);
+ * who may take or be assigned a case is worksOn's.
+ *
+ * Given the state's workflow `definition`: on a version with no underwriting stage, the legal
+ * sign-off holds approval, so `legal.verify` works any state that approves or recommends.
+ */
+export const worksOnStage = (viewer, state, definition = null) => {
+  if (!state || state.type === 'final') return false
+  if (viewer.role === 'admin') return true
+  if (state.roles?.length && !state.roles.includes(viewer.role)) return false
+  const held = (permission) => Boolean(viewer.permissions?.includes(permission))
+  if (state.type === 'offer') return held('offers.record')
+  if ((WORK_PERMISSIONS[state.work] || []).some(held)) return true
+  if (held('legal.verify') && definition && !definition.states?.some((entry) => entry.work === 'underwriting') && (state.actions || []).some((action) => ['approve', 'recommend'].includes(action.kind))) return true
+  return (state.actions || []).some((action) => held(actionPermission(action)))
+}
+
+/**
+ * Whether `viewer` may work a case in `state` themselves: take it, be assigned it, have it in
+ * their queue. Someone who may take one of its actions (on the offer, record the acceptance)
+ * and, where the state names roles, holds one of them. Narrower than worksOnStage, which also
+ * counts a work stage's own permissions (a legal officer verifies at Underwriting but doesn't
+ * become the case's officer there). Admins work everywhere.
  */
 export const worksOn = (viewer, state) => {
   if (!state || state.type === 'final') return false
@@ -1043,6 +1070,8 @@ export const workflowView = async (viewer, application, { recommendation = null 
     ),
     phase,
     worksHere: worksOn(viewer, state),
+    // A case they may read but not change: at a stage their role doesn't work on.
+    readOnly: viewer.role !== 'admin' && !worksOnStage(viewer, state, definition),
     steps: stepStates.map((entry) => ({
       id: entry.id,
       label: stepName(entry),

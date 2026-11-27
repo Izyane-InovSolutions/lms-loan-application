@@ -211,10 +211,15 @@ const MANUAL_FIGURES = {
  * enter a figure the AI couldn't read, or correct one it misread; the rules run again.
  */
 /** `editRequest` changing (a count) opens the figures for editing: the summary's "Enter the figure". */
-export function AffordabilityPanel({ application, prescreen, onSaveFigures, editRequest = 0 }) {
+export function AffordabilityPanel({ application, prescreen, onSaveFigures, editRequest = 0, collapsible = false, className }) {
   const [editing, setEditing] = useState(false)
+  // Folded away to start with where it sits among other cards (Pre-screening at a glance).
+  const [collapsed, setCollapsed] = useState(collapsible)
   useEffect(() => {
-    if (editRequest && onSaveFigures) setEditing(true)
+    if (editRequest && onSaveFigures) {
+      setEditing(true)
+      setCollapsed(false)
+    }
   }, [editRequest])
   if (!prescreen) return null
   const notes = prescreen.facts?._notes || { reasons: {}, sources: {} }
@@ -224,6 +229,9 @@ export function AffordabilityPanel({ application, prescreen, onSaveFigures, edit
   return (
     <Panel
       title="Affordability"
+      className={className}
+      collapsed={collapsible && collapsed}
+      onToggle={collapsible ? () => setCollapsed((value) => !value) : undefined}
       action={
         onSaveFigures && !editing ? (
           <Button variant="ghost" size="sm" onClick={() => setEditing(true)}>

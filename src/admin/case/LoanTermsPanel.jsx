@@ -114,7 +114,9 @@ export function LoanTermsPanel({ application, product, editable, onSave }) {
   const frequencyLabel = (FREQUENCIES[form.frequency]?.label || form.frequency).toLowerCase()
 
   return (
-    <form onSubmit={save} noValidate className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
+    <form onSubmit={save} noValidate className="space-y-4">
+      {/* The summary stays in view while the terms are edited, within this row only: it never slides over the schedule. */}
+      <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]">
       <div className="min-w-0 space-y-4">
         <Panel title="Final loan terms" description={editable ? 'What the loan will be, within the product’s limits.' : 'As saved at appraisal.'}>
           <div className="grid gap-4 sm:grid-cols-2">
@@ -282,9 +284,10 @@ export function LoanTermsPanel({ application, product, editable, onSave }) {
           )}
         </Panel>
       </div>
+      </div>
 
       <Panel
-        className="min-w-0 lg:col-span-2"
+        className="min-w-0"
         title="Repayment schedule"
         description={saved?.paidOutOn && !editable ? `Due dates from the payout on ${longDate(saved.paidOutOn)}.` : 'Due dates move with the actual payout date.'}
         bodyClassName="p-0"

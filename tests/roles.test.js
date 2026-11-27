@@ -40,11 +40,11 @@ const act = async (who, id, action, extra = {}) => {
   return who.post(`/applications/${id}/actions`, { action, version, ...extra })
 }
 
-/** Takes a case on from Appraisal to the credit decision, every check ticked. */
-const readyForDecision = async (who, id) => {
+/** Takes a case on from Appraisal to the credit decision, every check ticked (by `checker`, who works the decision). */
+const readyForDecision = async (who, id, checker = who) => {
   await toDecision((action, extra) => act(who, id, action, extra), { verify: documentVerifier(who, id) })
   for (const check of ['identity', 'documents', 'income']) {
-    expect((await act(who, id, 'check', { check, done: true, note: 'Original seen' })).status).toBe(200)
+    expect((await act(checker, id, 'check', { check, done: true, note: 'Original seen' })).status).toBe(200)
   }
 }
 
@@ -145,7 +145,8 @@ describe('configuring roles', () => {
 
     const id = await submit('analyst-case@example.com')
     expect((await act(analyst, id, 'start_review')).status).toBe(200)
-    await readyForDecision(analyst, id)
+    // The decision isn't the analyst's stage (no cases.recommend): an officer ticks its checks.
+    await readyForDecision(analyst, id, officer)
     const recommend = await act(analyst, id, 'recommend', { verdict: 'approve', rationale: 'Looks fine' })
     expect(recommend.status).toBe(403)
     expect((await analyst.get('/users')).status).toBe(403)
@@ -171,7 +172,8 @@ describe('configuring roles', () => {
     await act(salesManager, id, 'start_review')
     await readyForDecision(salesManager, id)
     await act(salesManager, id, 'recommend', { verdict: 'decline', rationale: 'Too much existing debt' })
-    expect((await act(officer, id, 'decide', { verdict: 'decline', rationale: 'Agreed' })).status).toBe(403)
+    // Without cases.decide the officer doesn't work the approval stage, nor see a case there it never worked.
+    expect((await act(officer, id, 'decide', { verdict: 'decline', rationale: 'Agreed' })).status).toBe(404)
 
     const reset = await admin.post('/roles/loan_officer/reset', {})
     expect(reset.body.role.permissions).toContain('cases.decide')

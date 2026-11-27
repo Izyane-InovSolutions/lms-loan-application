@@ -15,6 +15,7 @@ const prepareDraft = draftPreparer(kv, putBlob)
 const admin = client(handler)
 const officer = client(handler)
 const salesManager = client(handler)
+let salesManagerId
 const applicant = client(handler)
 
 const submit = async (email) => {
@@ -50,7 +51,7 @@ beforeAll(async () => {
   // Approval without legal sign-off: these tests are about what comes before and after it (tests/legalReview.test.js covers the gate).
   await admin.put('/settings/workflow', { requireSecondApproval: true, slaDays: 3, requireLegalReview: false })
   await officer.post('/auth/demo', { role: 'loan_officer' })
-  await salesManager.post('/auth/demo', { role: 'sales_manager' })
+  salesManagerId = (await salesManager.post('/auth/demo', { role: 'sales_manager' })).body.user.id
 })
 
 describe('the default graph: appraisal sets the terms, underwriting checks, then the decision', () => {
@@ -256,8 +257,8 @@ describe('a workflow published from the editor', () => {
     expect((await move(officer, id, 'prescreen')).status).toBe(200)
     expect(await consistent(id)).toMatchObject({ state: 'prescreening', status: 'in_review' })
 
-    // Prescreening is the loan officers’.
-    expect((await move(salesManager, id, 'underwrite', { verdict: 'approve', rationale: 'Fine' })).status).toBe(403)
+    // Prescreening is the loan officers’: a sales manager who hasn't worked the case doesn't see it there.
+    expect((await move(salesManager, id, 'underwrite', { verdict: 'approve', rationale: 'Fine' })).status).toBe(404)
     expect((await move(officer, id, 'underwrite', { verdict: 'approve', rationale: 'Fine' })).body.code).toBe('checks_incomplete')
     await act(officer, id, 'check', { check: 'identity', done: true, note: 'NRC seen' })
     const recommended = await move(officer, id, 'underwrite', { verdict: 'approve', rationale: 'Affordable' })
@@ -283,7 +284,8 @@ describe('a workflow published from the editor', () => {
     expect(await consistent(id)).toMatchObject({ state: 'disbursement', status: 'accepted' })
     expect((await move(officer, id, 'pay', { note: 'EFT 1234' })).status).toBe(200)
     expect(await consistent(id)).toMatchObject({ state: 'paid_out', status: 'disbursed' })
-    expect((await move(officer, id, 'pay')).body.code).toBe('invalid_state')
+    // Closed: no stage there is anyone's to work, so it is read-only (stageVisibility.test.js).
+    expect((await move(officer, id, 'pay')).body.code).toBe('read_only')
   })
 
   it('holds booking and payout until the offer’s conditions are met', async () => {
@@ -309,8 +311,8 @@ describe('a workflow published from the editor', () => {
     const done = await officer.post(`/applications/${other}/conditions/c2`, { met: true })
     expect(done.body.application.checks.conditions.every((condition) => condition.met)).toBe(true)
     expect(done.body.events.some((event) => event.message === 'Condition met: Payroll deduction confirmed by the employer (HR letter received)')).toBe(true)
-    expect((await move(officer, other, 'pay', { note: 'EFT 9' })).status).toBe(200)
     expect((await officer.post(`/applications/${other}/conditions/nope`, { met: true })).status).toBe(404)
+    expect((await move(officer, other, 'pay', { note: 'EFT 9' })).status).toBe(200)
   })
 
   it('still finishes the old case on its old workflow', async () => {
@@ -334,6 +336,8 @@ describe('what the workspace shows of a case’s workflow', () => {
       ['back', 'return', null],
       ['reject', 'reject', null],
     ])
+    // A manager following the case (its RM) sees it, though prescreening isn't theirs.
+    await (await getDb()).update(schema.applications).set({ assignedRm: salesManagerId }).where(eq(schema.applications.id, id))
     const forManager = (await salesManager.get(`/applications/${id}`)).body.workflow
     expect(forManager.actions[0].blocked).toMatch(/Waiting for loan officer/)
   })

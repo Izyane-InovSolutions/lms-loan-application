@@ -282,7 +282,8 @@ describe('offers', () => {
     const withdrawn = await submit('changed.mind@example.com')
     const customer = await customerFor('changed.mind@example.com')
     expect((await customer.post(`/me/applications/${withdrawn.id}/withdraw`, { reason: 'Found another lender' })).status).toBe(200)
-    expect((await officer.get(`/applications/${withdrawn.id}`)).body.application.status).toBe('withdrawn')
+    // Nobody worked it, so it is the administrator's to see (stageVisibility.test.js).
+    expect((await admin.get(`/applications/${withdrawn.id}`)).body.application.status).toBe('withdrawn')
 
     const lapsing = await submit('slow@example.com')
     await approve(lapsing.id)

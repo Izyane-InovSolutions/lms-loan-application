@@ -107,7 +107,8 @@ describe('a case going through the stages', () => {
 
     // Field verification is for loan officers only (admins can always act).
     await tick(officer, id, ['site_visit'])
-    expect((await act(salesManager, id, 'complete_stage', { stage: 'field_verification' })).status).toBe(403)
+    // A sales manager who hasn't worked the case doesn't even see it there (stageVisibility.test.js).
+    expect((await act(salesManager, id, 'complete_stage', { stage: 'field_verification' })).status).toBe(404)
     const done = await act(officer, id, 'complete_stage', { stage: 'field_verification' })
     expect(done.body.application.stageProgress.field_verification).toMatchObject({ done: true, byName: 'Mwila Sakala' })
     await underwrite(officer, id)

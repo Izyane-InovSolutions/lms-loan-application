@@ -15,7 +15,7 @@ import { TEMPLATE_KIND_KEYS } from '../../src/config/templates.js'
 import { recordAudit } from '../_lib/audit.js'
 import { copyBlob, deleteBlobsForDraft, readBlob } from '../_lib/blob.js'
 import { afterResponse } from '../_lib/after.js'
-import { addEvent, applicantFromData, findVisibleApplication, nextReference, scopeApplications } from '../_lib/applications.js'
+import { addEvent, applicantFromData, findVisibleApplication, nextReference, scopeFor } from '../_lib/applications.js'
 import { getLms } from '../_lib/lms/index.js'
 import { aiInsightsEnabled } from '../_lib/ai/index.js'
 import { refuseStaffEmail } from '../_lib/staffEmail.js'
@@ -436,8 +436,9 @@ const SORTS = {
   updated: desc(applications.updatedAt),
 }
 
-const listFilters = async (viewer, query) => {
-  const filters = [scopeApplications(viewer)]
+/** The list's where-clauses: `scope` is scopeFor(viewer), worked out once per request. */
+const listFilters = async (viewer, query, scope) => {
+  const filters = [scope]
   const status = query.get('status')
   if (status === 'open') filters.push(inArray(applications.status, OPEN_STATUSES))
   else if (status && APPLICATION_STATUSES[status]) filters.push(eq(applications.status, status))
@@ -480,14 +481,15 @@ const listApplications = async (req, res, { query }) => {
   const db = await getDb()
   const page = Math.max(1, Number(query.get('page')) || 1)
   const pageSize = Math.min(200, Math.max(1, Number(query.get('pageSize')) || PAGE_SIZE))
-  const filters = await listFilters(viewer, query)
+  const scope = await scopeFor(viewer)
+  const filters = await listFilters(viewer, query, scope)
   const where = filters.length ? and(...filters) : undefined
 
   // Tab counts ignore the status and stage filters so every tab shows its own total.
   const countQuery = new URLSearchParams(query)
   countQuery.delete('status')
   countQuery.delete('state')
-  const countFilters = await listFilters(viewer, countQuery)
+  const countFilters = await listFilters(viewer, countQuery, scope)
 
   const countWhere = countFilters.length ? and(...countFilters) : undefined
   const [rows, [{ total }], statusCounts, stateCounts, { slaDays }] = await Promise.all([
@@ -672,7 +674,7 @@ const getDocument = async (req, res, { params }) => {
 // LMS actions (loan officer / admin)
 // ---------------------------------------------------------------------------
 
-/** Send now: from waiting (not yet due), pending, or a clear failure. */
+/** Send now: from waiting (not yet due), pending, or a clear failure. An operations task, at any stage the case is visible (no read-only check). */
 const sendToLms = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'cases.disburse' })
   const application = await findVisibleApplication(viewer, params.id)
@@ -690,7 +692,7 @@ const sendToLms = async (req, res, { params }) => {
 }
 
 /**
- * Settles an `uncertain` hand-off after someone has checked the LMS:
+ * Settles an `uncertain` hand-off after someone has checked the LMS (on booked or paid-out cases too, so no read-only check):
  *   { found: true, reference }   it is there — record its reference
  *   { found: false }             it is not — allow sending again
  */
@@ -782,7 +784,7 @@ const legacyLmsApplications = async (email, knownReferences) => {
 const myApplications = async (req) => {
   const viewer = await requireUser(req, { roles: ['customer'] })
   const db = await getDb()
-  const rows = await db.select().from(applications).where(scopeApplications(viewer)).orderBy(desc(applications.submittedAt))
+  const rows = await db.select().from(applications).where(await scopeFor(viewer)).orderBy(desc(applications.submittedAt))
   const known = new Set(rows.map((row) => row.lmsReference).filter(Boolean))
   const products = await getProducts()
   return { applications: rows.map((row) => customerSummary(row, products)), earlier: await legacyLmsApplications(viewer.email, known) }

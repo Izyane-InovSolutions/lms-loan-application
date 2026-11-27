@@ -70,7 +70,7 @@ const handToLms = async (application, actor = null) => {
  */
 const setCondition = async (req, res, { params }) => {
   const viewer = await requireUser(req, { anyPermission: ['cases.work', 'cases.disburse'] })
-  const application = await findVisibleApplication(viewer, params.id)
+  const application = await findVisibleApplication(viewer, params.id, { change: true })
   assertNotHeld(viewer, application)
   const conditions = conditionsOf(application)
   const condition = conditions.find((entry) => entry.id === params.conditionId)
@@ -157,7 +157,13 @@ const verifyAcceptanceCode = async (req, viewer, application, input) => {
 
 const act = async (req, res, { params }) => {
   const viewer = await requireUser(req, { staff: true })
-  const application = await findVisibleApplication(viewer, params.id)
+  // Withdrawing, recording the customer's acceptance, adding a note and handing the case to
+  // someone else (a manager's assign) stay open on any case they see; their own checks still
+  // apply (applications.note, cases.assign and the stage's assignees). Taking it themselves does not.
+  const body = req.body || {}
+  const handing = body.action === 'assign' && Boolean(body.officerId) && body.officerId !== viewer.id
+  const utility = ['withdraw', 'record_acceptance', 'note'].includes(body.action) || handing
+  const application = await findVisibleApplication(viewer, params.id, { change: !utility })
   const input = { ...(req.body || {}) }
   const { requireSignature } = await getSetting('offers')
   // The customer's emailed code is checked once, here, where the caller's address is known
@@ -242,7 +248,7 @@ const verificationTarget = async (db, application, { target, id }) => {
  */
 const verify = async (req, res, { params }) => {
   const viewer = await requireUser(req, { anyPermission: ['legal.verify', 'cases.work'] })
-  const application = await findVisibleApplication(viewer, params.id)
+  const application = await findVisibleApplication(viewer, params.id, { change: true })
   assertNotHeld(viewer, application)
   const { status } = req.body || {}
   const note = text(req.body?.note, 500)
@@ -283,7 +289,7 @@ const verify = async (req, res, { params }) => {
  */
 const commentOnVerification = async (req, res, { params }) => {
   const viewer = await requireUser(req, { anyPermission: ['legal.verify', 'cases.work'] })
-  const application = await findVisibleApplication(viewer, params.id)
+  const application = await findVisibleApplication(viewer, params.id, { change: true })
   const message = text(req.body?.text, 1000)
   if (message.length < 2) fail(400, 'Write the comment first.', 'invalid_input')
   const db = await getDb()
@@ -332,7 +338,7 @@ const appraisedItem = (application, index) => {
  */
 const saveValuation = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'cases.work' })
-  const application = await findVisibleApplication(viewer, params.id)
+  const application = await findVisibleApplication(viewer, params.id, { change: true })
   assertNotHeld(viewer, application)
   const { position, item } = appraisedItem(application, params.index)
   const body = req.body || {}
@@ -398,7 +404,7 @@ const saveValuation = async (req, res, { params }) => {
 /** The valuer's report for one collateral item: filed on the case (slot valuation.<index>), linked to its valuation. A newer one replaces it. */
 const uploadValuationReport = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'cases.work' })
-  const application = await findVisibleApplication(viewer, params.id)
+  const application = await findVisibleApplication(viewer, params.id, { change: true })
   assertNotHeld(viewer, application)
   const { position } = appraisedItem(application, params.index)
   const { file } = await readSingleUpload(req)
@@ -462,7 +468,7 @@ const assertOpenForLegal = (application) => {
 
 const saveLegal = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'legal.verify' })
-  const application = await findVisibleApplication(viewer, params.id)
+  const application = await findVisibleApplication(viewer, params.id, { change: true })
   assertNotHeld(viewer, application)
   assertOpenForLegal(application)
   const { position, item } = appraisedItem(application, params.index)
@@ -514,7 +520,7 @@ const saveLegal = async (req, res, { params }) => {
  */
 const uploadLegalDocument = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'legal.verify' })
-  const application = await findVisibleApplication(viewer, params.id)
+  const application = await findVisibleApplication(viewer, params.id, { change: true })
   assertNotHeld(viewer, application)
   assertOpenForLegal(application)
   const { position } = appraisedItem(application, params.index)
@@ -625,7 +631,7 @@ const FIGURE_LABELS = { netPay: 'Net monthly pay', averageMonthlyCredits: 'Avera
  */
 const setFigures = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'cases.work' })
-  const application = await findVisibleApplication(viewer, params.id)
+  const application = await findVisibleApplication(viewer, params.id, { change: true })
   assertNotHeld(viewer, application)
   const allowed = MANUAL_FIGURES[application.loanType] || {}
   const note = text(req.body?.note, 300) || null
@@ -656,14 +662,17 @@ const setFigures = async (req, res, { params }) => {
 
 const rerunPrescreen = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'cases.work' })
-  const application = await findVisibleApplication(viewer, params.id)
+  const application = await findVisibleApplication(viewer, params.id, { change: true })
   assertNotHeld(viewer, application)
   await runPrescreen(application.id, { actor: viewer })
   await recordAudit({ req, actor: viewer, action: 'application.prescreen_rerun', entityType: 'application', entityId: application.id })
   return loadCase(application.id, viewer)
 }
 
-/** A field visit: where the staff member is now, with a note. Needs their device's location. */
+/**
+ * A field visit: where the staff member is now, with a note. Needs their device's location.
+ * Like a note, open on any case they see (an agent visits its customer whatever the stage).
+ */
 const logVisit = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'applications.note' })
   const application = await findVisibleApplication(viewer, params.id)
@@ -697,7 +706,7 @@ const logVisit = async (req, res, { params }) => {
  */
 const runCreditCheck = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'cases.work' })
-  const application = await findVisibleApplication(viewer, params.id)
+  const application = await findVisibleApplication(viewer, params.id, { change: true })
   assertNotHeld(viewer, application)
   try {
     await pullCreditReport(application, { actor: viewer, req })

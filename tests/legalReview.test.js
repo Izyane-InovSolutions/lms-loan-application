@@ -28,7 +28,8 @@ beforeAll(async () => {
   const db = await getDb()
   const [row] = await db.select().from(schema.applications).where(eq(schema.applications.id, caseId))
   const collateral = { items: [{ code: 'MV-CAR', type: 'motor_vehicle', name: 'Passenger vehicle', description: 'Toyota Hilux ABC 1234', value: 180000, haircut: 0.3, ltv: 0.7 }] }
-  await db.update(schema.applications).set({ data: { ...row.data, collateral } }).where(eq(schema.applications.id, caseId))
+  // At Underwriting, where the legal officer works (stageVisibility.test.js).
+  await db.update(schema.applications).set({ data: { ...row.data, collateral }, state: 'in_review', status: 'in_review' }).where(eq(schema.applications.id, caseId))
 })
 
 describe('the legal officer', () => {
@@ -200,6 +201,8 @@ describe('several proof files per collateral item', () => {
     body.data.documents.collateral = [[{ __draftFile__: 'personal.documents.collateral.0.0' }, { __draftFile__: 'personal.documents.collateral.0.1' }]]
     const filed = await client(handler).post('/applications', body, { authorization: `Bearer ${token}` })
     expect(filed.status).toBe(200)
+    // Once it reaches Underwriting, the legal officer's stage.
+    await (await getDb()).update(schema.applications).set({ state: 'in_review', status: 'in_review' }).where(eq(schema.applications.id, filed.body.id))
     const { documents } = (await legal.get(`/applications/${filed.body.id}`)).body
     expect(documents.filter((entry) => entry.slot.startsWith('collateral.')).map((entry) => [entry.slot, entry.label, entry.contentType])).toEqual(
       expect.arrayContaining([
@@ -212,7 +215,9 @@ describe('several proof files per collateral item', () => {
 
 describe('collateral valuations (Appraisal)', () => {
   it('records a valuation, lends on its market value, and files the valuer’s report', async () => {
-    // caseId pledged a vehicle the applicant put at K180,000.
+    // caseId pledged a vehicle the applicant put at K180,000. Back at Appraisal, the officer's stage
+    // (outside Underwriting, a valuation doesn't need its report first).
+    await (await getDb()).update(schema.applications).set({ state: 'appraisal', status: 'in_review' }).where(eq(schema.applications.id, caseId))
     const unvalued = (await officer.get(`/applications/${caseId}`)).body
     expect(unvalued.application.valuations).toEqual({})
     expect((await legal.put(`/applications/${caseId}/valuations/0`, { valuer: 'Knight Frank', valuedOn: '2026-10-30', marketValue: 150000 })).status).toBe(403)

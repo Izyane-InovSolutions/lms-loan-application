@@ -199,8 +199,8 @@ describe('underwriting a secured loan', () => {
     expect((await legal.put(`/applications/${other}/legal/0`, legalRecord())).status).toBe(200)
     for (const document of (await view(other)).workflow.state.underwriting.documents) await verifyDocument(officer, other, document.id)
     expect((await approve(other)).status).toBe(200)
-    // The legal officer unticks a check after Underwriting.
-    expect((await legal.put(`/applications/${other}/legal/0`, legalRecord({ ...allChecks, encumbrance: { done: false, note: 'Caveat found' } }))).status).toBe(200)
+    // A check is unticked after Underwriting (the legal officer now reads the case only; an administrator can).
+    expect((await admin.put(`/applications/${other}/legal/0`, legalRecord({ ...allChecks, encumbrance: { done: false, note: 'Caveat found' } }))).status).toBe(200)
     const { workflow } = await view(other)
     expect(workflow.state.approvalHold).toMatch(/Existing encumbrance check/)
     expect(workflow.state.approvalHold).not.toMatch(/legal sign-off/)

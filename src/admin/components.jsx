@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
-import { AlertCircle, CheckCircle2, X } from 'lucide-react'
+import { AlertCircle, CheckCircle2, ChevronDown, X } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { roleLabel, USER_STATUSES } from '@/config/roles'
@@ -330,19 +330,30 @@ export const downloadCsv = (filename, rows) => {
 }
 
 /** A titled surface for grouping related content on a page. */
-export function Panel({ title, description, action, children, className, bodyClassName }) {
+/** A card with a header. With `onToggle`, the title folds the body away (`collapsed`). */
+export function Panel({ title, description, action, children, className, bodyClassName, collapsed = false, onToggle }) {
   return (
     <section className={cn('rounded-xl border bg-card', className)}>
       {title ? (
-        <div className="flex items-start justify-between gap-3 border-b px-5 py-4">
-          <div className="min-w-0">
-            <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-            {description ? <p className="mt-0.5 text-xs text-muted-foreground">{description}</p> : null}
-          </div>
-          {action}
+        <div className={cn('flex items-start justify-between gap-3 px-5 py-4', !collapsed && 'border-b')}>
+          {onToggle ? (
+            <button type="button" onClick={onToggle} aria-expanded={!collapsed} className="flex min-w-0 flex-1 items-center gap-2 rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <ChevronDown className={cn('size-4 shrink-0 text-muted-foreground transition-transform', collapsed && '-rotate-90')} aria-hidden="true" />
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold text-foreground">{title}</span>
+                {description ? <span className="mt-0.5 block text-xs text-muted-foreground">{description}</span> : null}
+              </span>
+            </button>
+          ) : (
+            <div className="min-w-0">
+              <h2 className="text-sm font-semibold text-foreground">{title}</h2>
+              {description ? <p className="mt-0.5 text-xs text-muted-foreground">{description}</p> : null}
+            </div>
+          )}
+          {collapsed ? null : action}
         </div>
       ) : null}
-      <div className={cn('p-5', bodyClassName)}>{children}</div>
+      {collapsed ? null : <div className={cn('p-5', bodyClassName)}>{children}</div>}
     </section>
   )
 }

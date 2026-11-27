@@ -107,7 +107,7 @@ const uploadSignedCopy = async (req, res, { params }) => {
 /** Sends the current stage's documents again (making any that are missing): every one not yet signed or received. */
 const resend = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'cases.work' })
-  const application = await findVisibleApplication(viewer, params.id)
+  const application = await findVisibleApplication(viewer, params.id, { change: true })
   assertNotHeld(viewer, application)
   if (CLOSED_STATUSES.includes(application.status)) fail(409, 'This case is closed.', 'invalid_state')
   const result = await issueStageDocuments(application.id, { origin: appOrigin(req), actor: viewer, req, resend: true })
@@ -120,7 +120,7 @@ const resend = async (req, res, { params }) => {
 /** Records that a document came back signed: an uploaded copy checked, or a paper one handed in. */
 const markReceived = async (req, res, { params }) => {
   const viewer = await requireUser(req, { permission: 'cases.work' })
-  const application = await findVisibleApplication(viewer, params.id)
+  const application = await findVisibleApplication(viewer, params.id, { change: true })
   assertNotHeld(viewer, application)
   const found = await findStageDocument(application.id, params.documentId)
   if (!found) fail(404, 'Document not found.', 'not_found')

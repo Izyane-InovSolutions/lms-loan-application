@@ -77,7 +77,7 @@ export function UnderwritingPanel({
           <h2 className="text-sm font-semibold text-foreground">
             Collateral {index + 1}: {itemLabel(item, collateralCatalog)}
           </h2>
-          <div className="grid items-start gap-4 xl:grid-cols-2">
+          <div className="space-y-4">
             <ValuationCard
               item={item}
               index={index}
@@ -383,6 +383,7 @@ function ValuationCard({ item, valuation, entry, catalog, editable, report, onVi
     <Panel title="Asset valuation" action={<SectionState complete={entry?.complete} missing={entry?.missing} earlier={entry?.earlier} />}>
       <form onSubmit={save} noValidate className="space-y-4">
         <Missing entry={entry} />
+        <div className="grid items-start gap-x-8 gap-y-5 lg:grid-cols-2">
         <div className="space-y-3">
           <SubHeading>Asset details</SubHeading>
           <div className="grid gap-3 sm:grid-cols-2">
@@ -404,6 +405,7 @@ function ValuationCard({ item, valuation, entry, catalog, editable, report, onVi
           </div>
         </div>
 
+        <div className="space-y-4">
         {reportRow}
 
         <fieldset disabled={!hasReport} className="space-y-3 disabled:opacity-60">
@@ -444,10 +446,12 @@ function ValuationCard({ item, valuation, entry, catalog, editable, report, onVi
               <Input value={values.valuerContact} onChange={set('valuerContact')} className="h-9 text-sm" placeholder="Phone or email" />
             </Labelled>
           </div>
-          <Labelled label="Remark (optional)">
-            <textarea rows={2} value={values.remark} onChange={set('remark')} maxLength={1000} className={textareaClass} />
-          </Labelled>
         </fieldset>
+        </div>
+        </div>
+        <Labelled label="Remark (optional)">
+          <textarea rows={2} value={values.remark} onChange={set('remark')} maxLength={1000} disabled={!hasReport} className={textareaClass} />
+        </Labelled>
 
         <FormError message={error} />
         <div className="flex flex-wrap items-center gap-3">
@@ -481,9 +485,12 @@ function LegalCard({ record, entry, editable, documentOf, onView, onSave, onUplo
   const [newName, setNewName] = useState('')
   const [busy, setBusy] = useState(null)
   const [error, setError] = useState('')
+  // Checks whose note box was opened with "Add note" (one with a note always shows it).
+  const [notesOpen, setNotesOpen] = useState({})
   useEffect(() => {
     setValues(legalForm(record))
     setLabels({})
+    setNotesOpen({})
   }, [record?.at])
 
   const slots = legalDocumentsOf(record)
@@ -509,12 +516,12 @@ function LegalCard({ record, entry, editable, documentOf, onView, onSave, onUplo
   }
 
   const documentList = (
-    <ul className="divide-y rounded-md border">
+    <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
       {Object.entries(slots).map(([key, slot]) => {
         const file = slot.documentId ? documentOf(slot.documentId) : null
         const label = labels[key] ?? slot.label
         return (
-          <li key={key} className="flex flex-col gap-2 p-3 sm:flex-row sm:items-center sm:justify-between">
+          <li key={key} className={cn('flex flex-col justify-between gap-3 rounded-lg border p-3', !file && slot.required ? 'border-dashed border-warning/50' : 'border-dashed')}>
             <div className="min-w-0 text-sm">
               {renaming === key ? (
                 <Input
@@ -572,6 +579,7 @@ function LegalCard({ record, entry, editable, documentOf, onView, onSave, onUplo
         <div className="space-y-4">
           <Missing entry={entry} />
           {documentList}
+          <div className="grid items-start gap-x-8 gap-y-4 lg:grid-cols-2">
           <Facts
             rows={[
               ['Title / registration no.', record?.title?.number],
@@ -586,6 +594,7 @@ function LegalCard({ record, entry, editable, documentOf, onView, onSave, onUplo
               <CheckLine key={key} label={label} check={record?.checks?.[key]} />
             ))}
           </ul>
+          </div>
           {record?.remark ? <Facts rows={[['Remark', record.remark]]} /> : null}
         </div>
       </Panel>
@@ -628,6 +637,8 @@ function LegalCard({ record, entry, editable, documentOf, onView, onSave, onUplo
           {Object.keys(labels).length ? <p className="text-xs text-muted-foreground">Save to keep the new names.</p> : null}
         </div>
 
+        <div className="grid items-start gap-x-8 gap-y-5 lg:grid-cols-2">
+        <div className="space-y-5">
         <div className="space-y-3">
           <SubHeading>Title information</SubHeading>
           <div className="grid gap-3 sm:grid-cols-2">
@@ -667,6 +678,7 @@ function LegalCard({ record, entry, editable, documentOf, onView, onSave, onUplo
             </Labelled>
           </div>
         </div>
+        </div>
 
         <div className="space-y-2">
           <SubHeading>Legal checks</SubHeading>
@@ -676,17 +688,27 @@ function LegalCard({ record, entry, editable, documentOf, onView, onSave, onUplo
               const check = values.checks[key]
               const state = checkState(check)
               return (
-                <li key={key} className="space-y-2 p-3">
-                  <label className="flex items-start gap-2 text-sm text-foreground">
-                    <input type="checkbox" checked={check.done} onChange={(event) => setCheck(key, { done: event.target.checked })} className="mt-0.5 size-4 shrink-0 accent-primary" />
-                    <span className="min-w-0 flex-1">{label}</span>
+                <li key={key} className="space-y-2 px-3 py-2.5">
+                  <div className="flex items-center gap-2 text-sm text-foreground">
+                    <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
+                      <input type="checkbox" checked={check.done} onChange={(event) => setCheck(key, { done: event.target.checked })} className="size-4 shrink-0 accent-primary" />
+                      <span className="min-w-0">{label}</span>
+                    </label>
                     {state === 'issue' ? <span className="shrink-0 text-xs font-medium text-destructive">Issue found</span> : null}
-                  </label>
-                  <Input aria-label={`Note on ${label.toLowerCase()}`} placeholder="Note (optional)" value={check.note} maxLength={500} onChange={(event) => setCheck(key, { note: event.target.value })} className="h-8 text-sm" />
+                    {!check.note && !notesOpen[key] ? (
+                      <button type="button" onClick={() => setNotesOpen((prev) => ({ ...prev, [key]: true }))} className="shrink-0 rounded text-xs font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                        Add note
+                      </button>
+                    ) : null}
+                  </div>
+                  {check.note || notesOpen[key] ? (
+                    <Input autoFocus={!check.note} aria-label={`Note on ${label.toLowerCase()}`} placeholder="Note" value={check.note} maxLength={500} onChange={(event) => setCheck(key, { note: event.target.value })} className="ml-6 h-8 w-[calc(100%-1.5rem)] text-sm" />
+                  ) : null}
                 </li>
               )
             })}
           </ul>
+        </div>
         </div>
 
         <Labelled label="Remark (optional)">

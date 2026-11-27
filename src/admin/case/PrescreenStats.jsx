@@ -1,5 +1,5 @@
-import React from 'react'
-import { AlertTriangle, Check, Gauge, HandCoins, Landmark, Percent, Scale, Wallet } from 'lucide-react'
+import React, { useState } from 'react'
+import { AlertTriangle, ChevronDown, Gauge, HandCoins, Percent, Scale, Wallet } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { eligibilityFor } from '@/config/eligibility'
@@ -14,23 +14,6 @@ import { money } from '../components'
  * everything here is worked out from the prescreen and the application, nothing is stored.
  */
 
-const OUTCOME = {
-  pass: {
-    label: 'Passed',
-    tone: 'success',
-    text: 'No policy rule raised a concern.',
-  },
-  refer: {
-    label: 'Refer to an officer',
-    tone: 'warning',
-    text: 'Policy rules raised concerns for an officer to look at.',
-  },
-  decline: {
-    label: 'Decline recommended',
-    tone: 'destructive',
-    text: 'A policy rule recommends declining.',
-  },
-}
 
 const TONES = {
   success: { text: 'text-success', bg: 'bg-success/10', bar: 'bg-success' },
@@ -53,17 +36,29 @@ function Pill({ tone, children }) {
   return <span className={cn('inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium', TONES[tone].bg, TONES[tone].text)}>{children}</span>
 }
 
-function Card({ icon: Icon, title, badge, children }) {
+/** One figure's card. `collapsible` ones start folded: the header (with its badge) shows, the detail on a click. */
+function Card({ icon: Icon, title, badge, collapsible = false, children }) {
+  const [open, setOpen] = useState(!collapsible)
+  const heading = (
+    <span className="flex items-center gap-2 text-sm font-semibold text-foreground">
+      {collapsible ? <ChevronDown className={cn('size-4 text-muted-foreground transition-transform', !open && '-rotate-90')} aria-hidden="true" /> : null}
+      <Icon className="size-4 text-muted-foreground" aria-hidden="true" />
+      {title}
+    </span>
+  )
   return (
-    <section className="flex flex-col rounded-xl border bg-card">
-      <div className="flex items-center justify-between gap-3 border-b px-4 py-3">
-        <h3 className="flex items-center gap-2 text-sm font-semibold text-foreground">
-          <Icon className="size-4 text-muted-foreground" aria-hidden="true" />
-          {title}
-        </h3>
+    <section className={cn('flex flex-col rounded-xl border bg-card', !open && 'self-start')}>
+      <div className={cn('flex items-center justify-between gap-3 px-4 py-3', open && 'border-b')}>
+        {collapsible ? (
+          <button type="button" onClick={() => setOpen(!open)} aria-expanded={open} className="rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            {heading}
+          </button>
+        ) : (
+          <h3>{heading}</h3>
+        )}
         {badge}
       </div>
-      <div className="flex-1 space-y-3 p-4">{children}</div>
+      {open ? <div className="flex-1 space-y-3 p-4">{children}</div> : null}
     </section>
   )
 }
@@ -103,7 +98,7 @@ function Meter({ ratio, limit, tone }) {
   )
 }
 
-export function PrescreenStats({ application, product, prescreen, crbReports }) {
+export function PrescreenStats({ application, product, prescreen, crbReports, affordability = null }) {
   const facts = prescreen?.facts || {}
   const sources = facts._notes?.sources || {}
   const personal = application.loanType === 'personal'
@@ -139,17 +134,13 @@ export function PrescreenStats({ application, product, prescreen, crbReports }) 
   const report = crbReports?.[0]
   const score = report?.score ?? facts.crb_score ?? null
 
-  const outcome = OUTCOME[prescreen?.outcome]
-  const concerns = (prescreen?.ruleResults || []).filter((result) => result.state === 'fired')
-  const unchecked = (prescreen?.ruleResults || []).filter((result) => result.state === 'not_evaluated')
-
   return (
     <section aria-labelledby="prescreen-stats" className="space-y-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
         <h2 id="prescreen-stats" className="text-sm font-semibold text-foreground">
           Pre-screening at a glance
         </h2>
-        <p className="text-xs text-muted-foreground">Shown while the case is at pre-screening. Worked out from the application and its documents.</p>
+        <p className="text-xs text-muted-foreground">Worked out from the application and its documents.</p>
       </div>
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         <Card icon={Wallet} title={personal ? 'Income' : 'Monthly revenue'}>
@@ -202,7 +193,7 @@ export function PrescreenStats({ application, product, prescreen, crbReports }) 
           </p>
         </Card>
 
-        <Card icon={HandCoins} title="Existing repayments">
+        <Card icon={HandCoins} title="Existing repayments" collapsible>
           <Big value={money(commitments)} unit="/ month" />
           <p className="text-xs text-muted-foreground">{commitments ? 'Other loan repayments the applicant declared' : 'The applicant declared no other loan repayments'}</p>
           <Rows
@@ -214,7 +205,7 @@ export function PrescreenStats({ application, product, prescreen, crbReports }) 
           />
         </Card>
 
-        <Card icon={Scale} title="Requested vs affordable" badge={maxAmount == null ? null : <Pill tone={over ? 'warning' : 'success'}>{over ? 'Over limit' : 'Affordable'}</Pill>}>
+        <Card icon={Scale} title="Requested vs affordable" collapsible badge={maxAmount == null ? null : <Pill tone={over ? 'warning' : 'success'}>{over ? 'Over limit' : 'Affordable'}</Pill>}>
           <Rows
             rows={[
               ['Requested', `${money(application.amount)} over ${application.tenure} months`],
@@ -230,32 +221,8 @@ export function PrescreenStats({ application, product, prescreen, crbReports }) 
           ) : null}
         </Card>
 
-        <Card icon={Landmark} title="Policy rules" badge={outcome ? <Pill tone={outcome.tone}>{outcome.label}</Pill> : null}>
-          {outcome ? (
-            <>
-              <p className="text-sm text-foreground">{concerns.length ? `${concerns.length} ${concerns.length === 1 ? 'concern' : 'concerns'} raised` : outcome.text}</p>
-              {concerns.length ? (
-                <ul className="space-y-1 text-xs text-muted-foreground">
-                  {concerns.slice(0, 3).map((result) => (
-                    <li key={result.id} className="flex gap-1.5">
-                      <AlertTriangle className={cn('mt-0.5 size-3 shrink-0', result.outcome === 'decline' ? 'text-destructive' : 'text-warning')} aria-hidden="true" />
-                      {result.message}
-                    </li>
-                  ))}
-                  {concerns.length > 3 ? <li>and {concerns.length - 3} more in the assessment below.</li> : null}
-                </ul>
-              ) : (
-                <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                  <Check className="size-3.5 text-success" aria-hidden="true" />
-                  Every rule that could be checked passed.
-                </p>
-              )}
-              {unchecked.length ? <p className="text-xs text-muted-foreground">{unchecked.length} couldn’t be checked yet: see the assessment below.</p> : null}
-            </>
-          ) : (
-            <p className="text-sm text-muted-foreground">The policy rules haven’t run yet.</p>
-          )}
-        </Card>
+        {/* Affordability: the figures the rules use, and where staff enter the missing ones. */}
+        {affordability}
       </div>
     </section>
   )

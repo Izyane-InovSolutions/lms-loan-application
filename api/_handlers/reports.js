@@ -1,5 +1,6 @@
 import { and, desc, eq, gte, inArray, isNotNull, lt, sql } from 'drizzle-orm'
 import { alias } from 'drizzle-orm/pg-core'
+import { scopeFor } from '../_lib/applications.js'
 import { getDb, schema } from '../_lib/db/client.js'
 import { fail } from '../_lib/http.js'
 import { requireUser } from '../_lib/rbac.js'
@@ -219,7 +220,8 @@ const agentDetail = async (req, res, { params, query }) => {
     db
       .select({ id: applications.id, reference: applications.reference, applicantName: applications.applicantName, companyName: applications.companyName, loanType: applications.loanType, amount: applications.amount, status: applications.status, submittedAt: applications.submittedAt })
       .from(applications)
-      .where(eq(applications.sourcedBy, person.id))
+      // Only the cases the viewer may open (applications.js): the figures above are counts, these are links.
+      .where(and(eq(applications.sourcedBy, person.id), await scopeFor(viewer)))
       .orderBy(desc(applications.submittedAt))
       .limit(8),
   ])

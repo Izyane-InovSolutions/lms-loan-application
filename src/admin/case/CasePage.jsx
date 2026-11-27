@@ -5,9 +5,9 @@ import {
   ArrowLeft,
   CheckCircle2,
   ExternalLink,
+  Eye,
   FileText,
   Loader2,
-  MessageSquarePlus,
   Paperclip,
   ShieldAlert,
   Sparkles,
@@ -104,18 +104,26 @@ export function CasePage() {
   // for notes, unless this is a system administrator (src/config/partners.js).
   const held = state.status === 'ready' && heldForPartner(state.application) && !mayActOnHeldCase(user)
   // What this person's role lets them do here (Team → Roles); the server checks each again.
+  // A case at a stage this role doesn't work on (one it worked on before) opens read-only: the server refuses
+  // changes to it, so only what it still allows stays: withdraw, record acceptance, assign, add a note, log a
+  // field visit, add a document, the LMS.
+  const readOnly = state.status === 'ready' && state.workflow?.readOnly === true
   const may = useMemo(
     () => ({
-      work: !held && hasPermission(user, 'cases.work'),
+      work: !held && !readOnly && hasPermission(user, 'cases.work'),
       assign: !held && hasPermission(user, 'cases.assign'),
-      recommend: !held && hasPermission(user, 'cases.recommend'),
-      decide: !held && hasPermission(user, 'cases.decide'),
-      disburse: !held && hasPermission(user, 'cases.disburse'),
+      recommend: !held && !readOnly && hasPermission(user, 'cases.recommend'),
+      decide: !held && !readOnly && hasPermission(user, 'cases.decide'),
+      disburse: !held && !readOnly && hasPermission(user, 'cases.disburse'),
+      // Reading the AI review doesn't change anything, so it stays on a read-only case.
+      view: !held && (hasPermission(user, 'cases.work') || hasPermission(user, 'cases.decide')),
+      lms: !held && hasPermission(user, 'cases.disburse'),
       record: !held && hasPermission(user, 'offers.record'),
       note: hasPermission(user, 'applications.note'),
-      verify: !held && hasPermission(user, 'legal.verify'),
+      upload: hasPermission(user, 'applications.note'),
+      verify: !held && !readOnly && hasPermission(user, 'legal.verify'),
     }),
-    [user, held]
+    [user, held, readOnly]
   )
   // A case that moves to another stage opens on that stage's own tab again.
   const stageKey = state.status === 'ready' ? `${state.application.id}:${state.workflow?.state?.id || ''}` : null
@@ -229,7 +237,7 @@ export function CasePage() {
     )
   }
 
-  const { application, documents, events, prescreen, appraisals, consents, locations, crbReports, lmsConfigured, crbProvider, offersRequireSignature, signatures, stageDocuments, workflow, product, collateralCatalog } = state
+  const { application, documents, prescreen, appraisals, consents, locations, crbReports, lmsConfigured, crbProvider, offersRequireSignature, signatures, stageDocuments, workflow, product, collateralCatalog } = state
   const canTake = withinAssignmentRange(user, application.amount)
   const lastRecommendation = appraisals.find((appraisal) => appraisal.kind === 'recommendation')
   const hasCrbConsent = allowsCreditCheck(consents)
@@ -238,8 +246,6 @@ export function CasePage() {
     setTab(value)
     tabs.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
-  // The workflow's first stage (Pre-screening) reports as "submitted": the screening figures are shown at a glance there only.
-  const atPrescreening = application.status === 'submitted'
   const checklistEditable = may.work && (['submitted', 'in_review', 'info_requested'].includes(application.status) || workflow?.state.checks.length > 0)
   const { tabs: tabList, initial: initialTab } = caseTabs({ application, documents, workflow, user })
   const currentTab = tab && tabList.some(([value]) => value === tab) ? tab : initialTab
@@ -293,9 +299,16 @@ export function CasePage() {
             ) : null}
             {application.acceptedAt ? <Fact label="Offer accepted" value={dateTime(application.acceptedAt)} /> : null}
           </dl>
+          {readOnly ? (
+            <p className="mt-4 flex items-center gap-2 text-sm text-muted-foreground">
+              <Eye className="size-4 shrink-0" aria-hidden="true" />
+              Read only — this case is at a stage your role doesn’t work on.
+            </p>
+          ) : null}
         </div>
         <CaseActions
           application={application}
+          readOnly={readOnly}
           workflow={workflow}
           may={may}
           userId={user.id}
@@ -312,7 +325,7 @@ export function CasePage() {
       <PreApprovalPanel
         application={application}
         preApproval={workflow?.preApproval}
-        canIssue={!held && (hasPermission(user, 'offers.issue') || mayActOnHeldCase(user))}
+        canIssue={!held && !readOnly && (hasPermission(user, 'offers.issue') || mayActOnHeldCase(user))}
         heldMessage={held ? heldReason(application) : null}
         onIssue={(terms) => act('issue_offer', terms, 'Offer issued')}
         onLeave={(input) => act('leave_pre_approval', input, 'Sent to full review')}
@@ -355,47 +368,27 @@ export function CasePage() {
           ))}
         </nav>
 
+        {/* While the case is at pre-screening: its figures at a glance. */}
+        {currentTab === 'prescreening' ? (
+          <PrescreenStats
+            application={application}
+            product={product}
+            prescreen={prescreen}
+            crbReports={crbReports}
+            affordability={
+              <div id="case-figures" className="scroll-mt-4 self-start">
+                <AffordabilityPanel application={application} prescreen={prescreen} editRequest={figureRequest} collapsible onSaveFigures={may.work ? (values) => post('/figures', values, 'Figures saved; the rules ran again') : null} />
+              </div>
+            }
+          />
+        ) : null}
+
         {/* The assessment, with the figures and bureau report the rules rest on. */}
         {currentTab === 'analysis' ? (
           <div className="space-y-4">
-            {atPrescreening ? <PrescreenStats application={application} product={product} prescreen={prescreen} crbReports={crbReports} /> : null}
             <CaseSummary
-              application={application}
-              documents={documents}
-              prescreen={prescreen}
-              zra={application.checks?.zra}
-              crb={{ reports: crbReports, provider: crbProvider, hasConsent: hasCrbConsent, applies: crbApplies(application.loanType, application.data) }}
-              // Settings → AI: with insights off, no AI review shows, not even one made before.
-              showAi={(may.work || may.decide) && state.aiInsights !== false}
-              canRerun={may.work}
-              onRerun={() => post('/prescreen', {}, 'Policy rules run again')}
-              onOpenDocument={(value) => {
-                setDocumentId(value)
-                showTab('documents')
-              }}
-              onOpenDetails={() => showTab('details')}
-              // The buttons on rules it couldn't check, where this person may take the step.
-              actions={{
-                enter_figure: may.work
-                  ? () => {
-                      setFigureRequest((count) => count + 1)
-                      scrollToPanel('case-figures')
-                    }
-                  : null,
-                ask_applicant:
-                  may.work && caseOwnership(application, workflow, user.id).ownerMay && workflow?.state?.askApplicant && application.status !== 'info_requested'
-                    ? () => setDialog({ type: 'request_info' })
-                    : null,
-                run_crb: may.work && crbProvider ? () => scrollToPanel('case-crb') : null,
-                rerun: may.work ? () => post('/prescreen', {}, 'Policy rules run again') : null,
-                settings: user?.role === 'admin' ? () => navigate('/admin/settings?tab=crb') : null,
-              }}
-            />
-            <div className="grid items-start gap-4 lg:grid-cols-2">
-              <div id="case-figures" className="scroll-mt-4">
-                <AffordabilityPanel application={application} prescreen={prescreen} editRequest={figureRequest} onSaveFigures={may.work ? (values) => post('/figures', values, 'Figures saved; the rules ran again') : null} />
-              </div>
-              <div id="case-crb" className="scroll-mt-4">
+              // The bureau report opens from the CRB score card, so it isn't shown on its own below.
+              crbDetail={
                 <CrbPanel
                   reports={crbReports}
                   provider={crbProvider}
@@ -406,7 +399,42 @@ export function CasePage() {
                   error={crbPull.status === 'error' ? crbPull.message : null}
                   onRun={() => pullCrb('Credit report added')}
                 />
-              </div>
+              }
+              application={application}
+              documents={documents}
+              prescreen={prescreen}
+              zra={application.checks?.zra}
+              crb={{ reports: crbReports, provider: crbProvider, hasConsent: hasCrbConsent, applies: crbApplies(application.loanType, application.data) }}
+              // Settings → AI: with insights off, no AI review shows, not even one made before.
+              showAi={may.view && state.aiInsights !== false}
+              canRerun={may.work}
+              onRerun={() => post('/prescreen', {}, 'Policy rules run again')}
+              onOpenDocument={(value) => {
+                setDocumentId(value)
+                showTab('documents')
+              }}
+              onOpenDetails={() => showTab('details')}
+              // The buttons on rules it couldn't check, where this person may take the step.
+              actions={{
+                // Figures are entered in Affordability, on the Pre-screening tab: only while the case is there.
+                enter_figure:
+                  may.work && application.status === 'submitted'
+                    ? () => {
+                        setFigureRequest((count) => count + 1)
+                        showTab('prescreening')
+                        scrollToPanel('case-figures')
+                      }
+                    : null,
+                ask_applicant:
+                  may.work && caseOwnership(application, workflow, user.id).ownerMay && workflow?.state?.askApplicant && application.status !== 'info_requested'
+                    ? () => setDialog({ type: 'request_info' })
+                    : null,
+                run_crb: may.work && crbProvider ? () => scrollToPanel('case-crb') : null,
+                rerun: may.work ? () => post('/prescreen', {}, 'Policy rules run again') : null,
+                settings: user?.role === 'admin' ? () => navigate('/admin/settings?tab=crb') : null,
+              }}
+            />
+            <div className="grid items-start gap-4 lg:grid-cols-2">
               {application.data?.eligibility ? <QualificationPanel application={application} product={product} /> : null}
             </div>
           </div>
@@ -428,7 +456,7 @@ export function CasePage() {
         {/* What they sent, and what we sent them to sign. */}
         {currentTab === 'documents' ? (
           <div className="space-y-4">
-            <Documents application={application} product={product} documents={documents} selectedId={documentId} onSelect={setDocumentId} onUpload={may.note ? (form) => uploadStaffDocument(id, form, setState, notify) : null} />
+            <Documents application={application} product={product} documents={documents} selectedId={documentId} onSelect={setDocumentId} onUpload={may.upload ? (form) => uploadStaffDocument(id, form, setState, notify) : null} />
             <div className="grid items-start gap-4 lg:grid-cols-2">
               <StageDocumentsPanel
                 documents={stageDocuments}
@@ -525,7 +553,7 @@ export function CasePage() {
             <LmsPanel
               application={application}
               lmsConfigured={lmsConfigured}
-              canAct={may.disburse}
+              canAct={may.lms}
               onSend={() => post('/lms/send', {}, 'Sent to the LMS').catch((error) => notify(error.message, { tone: 'error' }))}
               onReconcile={() => setDialog({ type: 'reconcile' })}
             />
@@ -535,7 +563,6 @@ export function CasePage() {
           </div>
         ) : null}
 
-        {currentTab === 'timeline' ? <Timeline events={events} onNote={may.note ? (message) => act('note', { message }, 'Note added') : null} /> : null}
       </div>
 
       <CaseDialogs
@@ -670,6 +697,8 @@ const uploadStaffDocument = async (id, form, setState, notify) => {
  */
 const caseTabs = ({ application, documents, workflow, user }) => {
   const stages = workflow?.workStages || {}
+  // Pre-screening's figures get their own tab while the case is at that stage, like Loan terms and Underwriting.
+  const atPrescreening = application.status === 'submitted'
   const oldFlow = Boolean(workflow?.state?.appraisal) || (!stages.terms && !stages.underwriting)
   const verifications = application.verifications || {}
   const underwritingDone =
@@ -678,13 +707,13 @@ const caseTabs = ({ application, documents, workflow, user }) => {
   const showUnderwriting = stages.underwriting === 'current' || (stages.underwriting === 'passed' && underwritingDone)
   const tabs = [
     ['analysis', 'AI Analysis'],
+    ...(atPrescreening ? [['prescreening', 'Pre-screening']] : []),
     ['details', 'Details'],
     ['documents', `Documents (${documents.length})`],
     ...(showTerms ? [['terms', 'Loan terms']] : []),
     ...(showUnderwriting ? [['underwriting', 'Underwriting']] : []),
     ...(oldFlow ? [['legal', 'Collateral']] : []),
     ['workflow', 'Workflow'],
-    ['timeline', 'Timeline'],
   ]
   const verifierOnly = hasPermission(user, 'legal.verify') && !hasPermission(user, 'cases.work')
   const initial =
@@ -698,7 +727,9 @@ const caseTabs = ({ application, documents, workflow, user }) => {
             : oldFlow
               ? 'legal'
               : 'analysis'
-          : 'analysis'
+          : atPrescreening
+            ? 'prescreening'
+            : 'analysis'
   return { tabs, initial }
 }
 
@@ -785,7 +816,7 @@ function Held({ reason, children }) {
   )
 }
 
-function CaseActions({ application, workflow, may, userId, canTake, hasEligibleOfficers, onOpen, onClaim, onTake, onTakeHere, onShowWorkflow }) {
+function CaseActions({ application, workflow, readOnly, may, userId, canTake, hasEligibleOfficers, onOpen, onClaim, onTake, onTakeHere, onShowWorkflow }) {
   const [busy, setBusy] = useState(null)
   const notify = useToast()
   const run = (key, fn) => async () => {
@@ -810,7 +841,7 @@ function CaseActions({ application, workflow, may, userId, canTake, hasEligibleO
   const { ownerMay } = caseOwnership(application, workflow, userId)
   // Never this person's to take here: left out, not greyed out.
   const groups = groupActions(
-    (workflow?.actions || []).filter((action) => !(stepHere && action.kind === 'move') && (ownerMay || action.fourEyes) && !action.roleBlocked)
+    (readOnly ? [] : workflow?.actions || []).filter((action) => !(stepHere && action.kind === 'move') && (ownerMay || action.fourEyes) && !action.roleBlocked)
   )
 
   // No sentences in the bar: what can't be done yet is greyed out, and says why on hover.
@@ -872,7 +903,7 @@ function CaseActions({ application, workflow, may, userId, canTake, hasEligibleO
           Withdraw
         </Button>
       ) : null}
-      {state?.roles?.length && open && workflow.worksHere && !application.stateAssignee ? take('take-state', onTakeHere) : null}
+      {!readOnly && state?.roles?.length && open && workflow.worksHere && !application.stateAssignee ? take('take-state', onTakeHere) : null}
       {!state?.roles?.length && may.work && open && unassigned ? take('take', onTake) : null}
       {/* Nobody to hand it to: no button. */}
       {may.assign && open && hasEligibleOfficers ? (
@@ -891,7 +922,7 @@ function CaseActions({ application, workflow, may, userId, canTake, hasEligibleO
         </Button>
       ) : null}
       {/* The step itself is marked done on the Workflow tab. */}
-      {stepHere && ownerMay && !waiting ? (
+      {!readOnly && stepHere && ownerMay && !waiting ? (
         <Button variant="outline" onClick={onShowWorkflow}>
           Next: {state.stepName}
         </Button>
@@ -1384,73 +1415,6 @@ function DocumentFindings({ application, document }) {
   )
 }
 
-const EVENT_ICONS = { note: MessageSquarePlus }
-
-function Timeline({ events, onNote }) {
-  const [note, setNote] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-
-  const submit = async (event) => {
-    event.preventDefault()
-    setBusy(true)
-    setError('')
-    try {
-      await onNote(note)
-      setNote('')
-    } catch (noteError) {
-      setError(noteError.message)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className="space-y-5">
-      {onNote ? <form onSubmit={submit} className="rounded-xl border bg-card p-4">
-        <label htmlFor="case-note" className="text-sm font-medium text-foreground">
-          Add an internal note
-        </label>
-        <textarea
-          id="case-note"
-          rows={2}
-          value={note}
-          onChange={(event) => setNote(event.target.value)}
-          placeholder="Visible to staff only"
-          className="mt-2 w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        />
-        {error ? <p className="text-sm text-destructive">{error}</p> : null}
-        <div className="mt-2 flex justify-end">
-          <Button type="submit" size="sm" disabled={busy || note.trim().length < 3}>
-            {busy ? <Loader2 className="animate-spin" /> : null}
-            Add note
-          </Button>
-        </div>
-      </form> : null}
-      <ol className="relative space-y-5 before:absolute before:inset-y-2 before:left-[5px] before:w-px before:bg-border">
-        {events.map((event) => {
-          const Icon = EVENT_ICONS[event.type]
-          return (
-            <li key={event.id} className="relative pl-6">
-              <span
-                className={cn('absolute left-0 top-1.5 size-[11px] rounded-full border-2 border-background', event.type === 'note' ? 'bg-muted-foreground' : event.toStatus ? 'bg-primary' : 'bg-primary/50')}
-                aria-hidden="true"
-              />
-              <p className="text-sm text-foreground">
-                {Icon ? <Icon className="mr-1 inline size-3.5 text-muted-foreground" aria-hidden="true" /> : null}
-                {event.message}
-              </p>
-              <p className="text-xs text-muted-foreground">
-                {event.actorLabel}, {dateTime(event.at)}
-                {event.visibleToCustomer ? ', shown to the applicant' : ''}
-              </p>
-            </li>
-          )
-        })}
-      </ol>
-    </div>
-  )
-}
 
 /**
  * The ID and contact check at submission (api/_lib/identityFlags.js): earlier applications
