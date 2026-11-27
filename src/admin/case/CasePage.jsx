@@ -727,9 +727,7 @@ const caseTabs = ({ application, documents, workflow, user }) => {
             : oldFlow
               ? 'legal'
               : 'analysis'
-          : atPrescreening
-            ? 'prescreening'
-            : 'analysis'
+          : 'analysis'
   return { tabs, initial }
 }
 
