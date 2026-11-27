@@ -4,16 +4,17 @@
  */
 
 export class HttpError extends Error {
-  constructor(status, message, code) {
+  constructor(status, message, code, extra) {
     super(message)
+    this.extra = extra
     this.status = status
     this.code = code
   }
 }
 
 /** Throws an HttpError. `code` is a stable machine-readable reason the client can branch on. */
-export const fail = (status, message, code) => {
-  throw new HttpError(status, message, code)
+export const fail = (status, message, code, extra) => {
+  throw new HttpError(status, message, code, extra)
 }
 
 export const parseCookies = (req) =>
@@ -145,7 +146,7 @@ export const createRouter = (routes) => {
     } catch (error) {
       if (res.headersSent) return
       if (error instanceof HttpError) {
-        return res.status(error.status).json({ code: error.code || null, message: error.message })
+        return res.status(error.status).json({ ...error.extra, code: error.code || null, message: error.message })
       }
       // Drizzle wraps database errors ("Failed query: …"); the reason, such as a missing column, is the cause.
       const cause = error?.cause?.message ? ` (cause: ${error.cause.message})` : ''

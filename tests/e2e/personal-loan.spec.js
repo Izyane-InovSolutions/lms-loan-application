@@ -1,14 +1,25 @@
 import { expect, test } from '@playwright/test'
-import { acceptTermsAndSubmit, attachAll, choose, fieldId, customerSignIn, emailedCode, fill, next, signInAs, startFromFinder, typeDate } from './helpers.js'
+import { acceptTermsAndSubmit, attachAll, choose, confirmStart, fieldId, customerSignIn, emailedCode, fill, next, signInAs, startFromFinder, typeDate } from './helpers.js'
 
 /*
  * The whole life of a personal loan, as people use it: an applicant arrives through an
- * agent's link and applies; an officer asks for more; the applicant answers; the case is
+ * agent's link and applies; an officer asks for more; the applicant answers; the officer
+ * sets the loan terms at Appraisal and verifies the documents at Underwriting; the case is
  * recommended and approved by two different people; the applicant accepts the offer; the
  * loan is marked paid out.
  */
 
 const EMAIL = 'ada.banda@example.com'
+
+/** Approves the stage the case is at (its forward move, "Approve"), confirming if asked. */
+const approveStage = async (page) => {
+  const stage = await page.getByRole('button', { name: 'Approve', exact: true }).first()
+  await expect(stage).toBeEnabled()
+  await stage.click()
+  const dialog = page.getByRole('dialog')
+  if (await dialog.isVisible().catch(() => false)) await dialog.getByRole('button', { name: /Approve|Confirm|Move on/ }).last().click()
+  await expect(dialog).toBeHidden()
+}
 
 test('a referred personal loan goes from application to payout', async ({ browser }) => {
   // Agent and demo accounts exist once someone has used them; open the agent role first.
@@ -21,8 +32,7 @@ test('a referred personal loan goes from application to payout', async ({ browse
   await expect(applicant.getByText(/applying with Kelvin/)).toBeVisible()
 
   await startFromFinder(applicant, { category: 'Personal loans', subcategory: 'Non-asset loans', income: 12000, product: 'Personal Loan' })
-  await applicant.locator('#start-email').fill(EMAIL)
-  await applicant.getByRole('button', { name: /^Continue$/ }).click()
+  await confirmStart(applicant, EMAIL)
   await applicant.waitForURL('**/apply/personal/personal-information')
 
   await fill(applicant, 'personalInfo.firstName', 'Ada')
@@ -49,7 +59,7 @@ test('a referred personal loan goes from application to payout', async ({ browse
   await next(applicant)
 
   // The loan chosen in the finder is shown alone on the Loan type step, to confirm.
-  await expect(applicant.getByText('Your loan', { exact: true })).toBeVisible()
+  await expect(applicant.getByRole('heading', { name: 'Your loan', exact: true })).toBeVisible()
   await expect(applicant.getByRole('radio')).toHaveCount(0)
   // The others are a click away, with the chosen one still selected.
   await applicant.getByRole('button', { name: 'See other loans' }).click()
@@ -83,12 +93,15 @@ test('a referred personal loan goes from application to payout', async ({ browse
   await officer.getByRole('link', { name: /Ada Banda/ }).first().click()
   await expect(officer.getByText('Brought in by')).toBeVisible()
   await expect(officer.getByText(/Kelvin Mbewe/)).toBeVisible()
+  // Not anyone's yet: the officer takes it, then starts the review.
+  await officer.getByRole('button', { name: 'Take the case' }).click()
   await officer.getByRole('button', { name: 'Start the review' }).click()
-  await expect(officer.getByText('Underwriting').first()).toBeVisible()
+  // Appraisal sets the loan terms: its tab opens at the stage.
+  await expect(officer.getByRole('navigation', { name: 'Case sections' }).getByRole('button', { name: /^Loan terms/ })).toBeVisible()
   await officer.getByRole('button', { name: 'Ask the applicant' }).click()
   await officer.locator('#action-message').fill('Please upload a clearer copy of your latest payslip.')
   await officer.getByRole('button', { name: 'Send request' }).click()
-  await expect(officer.getByText(/Waiting on the applicant/)).toBeVisible()
+  await expect(officer.getByText('Waiting on the applicant:')).toBeVisible()
 
   // The applicant answers from their page.
   await customerSignIn(applicant, EMAIL)
@@ -98,15 +111,29 @@ test('a referred personal loan goes from application to payout', async ({ browse
   await applicant.getByRole('button', { name: 'Send reply' }).click()
   await expect(applicant.getByText('Here is a clearer scan.')).toBeVisible()
 
-  // The officer verifies in the recommend dialog, then recommends.
+  // Appraisal: the officer saves the terms (the product's defaults) and approves the stage.
   await officer.reload()
-  await officer.getByRole('button', { name: 'Recommend' }).click()
-  for (const check of ['Identity verified', 'Documents reviewed', 'Income or cash flow verified']) {
-    await officer.getByRole('dialog').getByRole('button', { name: new RegExp(`^${check}: not done`) }).click()
-    await expect(officer.getByRole('dialog').getByRole('button', { name: new RegExp(`^${check}: done`) })).toBeVisible()
+  const sections = officer.getByRole('navigation', { name: 'Case sections' })
+  await sections.getByRole('button', { name: /^Loan terms/ }).click()
+  await officer.getByRole('button', { name: 'Save terms' }).click()
+  await expect(officer.getByText('Saved.', { exact: true })).toBeVisible()
+  await approveStage(officer)
+
+  // Underwriting: every required document verified, then the stage approved.
+  await sections.getByRole('button', { name: /^Underwriting/ }).click()
+  const verify = officer.getByRole('button', { name: 'Verify', exact: true })
+  await expect(verify.first()).toBeVisible()
+  for (let left = await verify.count(); left > 0; left -= 1) {
+    await verify.first().click()
+    await expect(verify).toHaveCount(left - 1)
   }
+  await expect(officer.getByText('Underwriting is complete')).toBeVisible()
+  await approveStage(officer)
+
+  // The credit decision: the officer recommends on the appraised terms.
+  await officer.getByRole('button', { name: 'Recommend' }).click()
   await officer.locator('#action-rationale').fill('Affordable on verified income.')
-  await officer.getByRole('button', { name: 'Recommend approval' }).click()
+  await officer.getByRole('dialog').getByRole('button', { name: 'Approve', exact: true }).click()
   await expect(officer.getByText(/a colleague makes the decision/)).toBeVisible()
 
   // A different person approves.
@@ -122,6 +149,9 @@ test('a referred personal loan goes from application to payout', async ({ browse
   await applicant.goto('/my-applications')
   await applicant.getByRole('button', { name: /K4,000 personal loan/ }).click()
   await expect(applicant.getByRole('heading', { name: 'Your loan offer' })).toBeVisible()
+  // On the appraised terms: what is paid out after the charges.
+  await expect(applicant.getByText('Paid out to you', { exact: true })).toBeVisible()
+  await expect(applicant.getByText('Monthly instalment', { exact: true })).toBeVisible()
   // They read the generated offer letter, then sign and confirm with a code.
   await expect(applicant.getByText('Offer letter', { exact: true })).toBeVisible()
   await applicant.getByLabel(/I have read the offer letter/).check()

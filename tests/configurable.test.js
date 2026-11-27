@@ -1,7 +1,7 @@
 import crypto from 'node:crypto'
 import http from 'node:http'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
-import { createMemoryKv, client, signedAcceptance, emailCode } from './helpers.js'
+import { createMemoryKv, client, signedAcceptance, emailCode, termsFor, documentVerifier, toDecision } from './helpers.js'
 
 const kv = createMemoryKv()
 vi.mock('../api/_lib/kv.js', () => ({ default: kv }))
@@ -72,8 +72,9 @@ const approve = async (id, { amount, conditions } = {}) => {
     return response
   }
   await act({ action: 'start_review' })
+  await toDecision((action, extra) => act({ action, ...extra }), { terms: amount ? termsFor(amount) : null, verify: documentVerifier(officer, id) })
   for (const check of ['identity', 'documents', 'income']) await act({ action: 'check', check, done: true, note: 'Seen original' })
-  return act({ action: 'recommend', verdict: 'approve', rationale: 'Affordable', ...(amount ? { amount } : {}), ...(conditions ? { conditions } : {}) })
+  return act({ action: 'recommend', verdict: 'approve', rationale: 'Affordable', ...(conditions ? { conditions } : {}) })
 }
 
 beforeAll(async () => {

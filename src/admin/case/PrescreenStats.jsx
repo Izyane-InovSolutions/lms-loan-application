@@ -3,6 +3,7 @@ import { AlertTriangle, Check, Gauge, HandCoins, Landmark, Percent, Scale, Walle
 
 import { cn } from '@/lib/utils'
 import { eligibilityFor } from '@/config/eligibility'
+import { monthlyEquivalent } from '@/config/loanTerms'
 import { money } from '../components'
 
 /**
@@ -117,7 +118,8 @@ export function PrescreenStats({ application, product, prescreen, crbReports }) 
 
   // What already goes out each month, and this loan's instalment on top.
   const commitments = Number(qualified.commitments) || 0
-  const instalment = Number(application.monthlyInstalment) || 0
+  // Appraised terms may repay weekly or quarterly: affordability compares a monthly figure.
+  const instalment = Number(application.terms ? monthlyEquivalent(application.terms) : application.monthlyInstalment) || 0
   const outgoing = commitments + instalment
 
   // All repayments against the income, set against the share of income the product allows.

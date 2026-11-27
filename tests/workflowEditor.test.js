@@ -76,6 +76,9 @@ describe('the Workflow editor', () => {
   it('publishes a fixed draft for new applications', async () => {
     inReview = await submit('editor-review@example.com')
     await act(officer, inReview, 'start_review')
+    // On to Underwriting, which version 2 keeps.
+    await act(officer, inReview, 'save_terms')
+    await act(officer, inReview, 'transition', { actionId: 'appraised' })
     inNew = await submit('editor-new@example.com')
 
     // Without the default start and Appraisal states: applications now start straight in review.
@@ -140,5 +143,30 @@ describe('the audit log of a workflow action', () => {
     // Each entry keeps the browser it came from.
     const opened = entries.find((row) => row.action === 'application.viewed' && row.userAgent)
     expect(opened?.userAgent).toBe(browser)
+  })
+})
+
+describe('what a stage does', () => {
+  it('starts with Appraisal setting the terms and Underwriting doing the checks', async () => {
+    // Version 1 was made from the settings.
+    const { definition } = (await admin.post('/admin/workflow/restore', { version: 1 })).body.draft
+    expect(definition.states.find((state) => state.id === 'appraisal').work).toBe('terms')
+    expect(definition.states.find((state) => state.id === 'in_review').work).toBe('underwriting')
+    await admin.del('/admin/workflow/draft')
+  })
+
+  it('refuses two stages that both set the terms for a loan, and keeps the setting on in-progress states only', async () => {
+    const { published } = (await admin.get('/admin/workflow')).body
+    const states = published.definition.states.map((state) => {
+      if (state.id === 'in_review') return { ...state, work: 'terms' }
+      if (state.id === 'paid_out') return { ...state, work: 'terms' }
+      return state.id === 'appraisal' ? { ...state, work: 'terms' } : state
+    })
+    const saved = await admin.put('/admin/workflow/draft', { definition: { ...published.definition, states } })
+    expect(saved.status).toBe(200)
+    expect(saved.body.draft.definition.states.find((state) => state.id === 'paid_out').work).toBeUndefined()
+    expect(saved.body.validation.errors.map((error) => error.message)).toContain('Only one stage can set the loan terms.')
+    expect((await admin.post('/admin/workflow/publish', {})).status).toBe(400)
+    await admin.del('/admin/workflow/draft')
   })
 })

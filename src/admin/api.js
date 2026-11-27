@@ -28,6 +28,8 @@ export async function api(path, { method = 'GET', body, signal } = {}) {
     throw Object.assign(new Error(data.message || 'Something went wrong. Please try again.'), {
       status: response.status,
       code: data.code,
+      // Field-by-field messages, where the server gives them (invalid_terms).
+      errors: data.errors,
     })
   }
   return data

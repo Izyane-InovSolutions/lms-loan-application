@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it, vi } from 'vitest'
-import { createMemoryKv, client, draftPreparer } from './helpers.js'
+import { createMemoryKv, client, draftPreparer, documentVerifier, toDecision } from './helpers.js'
 
 const kv = createMemoryKv()
 vi.mock('../api/_lib/kv.js', () => ({ default: kv }))
@@ -40,7 +40,9 @@ const act = async (who, id, action, extra = {}) => {
   return who.post(`/applications/${id}/actions`, { action, version, ...extra })
 }
 
-const checkEverything = async (who, id) => {
+/** Takes a case on from Appraisal to the credit decision, every check ticked. */
+const readyForDecision = async (who, id) => {
+  await toDecision((action, extra) => act(who, id, action, extra), { verify: documentVerifier(who, id) })
   for (const check of ['identity', 'documents', 'income']) {
     expect((await act(who, id, 'check', { check, done: true, note: 'Original seen' })).status).toBe(200)
   }
@@ -101,7 +103,7 @@ describe('the sales manager', () => {
   it('reviews and decides cases, with four-eyes still applying', async () => {
     const id = await submit('sm-case@example.com')
     expect((await act(salesManager, id, 'start_review')).status).toBe(200)
-    await checkEverything(salesManager, id)
+    await readyForDecision(salesManager, id)
     expect((await act(salesManager, id, 'recommend', { verdict: 'approve', rationale: 'Affordable and verified' })).status).toBe(200)
     // Their own recommendation: someone else decides.
     const own = await act(salesManager, id, 'decide', { verdict: 'approve', rationale: 'Agreed' })
@@ -112,7 +114,7 @@ describe('the sales manager', () => {
   it('decides a loan officer’s recommendation', async () => {
     const id = await submit('sm-decides@example.com')
     await act(officer, id, 'start_review')
-    await checkEverything(officer, id)
+    await readyForDecision(officer, id)
     await act(officer, id, 'recommend', { verdict: 'decline', rationale: 'Income not verified' })
     const decided = await act(salesManager, id, 'decide', { verdict: 'decline', rationale: 'Agreed with the officer' })
     expect(decided.body.application.status).toBe('declined')
@@ -143,7 +145,7 @@ describe('configuring roles', () => {
 
     const id = await submit('analyst-case@example.com')
     expect((await act(analyst, id, 'start_review')).status).toBe(200)
-    await checkEverything(analyst, id)
+    await readyForDecision(analyst, id)
     const recommend = await act(analyst, id, 'recommend', { verdict: 'approve', rationale: 'Looks fine' })
     expect(recommend.status).toBe(403)
     expect((await analyst.get('/users')).status).toBe(403)
@@ -167,7 +169,7 @@ describe('configuring roles', () => {
 
     const id = await submit('no-decide@example.com')
     await act(salesManager, id, 'start_review')
-    await checkEverything(salesManager, id)
+    await readyForDecision(salesManager, id)
     await act(salesManager, id, 'recommend', { verdict: 'decline', rationale: 'Too much existing debt' })
     expect((await act(officer, id, 'decide', { verdict: 'decline', rationale: 'Agreed' })).status).toBe(403)
 

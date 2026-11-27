@@ -59,6 +59,18 @@ const statusesBeforeInfoRequests = async (db, ids) => {
 }
 
 /**
+ * The state a case already is in, when the remade workflow still has it as a plain state of
+ * the same category: a case at Appraisal stays there rather than being put on by its status
+ * (which Appraisal shares with Underwriting). Steps tracked by progress map by legacyStateOf.
+ */
+const keptState = (target, row) => {
+  const state = row.state && target.definition.states.find((entry) => entry.id === row.state)
+  if (!state || state.type === 'final' || state.trackProgress) return null
+  const category = target.analysis.categories[state.id]
+  return category === row.status || (row.status === 'info_requested' && state.askApplicant) ? state.id : null
+}
+
+/**
  * Puts cases on `target` (a legacy version) by their status and stage progress: all cases
  * without a state yet, and — when regenerating — the open cases on earlier legacy versions.
  */
@@ -71,7 +83,7 @@ const mapCasesOnto = async (db, target, { fromVersions = [] } = {}) => {
     .where(or(...conditions))
   const waiting = await statusesBeforeInfoRequests(db, rows.filter((row) => row.status === 'info_requested').map((row) => row.id))
   for (const row of rows) {
-    const state = legacyStateOf(target.definition, row, { fromStatus: waiting[row.id] })
+    const state = keptState(target, row) || legacyStateOf(target.definition, row, { fromStatus: waiting[row.id] })
     await db
       .update(applications)
       .set({ state, workflowVersion: target.version, ...(row.state ? {} : { stateEnteredAt: row.updatedAt }) })

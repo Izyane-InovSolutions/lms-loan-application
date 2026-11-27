@@ -432,15 +432,39 @@ export function VerificationChecklist({ application, checklist, only, required =
  * journey: what is done, by whom, and the current one with a button for whoever may
  * complete it.
  */
-export function StagesPanel({ workflow, application, onComplete, onReopen, canReopen }) {
+export function StagesPanel({ workflow, application, work = [], onComplete, onReopen, canReopen }) {
   const steps = workflow?.steps || []
-  if (!steps.length) return null
+  if (!steps.length && !work.length) return null
   const phases = [...new Set(steps.map((step) => step.phase))]
   const checkName = (key) => (workflow.checklist || []).find((check) => check.key === key)?.label?.toLowerCase() || key
   const move = (step) => workflow.actions.find((action) => action.id === step.moveActionId)
   return (
     <Panel title="Stages" description="This workspace’s own steps, done in order.">
       <div className="space-y-5">
+        {work.length ? (
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Appraisal and underwriting</p>
+            <ul className="mt-2 space-y-3">
+              {work.map((line) => (
+                <li key={line.key} className="flex items-start gap-3 text-sm">
+                  <span
+                    className={cn(
+                      'mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full border',
+                      line.state === 'done' || line.state === 'ready' ? 'border-success bg-success text-success-foreground' : line.state === 'current' ? 'border-primary' : 'border-input'
+                    )}
+                    aria-hidden="true"
+                  >
+                    {line.state === 'done' || line.state === 'ready' ? <Check className="size-3.5" /> : line.state === 'current' ? <CircleDashed className="size-3.5 text-primary" /> : null}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className={cn('text-foreground', (line.state === 'current' || line.state === 'ready') && 'font-medium')}>{line.label}</p>
+                    <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">{line.detail}</p>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
         {phases.map((phase) => (
           <div key={phase}>
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{PHASES[phase]}</p>

@@ -48,6 +48,7 @@ import { clientIp } from '../_lib/http.js'
 import { getCrb, refreshCrb } from '../_lib/crb/index.js'
 import { currentConsentVersion } from '../_lib/legal.js'
 import { getSetting } from '../_lib/settings.js'
+import { summarizeTerms } from '../../src/config/loanTerms.js'
 import { creditStaffIds, notifyUsers } from '../_lib/notify.js'
 import { appOrigin } from '../_lib/http.js'
 import { mapApplicationToFormState, selectLatestApplication } from '../../src/utils/applicationPrefillMapper.js'
@@ -721,6 +722,7 @@ const reconcileLms = async (req, res, { params }) => {
 
 const customerSummary = (application, products) => {
   const status = APPLICATION_STATUSES[application.status] || {}
+  const terms = application.terms ? { frequency: application.terms.frequency, summary: summarizeTerms(application.terms) } : null
   return {
     id: application.id,
     reference: application.reference,
@@ -730,6 +732,8 @@ const customerSummary = (application, products) => {
     tenure: application.tenure,
     totalRepayable: application.totalRepayable,
     monthlyInstalment: application.monthlyInstalment,
+    // The instalment is per the terms' period once an approval has set it from them (monthly before, and without terms).
+    repaymentFrequency: (application.approvedAmount != null && terms?.frequency) || 'monthly',
     status: application.status,
     statusLabel: status.customer,
     statusDetail: application.status === 'approved' && application.offerExpiresAt ? 'Review and accept your offer to go ahead.' : status.customerDetail,
@@ -745,6 +749,8 @@ const customerSummary = (application, products) => {
             monthlyInstalment: application.monthlyInstalment,
             totalRepayable: application.totalRepayable,
             expiresAt: application.offerExpiresAt,
+            // From the appraised terms: how often the instalment falls due, and what is paid out after charges.
+            ...(terms ? { frequency: terms.frequency, totalCharges: terms.summary.totalCharges, netDisbursed: terms.summary.netDisbursed } : {}),
           }
         : null,
     canWithdraw: WITHDRAWABLE_STATUSES.includes(application.status),

@@ -10,6 +10,9 @@ import { proofsOfItem, reviewableDocuments } from '@/config/legalReview'
 import { FormError, Panel, money, timeAgo } from '../components'
 
 /*
+ * Cases on older workflow versions (an appraisal stage, no terms or underwriting stage) keep
+ * this tab; newer ones value and verify the assets on the Underwriting tab (UnderwritingPanel).
+ *
  * The case's Collateral tab: each pledged item, at the two stages that look at it.
  *   Appraisal     its valuation — the lender's valuer, market and forced-sale values,
  *                 inspection, report (cases.work, PUT …/valuations/:index) — from which its
@@ -327,7 +330,7 @@ function Valuation({ valuation, stated, report, canValue, onSave, onUpload, onVi
 }
 
 /** A document on the case, shown in place: a PDF in a frame, a photo as an image. */
-function DocumentPreview({ applicationId, document, onClose }) {
+export function DocumentPreview({ applicationId, document, onClose }) {
   const src = document ? `/api/v1/applications/${applicationId}/documents/${document.id}` : null
   const isImage = document?.contentType?.startsWith('image/')
   return (
@@ -356,7 +359,7 @@ function DocumentPreview({ applicationId, document, onClose }) {
 }
 
 /** One thing to check: what it is, where it stands, its comments, and (with legal.verify) the buttons. */
-function ReviewRow({ check, comments, canVerify, canComment, onVerify, onComment, nested = false, footer = null, children }) {
+export function ReviewRow({ check, comments, canVerify, canComment, onVerify, onComment, nested = false, footer = null, children }) {
   const [raising, setRaising] = useState(false)
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(null)

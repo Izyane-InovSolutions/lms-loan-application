@@ -20,9 +20,9 @@ export const PHASE_KEYS = ['review', 'approval', 'closing']
 
 /** The verification checklist every workspace starts with. */
 export const DEFAULT_CHECKLIST = [
-  { key: 'identity', label: 'Identity verified', hint: 'NRC matches the applicant and the photo.', requiredToApprove: true },
-  { key: 'documents', label: 'Documents reviewed', hint: 'Every document is present, genuine and current.', requiredToApprove: true },
-  { key: 'income', label: 'Income or cash flow verified', hint: 'Payslips or bank statements support the repayment.', requiredToApprove: true },
+  { key: 'identity', label: 'Identity verified', hint: 'NRC matches the applicant and the photo.', requiredToApprove: false },
+  { key: 'documents', label: 'Documents reviewed', hint: 'Every document is present, genuine and current.', requiredToApprove: false },
+  { key: 'income', label: 'Income or cash flow verified', hint: 'Payslips or bank statements support the repayment.', requiredToApprove: false },
   { key: 'crb', label: 'Credit bureau reviewed', hint: 'No adverse listings, or they are explained.', requiredToApprove: false },
   { key: 'site_visit', label: 'Site visit', hint: 'Business premises or residence visited.', requiredToApprove: false },
 ]

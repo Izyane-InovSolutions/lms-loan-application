@@ -10,6 +10,7 @@ import { buildPersonalPayload, buildBusinessPayload } from '../../../src/utils/l
 import { currentDocuments } from '../../../src/config/applications.js'
 import { appraisedItems, describeCollateral, itemLabel, lendingValue, pledgeTerms, typeLabel } from '../../../src/config/collateral.js'
 import { guarantorsOf } from '../../../src/config/guarantors.js'
+import { chargeAmount, lusakaDate, scheduleFor, summarizeTerms } from '../../../src/config/loanTerms.js'
 import { getCollateralCatalog } from '../products.js'
 
 const { applications, applicationDocuments, prescreens } = schema
@@ -19,11 +20,34 @@ export const MAX_AUTOMATIC_ATTEMPTS = 3
 
 const DIRECTOR_SLOT = /^director\.(\d+)\.(nrc|passportPhoto)$/
 
+/**
+ * The structured loan terms for the LMS (nothing for a case without them). The schedule runs
+ * from the payout once paid out, else from the effective date: scheduleBasis says which.
+ */
+const termsDetails = (application) => {
+  const terms = application.terms
+  if (!terms) return {}
+  const summary = summarizeTerms(terms)
+  return {
+    approvedAmount: terms.amount,
+    interestRatePercentPerYear: terms.annualRate,
+    interestType: terms.interestType,
+    calculationMethod: terms.calculation,
+    repaymentFrequency: terms.frequency,
+    effectiveDate: terms.effectiveDate,
+    charges: (terms.charges || []).map((charge) => ({ name: charge.name, amount: chargeAmount(charge, terms.amount) })),
+    netDisbursed: summary.netDisbursed,
+    scheduleBasis: terms.paidOutOn ? 'payout_date' : 'effective_date',
+    schedule: scheduleFor(terms, terms.paidOutOn || terms.effectiveDate).map((row) => ({ number: row.number, dueDate: row.due, instalment: row.instalment, principal: row.principal, interest: row.interest, balance: row.balance })),
+  }
+}
+
 /** The Frappe payload for an application whose files are already uploaded (slot → file_url). */
-const buildPayload = (application, fileUrls) => {
-  const loanDetails = { amount: application.amount, tenure: application.tenure, totalAmount: application.totalRepayable }
+export const buildPayload = (application, fileUrls) => {
+  // The approved figures once there are any (the appraised terms set them); else what was asked for.
+  const loanDetails = { amount: application.approvedAmount ?? application.amount, tenure: application.approvedTenure ?? application.tenure, totalAmount: application.totalRepayable }
   if (application.loanType === 'personal') {
-    return buildPersonalPayload(application.data, fileUrls, loanDetails)
+    return { ...buildPersonalPayload(application.data, fileUrls, loanDetails), ...termsDetails(application) }
   }
   const uploaded = {}
   const directorUploaded = []
@@ -36,7 +60,7 @@ const buildPayload = (application, fileUrls) => {
       uploaded[slot] = url
     }
   })
-  return buildBusinessPayload(application.data, uploaded, directorUploaded, loanDetails)
+  return { ...buildBusinessPayload(application.data, uploaded, directorUploaded, loanDetails), ...termsDetails(application) }
 }
 
 // Uploads the fixed mapping doesn't name: a product's own documents and collateral proofs.
@@ -245,7 +269,9 @@ export const pullDisbursements = async () => {
     const status = await lms.statusOf(application.applicantEmail, application.lmsReference, application.reference).catch(() => null)
     if (!status?.disbursed) continue
     // Straight to the paid-out end, whatever steps were left: the money has gone.
-    const moved = await systemTransition(db, application, 'paid_out', { event: { type: 'status', message: `Paid out, as reported by the LMS (${status.status})`, visibleToCustomer: true } })
+    // As a payout made here: the schedule runs from the payout day once the money is out.
+    const changes = application.terms ? { terms: { ...application.terms, paidOutOn: lusakaDate() } } : {}
+    const moved = await systemTransition(db, application, 'paid_out', { changes, event: { type: 'status', message: `Paid out, as reported by the LMS (${status.status})`, visibleToCustomer: true } })
     if (moved) disbursed += 1
   }
   return { checked: candidates.length, disbursed }

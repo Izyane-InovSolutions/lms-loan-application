@@ -148,6 +148,13 @@
       "when": 1795521693363,
       "tag": "0020_audit_user_agent",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1795685511416,
+      "tag": "0021_loan_terms",
+      "breakpoints": true
     }
   ]
 }

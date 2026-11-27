@@ -96,9 +96,11 @@ We are pleased to offer you a {{product}} on the terms below.
 - Amount: {{amount}}
 - Tenure: {{tenure}}
 - Interest: {{interest}} ({{interest_amount}})
-- Facility fee: {{facility_fee}}
+- Fees and charges: {{facility_fee}}
+{{charges}}
 - Total repayable: {{total_repayable}}
-- Monthly instalment: {{monthly_instalment}}
+- Repayment: {{number_of_instalments}} {{repayment_frequency_lower}} instalments of {{instalment}}
+- Paid out to you after charges: {{net_disbursed}}
 
 ## Repayment schedule
 {{repayment_schedule}}
@@ -138,9 +140,11 @@ Dear {{customer_name}},
 - Amount: {{amount}}
 - Tenure: {{tenure}}
 - Interest: {{interest}}, being {{interest_amount}} over the tenure
-- Facility fee: {{facility_fee}}, deducted from the amount paid out
+- Fees and charges: {{facility_fee}}
+{{charges}}
 - Total repayable: {{total_repayable}}
-- Repayment: monthly instalments of {{monthly_instalment}}
+- Repayment: {{number_of_instalments}} {{repayment_frequency_lower}} instalments of {{instalment}}
+- Paid out to the Borrower after charges: {{net_disbursed}}
 
 ## 2. Conditions precedent
 The facility is paid out only once the following are met to the Lender's satisfaction:
@@ -212,13 +216,31 @@ const placeholderFor = async (kind) => {
 export const isPlaceholderTemplate = (template, meta = null) =>
   template?.source === 'text' && template.body === (PLACEHOLDERS[template.kind] || (meta ? starterTemplate(meta) : null))?.body
 
-const isLegacyLoanAgreement = (template) => template.kind === 'loan_agreement' && template.source === 'text' && template.body === LEGACY_LOAN_AGREEMENT_BODY
+const OLD_OFFER_LINES = "- Interest: {{interest}} ({{interest_amount}})\n- Facility fee: {{facility_fee}}\n- Total repayable: {{total_repayable}}\n- Monthly instalment: {{monthly_instalment}}\n"
+const NEW_OFFER_LINES = "- Interest: {{interest}} ({{interest_amount}})\n- Fees and charges: {{facility_fee}}\n{{charges}}\n- Total repayable: {{total_repayable}}\n- Repayment: {{number_of_instalments}} {{repayment_frequency_lower}} instalments of {{instalment}}\n- Paid out to you after charges: {{net_disbursed}}\n"
+const OLD_FACILITY_LINES = "- Interest: {{interest}}, being {{interest_amount}} over the tenure\n- Facility fee: {{facility_fee}}, deducted from the amount paid out\n- Total repayable: {{total_repayable}}\n- Repayment: monthly instalments of {{monthly_instalment}}\n"
+const NEW_FACILITY_LINES = "- Interest: {{interest}}, being {{interest_amount}} over the tenure\n- Fees and charges: {{facility_fee}}\n{{charges}}\n- Total repayable: {{total_repayable}}\n- Repayment: {{number_of_instalments}} {{repayment_frequency_lower}} instalments of {{instalment}}\n- Paid out to the Borrower after charges: {{net_disbursed}}\n"
+
+// Earlier starting wordings, before the letters listed the appraised terms (number and
+// frequency of instalments, each charge, the amount paid out): the current wording with
+// those lines put back as they were.
+const EARLIER_LINES = {
+  offer_letter: [[NEW_OFFER_LINES, OLD_OFFER_LINES]],
+  loan_agreement: [[NEW_FACILITY_LINES, OLD_FACILITY_LINES]],
+}
+const EARLIER_BODIES = Object.fromEntries(
+  Object.entries(EARLIER_LINES).map(([kind, swaps]) => [kind, swaps.map(([now, before]) => PLACEHOLDERS[kind].body.replace(now, before))])
+)
+EARLIER_BODIES.loan_agreement.push(LEGACY_LOAN_AGREEMENT_BODY)
+
+/** Whether a published template is still an earlier starting wording of its kind (replaced on first read). */
+const isEarlierStartingWording = (template) => template.source === 'text' && (EARLIER_BODIES[template.kind] || []).includes(template.body)
 
 /**
- * Publishes the facility letter as the next version over the old starting wording, once.
+ * Publishes the current starting wording as the next version over an earlier one, once.
  * The old version is retired, not changed, so documents made from it still name it.
  */
-const upgradeLegacyLoanAgreement = async (db, legacy) => {
+const upgradeStartingWording = async (db, legacy) => {
   await db.transaction(async (tx) => {
     const retired = await tx
       .update(documentTemplates)
@@ -228,7 +250,7 @@ const upgradeLegacyLoanAgreement = async (db, legacy) => {
     // Another request upgraded it first.
     if (!retired.length) return
     const [{ max }] = await tx.select({ max: sql`coalesce(max(${documentTemplates.version}), 0)::int` }).from(documentTemplates).where(eq(documentTemplates.kind, legacy.kind))
-    await tx.insert(documentTemplates).values({ kind: legacy.kind, version: max + 1, status: 'published', source: 'text', ...PLACEHOLDERS.loan_agreement, publishedAt: new Date() })
+    await tx.insert(documentTemplates).values({ kind: legacy.kind, version: max + 1, status: 'published', source: 'text', ...PLACEHOLDERS[legacy.kind], publishedAt: new Date() })
   })
   return getPublishedTemplate(legacy.kind)
 }
@@ -242,7 +264,7 @@ export const getPublishedTemplate = async (kind) => {
     .where(and(eq(documentTemplates.kind, kind), eq(documentTemplates.status, 'published')))
     .orderBy(desc(documentTemplates.version))
     .limit(1)
-  if (published && isLegacyLoanAgreement(published)) return upgradeLegacyLoanAgreement(db, published)
+  if (published && isEarlierStartingWording(published)) return upgradeStartingWording(db, published)
   if (published) return published
   const [created] = await db
     .insert(documentTemplates)

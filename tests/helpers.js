@@ -220,3 +220,34 @@ export const signedAcceptance = async (kv, email, { name = 'Ada Banda', code = '
   await Promise.all(['sign', 'offer'].map((purpose) => emailCode(kv, purpose, email, code)))
   return { agreed: true, code, signature: { name, method: 'drawn', image: `data:image/png;base64,${signaturePng().toString('base64')}` } }
 }
+
+/** Appraised terms for an amount, for tests where the decision's amount matters (the appraisal sets it, not the dialog). */
+export const termsFor = (amount, tenure = 6) => ({ amount, tenure, frequency: 'monthly', annualRate: 24, interestType: 'fixed', calculation: 'flat', effectiveDate: '2026-12-01', charges: [] })
+
+/** Verifies one document on case `id` as `who` (underwriting's document verification): verifier(id) for toDecision. */
+export const documentVerifier = (who, id) => (documentId) => who.post(`/applications/${id}/verifications`, { target: 'document', id: documentId, status: 'verified' })
+
+/**
+ * Takes a case from Appraisal (after start_review) to the credit decision on the default
+ * workflow: saves the loan terms (`terms`, else the server's defaults for the case), approves
+ * Appraisal, verifies each required document Underwriting lists (`verify(documentId)`, e.g.
+ * documentVerifier(officer, id)), then approves Underwriting. `send(action, extra)` posts one
+ * case action, as the test file already does:
+ *   toDecision((action, extra) => act(officer, id, action, extra), { verify: documentVerifier(officer, id) })
+ */
+export const toDecision = async (send, { terms = null, verify } = {}) => {
+  const step = async (action, extra) => {
+    const response = await send(action, extra)
+    if (response.status !== 200) throw new Error(`toDecision: ${extra.actionId || action} failed with ${response.status}: ${JSON.stringify(response.body)}`)
+    return response
+  }
+  await step('save_terms', terms ? { terms } : {})
+  const appraised = await step('transition', { actionId: 'appraised' })
+  const documents = appraised.body?.workflow?.state?.underwriting?.documents || []
+  for (const document of documents.filter((entry) => entry.status !== 'verified')) {
+    if (!verify) throw new Error('toDecision: pass { verify } to verify the required documents in Underwriting')
+    const response = await verify(document.id)
+    if (response.status !== 200) throw new Error(`toDecision: verifying ${document.label} failed with ${response.status}: ${JSON.stringify(response.body)}`)
+  }
+  await step('transition', { actionId: 'underwritten' })
+}

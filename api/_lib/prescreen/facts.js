@@ -1,4 +1,5 @@
 import { findFormMismatches } from '../../../src/utils/documentChecks.js'
+import { monthlyEquivalent } from '../../../src/config/loanTerms.js'
 import { appraisedItems, collateralItems, collateralLendingValue, collateralValue } from '../../../src/config/collateral.js'
 
 /*
@@ -75,22 +76,24 @@ const CHECKABLE = (document) => !['passportPhoto', 'directorPassportPhoto'].incl
  */
 export const computeFacts = (application, documents, extras = {}) => {
   const { loanType, data } = application
+  // Appraised terms may repay weekly, fortnightly or quarterly: the rules test a monthly figure.
+  const monthlyInstalment = application.terms ? monthlyEquivalent(application.terms) : application.monthlyInstalment
   const facts = {
     amount: application.amount,
     tenure: application.tenure,
-    monthly_instalment: application.monthlyInstalment,
+    monthly_instalment: monthlyInstalment,
   }
 
   const birthDate = loanType === 'personal' ? data?.personalInfo?.birthDate : data?.directorInfo?.applicantBirthDate
   facts.applicant_age = wholeYearsSince(birthDate)
 
   facts.average_monthly_credits = figure(application, documents, 'averageMonthlyCredits', 'bankStatements', 'averageMonthlyCredits')
-  facts.instalment_to_credits = ratio(application.monthlyInstalment, facts.average_monthly_credits)
+  facts.instalment_to_credits = ratio(monthlyInstalment, facts.average_monthly_credits)
 
   if (loanType === 'personal') {
     facts.age_at_maturity = facts.applicant_age === null ? null : Number((facts.applicant_age + application.tenure / 12).toFixed(1))
     facts.net_monthly_pay = figure(application, documents, 'netPay', 'payslips', 'netPay')
-    facts.debt_to_income = ratio(application.monthlyInstalment, facts.net_monthly_pay)
+    facts.debt_to_income = ratio(monthlyInstalment, facts.net_monthly_pay)
   } else {
     facts.business_age_months = monthsSince(data?.businessInfo?.establishedDate)
     facts.annual_turnover = figure(application, documents, 'annualTurnover', 'latestTaxComplianceReturn', 'turnover')

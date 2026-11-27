@@ -46,7 +46,11 @@ import {
 import { CaseSummary, expectedForSlot } from './CaseSummary'
 import { sectionsFor } from './fields'
 import { conditionsOf } from '@/config/conditions'
+import { CALCULATIONS, FREQUENCIES, perPeriod } from '@/config/loanTerms'
+import { lendingCover } from '@/config/appraisal'
 import { LegalReview } from './LegalReview'
+import { LoanTermsPanel } from './LoanTermsPanel'
+import { CoverWarning, UnderwritingPanel } from './UnderwritingPanel'
 import { PreApprovalPanel } from './PreApprovalPanel'
 import { KycPanel } from './KycPanel'
 import { PrescreenStats } from './PrescreenStats'
@@ -66,8 +70,8 @@ export function CasePage() {
   const navigate = useNavigate()
   const notify = useToast()
   const [state, setState] = useState({ status: 'loading' })
-  // Someone who only checks collateral and documents (a legal officer) starts on that.
-  const [tab, setTab] = useState(() => (hasPermission(user, 'legal.verify') && !hasPermission(user, 'cases.work') ? 'legal' : 'analysis'))
+  // The tab picked; null opens the one for the stage's own work (caseTabs).
+  const [tab, setTab] = useState(null)
   const [documentId, setDocumentId] = useState(null)
   const tabs = useRef(null)
   const [dialog, setDialog] = useState(null)
@@ -113,6 +117,11 @@ export function CasePage() {
     }),
     [user, held]
   )
+  // A case that moves to another stage opens on that stage's own tab again.
+  const stageKey = state.status === 'ready' ? `${state.application.id}:${state.workflow?.state?.id || ''}` : null
+  useEffect(() => {
+    setTab(null)
+  }, [stageKey])
   // Asked again whenever the case moves on: each stage has its own people.
   const caseKey = state.status === 'ready' ? `${state.application.id}:${state.application.state}:${state.application.version}` : null
   useEffect(() => {
@@ -232,6 +241,10 @@ export function CasePage() {
   // The workflow's first stage (Pre-screening) reports as "submitted": the screening figures are shown at a glance there only.
   const atPrescreening = application.status === 'submitted'
   const checklistEditable = may.work && (['submitted', 'in_review', 'info_requested'].includes(application.status) || workflow?.state.checks.length > 0)
+  const { tabs: tabList, initial: initialTab } = caseTabs({ application, documents, workflow, user })
+  const currentTab = tab && tabList.some(([value]) => value === tab) ? tab : initialTab
+  const caseOpen = OPEN_STATUSES.includes(application.status)
+  const terms = application.terms
 
   return (
     <div className="space-y-6">
@@ -260,8 +273,19 @@ export function CasePage() {
           </p>
           <dl className="mt-4 flex flex-wrap gap-x-8 gap-y-3">
             <Fact label="Asked for" value={`${money(application.amount)} over ${application.tenure} months`} />
-            {application.approvedAmount ? <Fact label="Approved" value={`${money(application.approvedAmount)} over ${application.approvedTenure} months`} /> : null}
-            <Fact label="Monthly instalment" value={money(application.monthlyInstalment)} />
+            {application.approvedAmount ? (
+              <Fact label="Approved" value={`${money(application.approvedAmount)} over ${application.approvedTenure} months`} />
+            ) : terms ? (
+              <Fact label="Proposed" value={`${money(terms.amount)} over ${terms.tenure} months`} />
+            ) : null}
+            {terms?.summary ? (
+              <Fact
+                label="Instalment"
+                value={`${money(application.approvedAmount ? application.monthlyInstalment : terms.summary.instalment)} ${(FREQUENCIES[terms.frequency]?.label || '').toLowerCase()}`}
+              />
+            ) : (
+              <Fact label="Monthly instalment" value={money(application.monthlyInstalment)} />
+            )}
             <Fact label="Brought in by" value={application.sourcedByName ? `${application.sourcedByName} (${roleLabel(application.sourcedByRole).toLowerCase()})` : channelLabel(application.channel)} />
             <Fact label="Officer" value={application.assignedOfficerName || 'Unassigned'} />
             {application.status === 'approved' && application.offerExpiresAt ? (
@@ -315,22 +339,15 @@ export function CasePage() {
 
       <div className="space-y-4">
         <nav ref={tabs} className="flex scroll-mt-4 gap-1 overflow-x-auto border-b" aria-label="Case sections">
-          {[
-            ['analysis', 'AI Analysis'],
-            ['details', 'Details'],
-            ['documents', `Documents (${documents.length})`],
-            ['legal', 'Collateral'],
-            ['workflow', 'Workflow'],
-            ['timeline', 'Timeline'],
-          ].map(([value, label]) => (
+          {tabList.map(([value, label]) => (
             <button
               key={value}
               type="button"
               onClick={() => setTab(value)}
-              aria-current={tab === value ? 'page' : undefined}
+              aria-current={currentTab === value ? 'page' : undefined}
               className={cn(
                 '-mb-px shrink-0 whitespace-nowrap border-b-2 px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-                tab === value ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'
+                currentTab === value ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'
               )}
             >
               {label}
@@ -339,7 +356,7 @@ export function CasePage() {
         </nav>
 
         {/* The assessment, with the figures and bureau report the rules rest on. */}
-        {tab === 'analysis' ? (
+        {currentTab === 'analysis' ? (
           <div className="space-y-4">
             {atPrescreening ? <PrescreenStats application={application} product={product} prescreen={prescreen} crbReports={crbReports} /> : null}
             <CaseSummary
@@ -396,7 +413,7 @@ export function CasePage() {
         ) : null}
 
         {/* What the applicant told us, where they were, and what they agreed to. */}
-        {tab === 'details' ? (
+        {currentTab === 'details' ? (
           <Details
             application={application}
             collateralCatalog={collateralCatalog}
@@ -409,7 +426,7 @@ export function CasePage() {
         ) : null}
 
         {/* What they sent, and what we sent them to sign. */}
-        {tab === 'documents' ? (
+        {currentTab === 'documents' ? (
           <div className="space-y-4">
             <Documents application={application} product={product} documents={documents} selectedId={documentId} onSelect={setDocumentId} onUpload={may.note ? (form) => uploadStaffDocument(id, form, setState, notify) : null} />
             <div className="grid items-start gap-4 lg:grid-cols-2">
@@ -425,8 +442,50 @@ export function CasePage() {
           </div>
         ) : null}
 
-        {/* The collateral: its valuation (Appraisal) and the legal officer's check (Underwriting). */}
-        {tab === 'legal' ? (
+        {/* The loan as the appraiser structures it: editable at the terms stage, by whoever works the case there. */}
+        {currentTab === 'terms' ? (
+          <LoanTermsPanel
+            application={application}
+            product={product}
+            editable={may.work && workflow?.state?.work === 'terms' && caseOwnership(application, workflow, user.id).ownerMay}
+            onSave={(values) => act('save_terms', { terms: values }, 'Loan terms saved')}
+          />
+        ) : null}
+
+        {/* Underwriting: each asset's valuation and legal verification, and the required documents. */}
+        {currentTab === 'underwriting' ? (
+          <UnderwritingPanel
+            application={application}
+            documents={documents}
+            product={product}
+            collateralCatalog={collateralCatalog}
+            status={workflow?.state?.underwriting}
+            requires={workflow?.state?.underwritingRequires}
+            canValue={may.work && caseOpen}
+            canLegal={may.verify && caseOpen}
+            canVerifyDocuments={(may.work || may.verify) && caseOpen}
+            onSaveValuation={(index, values) => put(`/valuations/${index}`, values, 'Valuation saved; the rules ran again')}
+            onUploadReport={(index, file) => {
+              const form = new FormData()
+              form.append('file', file)
+              return upload(`/valuations/${index}/report`, form, 'Valuation report added')
+            }}
+            onSaveLegal={(index, values) => put(`/legal/${index}`, values, 'Legal verification saved')}
+            onUploadLegal={(index, slot, file, label) => {
+              const form = new FormData()
+              if (label) form.append('label', label)
+              form.append('file', file)
+              return upload(`/legal/${index}/documents/${slot}`, form, 'Document attached')
+            }}
+            onVerifyDocument={(itemId, status, note) =>
+              post('/verifications', { target: 'document', id: itemId, status, note }, status === 'verified' ? 'Marked verified' : status === 'issue' ? 'Issue recorded' : 'Check cleared')
+            }
+            onComment={(target, itemId, text) => post('/verifications/comments', { target, id: itemId, text }, 'Comment added')}
+          />
+        ) : null}
+
+        {/* Older workflow versions: the collateral's valuation (Appraisal) and the legal officer's check (Underwriting). */}
+        {currentTab === 'legal' ? (
           <LegalReview
             application={application}
             documents={documents}
@@ -449,10 +508,11 @@ export function CasePage() {
         ) : null}
 
         {/* Where the case is: its stages and checks, the decisions on it, and the hand-off to the LMS. */}
-        {tab === 'workflow' ? (
+        {currentTab === 'workflow' ? (
           <div className="grid items-start gap-4 lg:grid-cols-2">
             <StagesPanel
               workflow={workflow}
+              work={workStatus(application, workflow)}
               application={application}
               canReopen={may.work}
               onComplete={(stage) => setDialog({ type: 'complete_stage', stage })}
@@ -475,11 +535,12 @@ export function CasePage() {
           </div>
         ) : null}
 
-        {tab === 'timeline' ? <Timeline events={events} onNote={may.note ? (message) => act('note', { message }, 'Note added') : null} /> : null}
+        {currentTab === 'timeline' ? <Timeline events={events} onNote={may.note ? (message) => act('note', { message }, 'Note added') : null} /> : null}
       </div>
 
       <CaseDialogs
         product={product}
+        collateralCatalog={collateralCatalog}
         dialog={dialog}
         onClose={() => setDialog(null)}
         application={application}
@@ -546,7 +607,7 @@ function AcceptOfferDialog({ open, onOpenChange, application, user, act, require
         <DialogHeader>
           <DialogTitle>{requireSignature ? 'The customer signs and accepts' : 'Record the customer’s acceptance'}</DialogTitle>
           <DialogDescription>
-            {money(application.approvedAmount ?? application.amount)} over {application.approvedTenure ?? application.tenure} months, {money(application.monthlyInstalment)} a month, {money(application.totalRepayable)} in total.
+            {money(application.approvedAmount ?? application.amount)} over {application.approvedTenure ?? application.tenure} months, {money(application.monthlyInstalment)} {perPeriod(application.terms?.frequency)}, {money(application.totalRepayable)} in total.{application.terms?.summary ? ` Paid out after charges: ${money(application.terms.summary.netDisbursed)}.` : ''}
             {requireSignature
               ? ' Go through the offer letter with the customer (Documents tab). They sign below on this device, then read back the code we email them.'
               : ' We email the customer a code; when they read it to you, enter it here.'}
@@ -599,6 +660,73 @@ const uploadStaffDocument = async (id, form, setState, notify) => {
   if (!response.ok) throw new Error(body.message || 'The upload failed.')
   setState({ status: 'ready', ...body })
   notify('Document added')
+}
+
+/**
+ * The case's tabs, and the one it opens on: Loan terms once the case has terms or is at the
+ * terms stage; Underwriting at, or past, the underwriting stage; the older Collateral tab only
+ * on workflow versions without those stages. The stage's own work opens by default (a legal
+ * officer, who only verifies, starts on the collateral).
+ */
+const caseTabs = ({ application, documents, workflow, user }) => {
+  const stages = workflow?.workStages || {}
+  const oldFlow = Boolean(workflow?.state?.appraisal) || (!stages.terms && !stages.underwriting)
+  const verifications = application.verifications || {}
+  const underwritingDone =
+    Boolean(application.terms) || Object.keys(application.valuations || {}).length > 0 || Object.keys(verifications.legal || {}).length > 0 || Object.keys(verifications.documents || {}).length > 0
+  const showTerms = Boolean(application.terms) || stages.terms === 'current'
+  const showUnderwriting = stages.underwriting === 'current' || (stages.underwriting === 'passed' && underwritingDone)
+  const tabs = [
+    ['analysis', 'AI Analysis'],
+    ['details', 'Details'],
+    ['documents', `Documents (${documents.length})`],
+    ...(showTerms ? [['terms', 'Loan terms']] : []),
+    ...(showUnderwriting ? [['underwriting', 'Underwriting']] : []),
+    ...(oldFlow ? [['legal', 'Collateral']] : []),
+    ['workflow', 'Workflow'],
+    ['timeline', 'Timeline'],
+  ]
+  const verifierOnly = hasPermission(user, 'legal.verify') && !hasPermission(user, 'cases.work')
+  const initial =
+    stages.terms === 'current' && showTerms && !verifierOnly
+      ? 'terms'
+      : stages.underwriting === 'current'
+        ? 'underwriting'
+        : verifierOnly
+          ? showUnderwriting
+            ? 'underwriting'
+            : oldFlow
+              ? 'legal'
+              : 'analysis'
+          : 'analysis'
+  return { tabs, initial }
+}
+
+/** Where the Loan terms and Underwriting stages stand, for the Stages panel: [{ key, label, state, detail }]. */
+const workStatus = (application, workflow) => {
+  const stages = workflow?.workStages || {}
+  const lines = []
+  if (stages.terms) {
+    const saved = application.terms
+    const current = stages.terms === 'current'
+    lines.push({
+      key: 'terms',
+      label: 'Loan terms',
+      state: current ? (workflow.state.termsHold ? 'current' : 'ready') : stages.terms === 'passed' ? 'done' : 'ahead',
+      detail: saved ? `Saved: ${money(saved.amount)} over ${saved.tenure} months, ${saved.annualRate}% a year.` : current ? 'Not saved yet. The stage moves on once they are.' : stages.terms === 'ahead' ? 'Not reached yet.' : 'None saved.',
+    })
+  }
+  if (stages.underwriting) {
+    const status = workflow.state.underwriting
+    const current = stages.underwriting === 'current'
+    lines.push({
+      key: 'underwriting',
+      label: 'Underwriting',
+      state: current ? (status?.complete ? 'ready' : 'current') : stages.underwriting === 'passed' ? 'done' : 'ahead',
+      detail: current ? (status?.complete ? 'Complete.' : `Waiting for ${status?.hold || 'the checks'}.`) : stages.underwriting === 'passed' ? 'Done.' : 'Not reached yet.',
+    })
+  }
+  return lines
 }
 
 function BackLink() {
@@ -799,7 +927,7 @@ const decideVerdicts = (dialog) =>
       actionId: action.id,
     }))
 
-function CaseDialogs({ dialog, onClose, application, product, lastRecommendation, assignees, user, act, post, requireSignature, verification }) {
+function CaseDialogs({ dialog, onClose, application, product, collateralCatalog, lastRecommendation, assignees, user, act, post, requireSignature, verification }) {
   const open = (type) => dialog?.type === type
   const common = (type) => ({ open: open(type), onOpenChange: (value) => !value && onClose() })
 
@@ -834,6 +962,37 @@ function CaseDialogs({ dialog, onClose, application, product, lastRecommendation
   const outcomeButtons = (options) => ({ name: 'verdict', options: [...options].sort((a, b) => (a.tone === 'primary') - (b.tone === 'primary')) })
   // The checks approving still needs, whichever button is then pressed.
   const approvalChecks = () => checksStillOpen({ verdict: 'approve' })
+  // The terms the appraiser structured, read-only: the decision takes them as they are.
+  const termsBlock = () => {
+    const terms = application.terms
+    if (!terms?.summary) return null
+    const { summary } = terms
+    const calculation = (CALCULATIONS[terms.calculation] || terms.calculation || '').toLowerCase()
+    const frequency = (FREQUENCIES[terms.frequency]?.label || terms.frequency || '').toLowerCase()
+    return (
+      <div className="rounded-md border bg-muted/40 p-3 text-sm">
+        <p className="font-medium">Terms from appraisal</p>
+        <p>{money(terms.amount)} over {terms.tenure} months</p>
+        <p>{terms.annualRate}% a year, {calculation}</p>
+        <p>{money(summary.instalment)} {frequency} · {summary.periods} instalments</p>
+        <p>Charges {money(summary.totalCharges)} · Paid out {money(summary.netDisbursed)}</p>
+      </div>
+    )
+  }
+  const decisionBefore = () => {
+    const terms = termsBlock()
+    const checks = approvalChecks()
+    // Lending more than the assets cover is the approver's call: said, never held.
+    const cover = lendingCover(application, collateralCatalog)
+    if (!terms && !checks && !cover.short) return null
+    return (
+      <div className="space-y-4">
+        {terms}
+        {cover.short ? <CoverWarning cover={cover} /> : null}
+        {checks}
+      </div>
+    )
+  }
   const stageChecks = dialog?.stage ? [...new Set([...(dialog.stage.checks || []), ...actionChecks({ id: dialog.stage.moveActionId })])] : []
   return (
     <>
@@ -877,7 +1036,7 @@ function CaseDialogs({ dialog, onClose, application, product, lastRecommendation
         {...common('recommend')}
         title={dialog?.group?.single ? 'Make the decision' : dialog?.group?.label && dialog.group.label !== 'Recommend' ? dialog.group.label : 'Recommend a decision'}
         description={dialog?.group?.single ? 'Your decision stands, within your approval limit.' : `A colleague reviews your recommendation and makes the final decision${dialog?.action?.toLabel ? ` (${dialog.action.toLabel})` : ''}.`}
-        before={approvalChecks}
+        before={decisionBefore}
         blocked={(values) =>
           values.verdict === 'approve' && (dialog?.group?.single ? workflow?.state?.approvalHold : workflow?.state?.valuationHold)
             ? `${dialog?.group?.single ? 'Approval' : 'Recommending approval'} waits for ${dialog?.group?.single ? workflow.state.approvalHold : workflow.state.valuationHold}.`
@@ -900,7 +1059,7 @@ function CaseDialogs({ dialog, onClose, application, product, lastRecommendation
             ? `${lastRecommendation.officerName} recommended ${lastRecommendation.verdict === 'approve' ? `approving ${money(lastRecommendation.amount)} over ${lastRecommendation.tenure} months` : 'declining'}: “${lastRecommendation.rationale}”`
             : undefined
         }
-        before={approvalChecks}
+        before={decisionBefore}
         blocked={(values) =>
           values.verdict === 'approve' && workflow?.state?.approvalHold ? `Approval waits for ${workflow.state.approvalHold}.` : outstanding(neededFor(chosenAction(values), values.verdict))
         }
