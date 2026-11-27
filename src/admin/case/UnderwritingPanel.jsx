@@ -52,6 +52,23 @@ export function UnderwritingPanel({
   const cover = items.length ? lendingCover(application, collateralCatalog) : null
   const byId = (id) => documents.find((document) => document.id === id) || null
 
+  // The sections as tabs: asset valuation and legal verification for a secured loan, and the documents always.
+  const documentsMissing = status.documents.filter((document) => document.status !== 'verified').map((document) => document.label)
+  const sections = [
+    ...(items.length
+      ? [
+          { key: 'valuation', label: 'Asset valuation', complete: status.valuation.every((entry) => entry?.complete), missing: status.valuation.flatMap((entry) => (entry?.complete ? [] : entry?.missing || [])) },
+          { key: 'legal', label: 'Legal verification', complete: status.legal.every((entry) => entry?.complete), missing: status.legal.flatMap((entry) => (entry?.complete ? [] : entry?.missing || [])) },
+        ]
+      : []),
+    { key: 'documents', label: 'Document verification', complete: documentsMissing.length === 0, missing: documentsMissing },
+  ]
+  // Opens on the first section still to do; for a legal officer (legal only), on their legal checks.
+  const [section, setSection] = useState(() =>
+    canLegal && !canValue && sections.some((entry) => entry.key === 'legal') ? 'legal' : (sections.find((entry) => !entry.complete) || sections[0]).key
+  )
+  const current = sections.some((entry) => entry.key === section) ? section : sections[0].key
+
   return (
     <div className="space-y-4">
       <div className={cn('flex items-start gap-3 rounded-xl border px-5 py-4', status.complete ? 'border-success/30 bg-success/5' : 'bg-card')}>
@@ -72,12 +89,42 @@ export function UnderwritingPanel({
 
       {cover?.short ? <CoverWarning cover={cover} /> : null}
 
-      {items.map((item, index) => (
+      {sections.length > 1 ? (
+        <div className="flex gap-1 overflow-x-auto border-b" role="tablist" aria-label="Underwriting">
+          {sections.map((entry) => (
+            <button
+              key={entry.key}
+              type="button"
+              role="tab"
+              aria-selected={current === entry.key}
+              onClick={() => setSection(entry.key)}
+              className={cn(
+                '-mb-px flex shrink-0 items-center gap-2 border-b-2 px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring',
+                current === entry.key ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'
+              )}
+            >
+              {entry.label}
+              {entry.complete ? (
+                <CheckCircle2 className="size-4 text-success" aria-label="complete" />
+              ) : (
+                <span className="rounded-full bg-warning/15 px-1.5 text-[11px] font-semibold tabular-nums text-warning" aria-label={`${entry.missing.length} to do`}>
+                  {entry.missing.length}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {current === 'valuation' || current === 'legal' ? items.map((item, index) => (
         <div key={index} className="space-y-2">
-          <h2 className="text-sm font-semibold text-foreground">
-            Collateral {index + 1}: {itemLabel(item, collateralCatalog)}
-          </h2>
+          {items.length > 1 ? (
+            <h2 className="text-sm font-semibold text-foreground">
+              Collateral {index + 1}: {itemLabel(item, collateralCatalog)}
+            </h2>
+          ) : null}
           <div className="space-y-4">
+            {current === 'valuation' ? (
             <ValuationCard
               item={item}
               index={index}
@@ -90,6 +137,7 @@ export function UnderwritingPanel({
               onSave={(values) => onSaveValuation(index, values)}
               onUpload={(file) => onUploadReport(index, file)}
             />
+            ) : (
             <LegalCard
               index={index}
               record={application.verifications?.legal?.[index]}
@@ -100,10 +148,12 @@ export function UnderwritingPanel({
               onSave={(values) => onSaveLegal(index, values)}
               onUpload={(slot, file, label) => onUploadLegal(index, slot, file, label)}
             />
+            )}
           </div>
         </div>
-      ))}
+      )) : null}
 
+      {current === 'documents' ? (
       <Panel
         title="Document verification"
         description="The current copy of each required document. A new copy needs checking again."
@@ -149,6 +199,7 @@ export function UnderwritingPanel({
           <p className="p-5 text-sm text-muted-foreground">No required documents on this case yet.</p>
         )}
       </Panel>
+      ) : null}
 
       <DocumentPreview applicationId={application.id} document={viewing} onClose={() => setViewing(null)} />
     </div>
